@@ -1,0 +1,13 @@
+rop search results
+some banner text we should ignore
+0x00569725: pop eax ; ret ;  (1 found)
+0x00569729: xor eax, eax ; ret ;  (1 found)
+0x0056972d: mov [ecx], eax ; ret ;  (1 found)
+0x00569731: call eax ;  (1 found)
+0x00569735: xchg eax, esp ; ret ;  (1 found)
+0x00569739: retn 0x10 ;  (1 found)
+0x0056973d: add eax, 0x5DE58B00 ; ret ;  (1 found)
+0x00569741: mov eax, [ecx] ; ret ;  (1 found)
+0x00569745: pop eax ; ret ;  (1 found)
+more banner text
+

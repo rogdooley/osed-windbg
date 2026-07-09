@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "module": "commonjs",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleResolution": "node",
+    "lib": ["ES2020"],
+    "types": []
+  },
+  "include": ["src/**/*.ts", "src/types/**/*.d.ts"]
+}

@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# course content
+Modules/*
+*.bin
+*.exe
+*.pdb
+
+# macOS
+.DS_Store
+
+.codex
+.agents
+.claude
+.pytest_cache/
+.vscode/
+output/
+emitter_out/
+emitter_out.local.bak/
