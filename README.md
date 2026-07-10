@@ -17,6 +17,8 @@ All commands run from the WinDbg `dx` evaluator. No Python, no external tools, n
 
 ## Installation
 
+Use the included bundle if you just want to load the toolkit immediately:
+
 ```
 .scriptload C:\path\to\osed-windbg\dist\osed.js
 ```
@@ -148,10 +150,20 @@ dx @$osed().last_summary()
 
 ## Building from source
 
+If you do not want to use the checked-in `dist/osed.js`, build your own copy locally.
+This repo pins package versions in `package.json`, but does not commit `node_modules` or `package-lock.json`.
+
 ```
 npm install
-npm run build    ; outputs dist/osed.js
-npm test         ; Vitest unit suite
+npm run build
+```
+
+That writes a fresh bundle to `dist/osed.js`.
+
+Verify the build:
+
+```
+npm test
 ```
 
 TypeScript source is in `src/`. The build produces a single self-contained JS file via esbuild — no runtime dependencies.
