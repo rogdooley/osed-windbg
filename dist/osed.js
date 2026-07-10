@@ -3849,6 +3849,18 @@ var osed_bundle = (() => {
     }
     return void 0;
   }
+  function isInstructionPointerControlled(evidence) {
+    if (evidence.patternMatched) {
+      return true;
+    }
+    if (evidence.ip === void 0) {
+      return false;
+    }
+    if (evidence.exceptionCode === BigInt(3221225477)) {
+      return true;
+    }
+    return evidence.ipBackedByModule === false;
+  }
   function scanStack(sp, size) {
     if (sp === void 0) {
       return { warning: "Stack pointer unavailable." };
@@ -4013,7 +4025,13 @@ var osed_bundle = (() => {
           system: module.system
         })).sort((a, b) => b.score - a.score).slice(0, 6);
         const gadgets = scanGadgets(moduleFilter);
-        const eipControlled = patternOffset ? "yes" : "no";
+        const ipBackedByModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) !== void 0 : void 0;
+        const eipControlled = isInstructionPointerControlled({
+          patternMatched: patternOffset !== void 0,
+          ip: regs.ip,
+          ipBackedByModule,
+          exceptionCode: regs.exceptionCode
+        }) ? "yes" : "no";
         const badSp = stack.bytes ? "no" : "yes";
         section("CONTROL");
         print(`EIP/RIP controlled: ${eipControlled}`);
