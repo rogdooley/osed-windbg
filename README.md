@@ -6,6 +6,8 @@ All commands run from the WinDbg `dx` evaluator. No Python, no external tools, n
 
 ---
 
+![triage example](Images/triage.gif)
+
 ## Requirements
 
 - WinDbg Preview (WinDbgX) with DbgModel/JavaScript support
