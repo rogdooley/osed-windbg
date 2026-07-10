@@ -3,8 +3,19 @@ __pycache__/
 *.py[oc]
 build/
 dist/
+!dist/
+!dist/osed.js
 wheels/
 *.egg-info
+
+# Node-generated files
+node_modules/
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
 
 # Virtual environments
 .venv
