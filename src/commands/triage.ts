@@ -16,6 +16,13 @@ type RegisterSnapshot = {
 
 type TriState = "yes" | "no" | "unknown";
 
+export type IpControlEvidence = {
+  patternMatched: boolean;
+  ip?: bigint;
+  ipBackedByModule?: boolean;
+  exceptionCode?: bigint;
+};
+
 function safeGet(value: unknown, key: string): unknown {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -165,6 +172,22 @@ function findOffset(raw: bigint | undefined, maxLen: number): { kind: "msf" | "c
   }
 
   return undefined;
+}
+
+export function isInstructionPointerControlled(evidence: IpControlEvidence): boolean {
+  if (evidence.patternMatched) {
+    return true;
+  }
+
+  if (evidence.ip === undefined) {
+    return false;
+  }
+
+  if (evidence.exceptionCode === BigInt(0xc0000005)) {
+    return true;
+  }
+
+  return evidence.ipBackedByModule === false;
 }
 
 function scanStack(sp: bigint | undefined, size: number): { base?: bigint; bytes?: Uint8Array; warning?: string } {
@@ -354,7 +377,15 @@ export function createTriageCommand(): Command {
 
       const gadgets = scanGadgets(moduleFilter);
 
-      const eipControlled = patternOffset ? "yes" : "no";
+      const ipBackedByModule = regs.ip !== undefined ? findModuleByAddress(regs.ip) !== undefined : undefined;
+      const eipControlled = isInstructionPointerControlled({
+        patternMatched: patternOffset !== undefined,
+        ip: regs.ip,
+        ipBackedByModule,
+        exceptionCode: regs.exceptionCode,
+      })
+        ? "yes"
+        : "no";
       const badSp = stack.bytes ? "no" : "yes";
 
       out.section("CONTROL");
