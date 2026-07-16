@@ -3724,6 +3724,275 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/analysis/memory.ts
+  var PAGE_NOACCESS = 1;
+  var PAGE_READONLY = 2;
+  var PAGE_READWRITE = 4;
+  var PAGE_WRITECOPY = 8;
+  var PAGE_EXECUTE = 16;
+  var PAGE_EXECUTE_READ = 32;
+  var PAGE_EXECUTE_READWRITE = 64;
+  var PAGE_EXECUTE_WRITECOPY = 128;
+  var PAGE_GUARD = 256;
+  var MEM_COMMIT = 4096;
+  var MEM_PRIVATE = 131072;
+  var MEM_MAPPED = 262144;
+  var MEM_IMAGE = 16777216;
+  function protectionBase(protection) {
+    return protection & 255;
+  }
+  function normalizeMemoryRegion(address, raw, source = "vprot") {
+    const protection = raw.protection;
+    const base = protection === void 0 ? void 0 : protectionBase(protection);
+    const knownProtection = base !== void 0 && [
+      PAGE_NOACCESS,
+      PAGE_READONLY,
+      PAGE_READWRITE,
+      PAGE_WRITECOPY,
+      PAGE_EXECUTE,
+      PAGE_EXECUTE_READ,
+      PAGE_EXECUTE_READWRITE,
+      PAGE_EXECUTE_WRITECOPY
+    ].includes(base);
+    const readable = !knownProtection ? null : [PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    const writable = !knownProtection ? null : [PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    const executable = !knownProtection ? null : [PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    let regionType = "unknown";
+    if (raw.type === MEM_IMAGE) regionType = "image";
+    else if (raw.type === MEM_MAPPED) regionType = "mapped";
+    else if (raw.type === MEM_PRIVATE) regionType = "private";
+    return {
+      address,
+      baseAddress: raw.baseAddress,
+      allocationBase: raw.allocationBase,
+      regionSize: raw.regionSize,
+      readable,
+      writable,
+      executable,
+      guarded: protection === void 0 ? null : (protection & PAGE_GUARD) !== 0,
+      noAccess: !knownProtection ? null : base === PAGE_NOACCESS,
+      committed: raw.state === void 0 ? null : raw.state === MEM_COMMIT,
+      regionType,
+      raw: {
+        state: raw.state,
+        protection: raw.protection,
+        allocationProtection: raw.allocationProtection,
+        type: raw.type
+      },
+      source,
+      warnings: []
+    };
+  }
+  function toArray(value) {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseHexValue(value) {
+    const cleaned = value.replace(/`/g, "");
+    return /^[0-9a-f]+$/i.test(cleaned) ? BigInt(`0x${cleaned}`) : void 0;
+  }
+  function parseVprot(lines) {
+    const fields = /* @__PURE__ */ new Map();
+    for (const line of lines) {
+      const match = line.match(/^\s*(BaseAddress|AllocationBase|RegionSize|State|Protect|AllocationProtect|Type):\s+([0-9a-f`]+)/i);
+      if (!match) continue;
+      const value = parseHexValue(match[2]);
+      if (value !== void 0) fields.set(match[1].toLowerCase(), value);
+    }
+    const asNumber = (key2) => {
+      const value = fields.get(key2);
+      return value === void 0 ? void 0 : Number(value & BigInt(4294967295));
+    };
+    return {
+      baseAddress: fields.get("baseaddress"),
+      allocationBase: fields.get("allocationbase"),
+      regionSize: fields.get("regionsize"),
+      state: asNumber("state"),
+      protection: asNumber("protect"),
+      allocationProtection: asNumber("allocationprotect"),
+      type: asNumber("type")
+    };
+  }
+  function memoryRegion(address) {
+    var _a, _b, _c;
+    try {
+      const hostAny = host;
+      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      const execute = control == null ? void 0 : control.ExecuteCommand;
+      if (typeof execute !== "function") throw new Error("WinDbg command execution is unavailable.");
+      const result3 = execute.call(control, `!vprot 0x${address.toString(16)}`);
+      const raw = parseVprot(toArray(result3).map(String));
+      if (raw.protection === void 0 && raw.state === void 0 && raw.type === void 0) {
+        throw new Error("WinDbg returned no recognizable memory metadata.");
+      }
+      return normalizeMemoryRegion(address, raw);
+    } catch (error2) {
+      const evidence = normalizeMemoryRegion(address, {}, "unavailable");
+      evidence.warnings.push(error2 instanceof Error ? error2.message : String(error2));
+      return evidence;
+    }
+  }
+
+  // src/analysis/landing.ts
+  var POSITIVE_OBSERVATION_KINDS = /* @__PURE__ */ new Set([
+    "nop_sled_detected",
+    "repeated_marker_bytes",
+    "cyclic_pattern_match",
+    "payload_like_bytes",
+    "known_payload_prefix",
+    "executable_region",
+    "disassembly_succeeded"
+  ]);
+  function calculateLandingConfidence(observations) {
+    const contributions = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind)).map((item) => Math.max(0, Math.min(1, Number.isFinite(item.confidence) ? item.confidence : 0))).sort((left, right) => left - right);
+    if (contributions.length === 0) return 0;
+    return Math.max(0, Math.min(1, contributions.reduce((sum, value) => sum + value, 0) / 2));
+  }
+  function observation(kind, confidence, address, offset, length, details = {}) {
+    return { kind, confidence, address: address + BigInt(offset), length, details: __spreadValues({ offset }, details) };
+  }
+  function repeatedRuns(bytes, minimum = 4) {
+    const runs = [];
+    for (let start = 0; start < bytes.length; ) {
+      let end = start + 1;
+      while (end < bytes.length && bytes[end] === bytes[start]) end += 1;
+      if (end - start >= minimum) runs.push({ byte: bytes[start], offset: start, length: end - start });
+      start = end;
+    }
+    return runs;
+  }
+  function findPattern(bytes) {
+    if (bytes.length < 8) return void 0;
+    const text = String.fromCharCode(...bytes);
+    const candidates = [
+      { kind: "msf", value: generateMsfPattern(20280) },
+      { kind: "cyclic", value: generateCyclicPattern(2e4) }
+    ];
+    for (const candidate of candidates) {
+      const length = Math.min(text.length, 32);
+      for (let window = length; window >= 8; window -= 1) {
+        for (let offset = 0; offset <= text.length - window; offset += 1) {
+          if (candidate.value.includes(text.slice(offset, offset + window))) return { kind: candidate.kind, offset, length: window };
+        }
+      }
+    }
+    return void 0;
+  }
+  function analyzeLandingBytes(address, bytes, memory, requestedBytes = bytes.length, disassemblySucceeded = null) {
+    const observations = [];
+    const runs = repeatedRuns(bytes);
+    for (const run of runs) {
+      if (run.byte === 144 && run.length >= 8) {
+        observations.push(observation("nop_sled_detected", 0.95, address, run.offset, run.length, { byte: run.byte }));
+      } else if ([65, 66, 67, 68].includes(run.byte)) {
+        observations.push(observation("repeated_marker_bytes", 0.8, address, run.offset, run.length, { byte: run.byte }));
+      } else {
+        observations.push(observation("repeated_byte_run", 0.45, address, run.offset, run.length, { byte: run.byte }));
+      }
+    }
+    const pattern = findPattern(bytes);
+    if (pattern) observations.push(observation("cyclic_pattern_match", 0.9, address, pattern.offset, pattern.length, { pattern: pattern.kind }));
+    for (let offset = 0; offset <= bytes.length - 32; offset += 4) {
+      const window = bytes.slice(offset, offset + 32);
+      let zeroes = 0;
+      let printable = 0;
+      for (const byte of window) {
+        if (byte === 0) zeroes += 1;
+        if (byte >= 32 && byte <= 126) printable += 1;
+      }
+      if (zeroes <= 1 && printable <= 8) {
+        observations.push(observation("payload_like_bytes", 0.4, address, offset, window.length, { zeroes, printable }));
+      }
+    }
+    const prefixes = [
+      { name: "x86_cld_call", bytes: [252, 232] },
+      { name: "x86_getpc_fnstenv", bytes: [217, 238, 217, 116, 36, 244] }
+    ];
+    for (const prefix of prefixes) {
+      if (prefix.bytes.every((value, index) => bytes[index] === value)) {
+        observations.push(observation("known_payload_prefix", 0.65, address, 0, prefix.bytes.length, { prefix: prefix.name }));
+      }
+    }
+    if (memory.readable !== null) observations.push(observation(memory.readable ? "readable_region" : "unreadable_region", 1, address, 0, bytes.length));
+    if (memory.executable !== null) observations.push(observation(memory.executable ? "executable_region" : "non_executable_region", 1, address, 0, bytes.length));
+    if (disassemblySucceeded !== null) observations.push(observation(disassemblySucceeded ? "disassembly_succeeded" : "disassembly_failed", 0.8, address, 0, Math.min(bytes.length, 16)));
+    if (bytes.length < requestedBytes) observations.push(observation(bytes.length === 0 ? "bytes_inaccessible" : "bytes_truncated", 1, address, bytes.length, requestedBytes - bytes.length, { requestedBytes, actualBytes: bytes.length }));
+    const positive = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind));
+    const confidence = calculateLandingConfidence(observations);
+    const recommendation = memory.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
+    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation };
+  }
+  function stackPointer() {
+    var _a, _b, _c;
+    const thread = host.currentThread;
+    const registers = (_b = (_a = thread == null ? void 0 : thread.Registers) == null ? void 0 : _a.User) != null ? _b : thread == null ? void 0 : thread.Registers;
+    const names = getPointerSize() === 8 ? ["rsp", "esp"] : ["esp", "rsp"];
+    for (const name of names) {
+      const value = (_c = registers == null ? void 0 : registers[name]) != null ? _c : registers == null ? void 0 : registers[name.toUpperCase()];
+      if (typeof value === "bigint") return value;
+      if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+      if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value)) return BigInt(`0x${value.replace(/^0x/i, "").replace(/`/g, "")}`);
+      if (value && typeof value === "object") {
+        try {
+          const rendered = String(value);
+          if (/^(0x)?[0-9a-f`]+$/i.test(rendered)) return BigInt(`0x${rendered.replace(/^0x/i, "").replace(/`/g, "")}`);
+        } catch (_error) {
+        }
+      }
+    }
+    return void 0;
+  }
+  function readAvailablePrefix(address, requestedBytes) {
+    const complete = tryReadMemory(address, requestedBytes);
+    if (complete) return complete;
+    let low = 0;
+    let high = requestedBytes - 1;
+    let available = new Uint8Array();
+    while (low <= high) {
+      const length = Math.floor((low + high) / 2);
+      if (length === 0) {
+        low = 1;
+        continue;
+      }
+      const bytes = tryReadMemory(address, length);
+      if (bytes) {
+        available = bytes;
+        low = length + 1;
+      } else {
+        high = length - 1;
+      }
+    }
+    return available;
+  }
+  function canDisassemble(address) {
+    var _a, _b, _c;
+    try {
+      const hostAny = host;
+      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      if (typeof (control == null ? void 0 : control.ExecuteCommand) !== "function") return null;
+      const lines = Array.from(control.ExecuteCommand.call(control, `u 0x${address.toString(16)} L1`)).map(String);
+      return lines.some((line) => /\b[0-9a-f`]+\s+[0-9a-f]{2}/i.test(line)) && !lines.some((line) => /memory access error|could not be read|unable to/i.test(line));
+    } catch (_error) {
+      return null;
+    }
+  }
+  function landing(address, requestedBytes = 64) {
+    const target = address != null ? address : stackPointer();
+    if (target === void 0) {
+      return { bytes: [], requestedBytes, observations: [], confidence: 0, recommendation: "Stack pointer is unavailable; provide an explicit address." };
+    }
+    const memory = memoryRegion(target);
+    const bytes = readAvailablePrefix(target, requestedBytes);
+    return analyzeLandingBytes(target, bytes, memory, requestedBytes, canDisassemble(target));
+  }
+
   // src/commands/triage.ts
   function safeGet2(value, key2) {
     if (!value || typeof value !== "object") {
@@ -3861,46 +4130,10 @@ var osed_bundle = (() => {
     }
     return evidence.ipBackedByModule === false;
   }
-  function scanStack(sp, size) {
-    if (sp === void 0) {
-      return { warning: "Stack pointer unavailable." };
-    }
-    try {
-      const bytes = readMemory(sp, size);
-      return { base: sp, bytes };
-    } catch (error2) {
-      const msg = error2 instanceof Error ? error2.message : String(error2);
-      return { warning: `Stack read failed: ${msg}` };
-    }
-  }
-  function findShellcodeCandidates(stackBase, stackBytes) {
-    if (!stackBase || !stackBytes) {
-      return [];
-    }
-    const hits = /* @__PURE__ */ new Set();
-    for (let i = 0; i <= stackBytes.length - 8; i += 1) {
-      let nopRun = 0;
-      for (let j = i; j < stackBytes.length && stackBytes[j] === 144; j += 1) {
-        nopRun += 1;
-      }
-      if (nopRun >= 8) {
-        hits.add(stackBase + BigInt(i));
-        i += nopRun;
-      }
-    }
-    for (let i = 0; i <= stackBytes.length - 32; i += 4) {
-      const window = stackBytes.slice(i, i + 32);
-      let zeroes = 0;
-      let printable = 0;
-      for (const b of window) {
-        if (b === 0) zeroes += 1;
-        if (b >= 32 && b <= 126) printable += 1;
-      }
-      if (zeroes <= 1 && printable <= 8) {
-        hits.add(stackBase + BigInt(i));
-      }
-    }
-    return [...hits].sort((a, b) => a < b ? -1 : 1).slice(0, 5);
+  function landingCandidateAddresses(evidence) {
+    const candidateKinds = /* @__PURE__ */ new Set(["nop_sled_detected", "payload_like_bytes"]);
+    const addresses = evidence.observations.filter((item) => candidateKinds.has(item.kind) && item.address !== void 0).map((item) => item.address);
+    return [...new Set(addresses.map(String))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 5);
   }
   function scoreModule(module) {
     let score = 0;
@@ -4004,7 +4237,7 @@ var osed_bundle = (() => {
         stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
       },
       execute(options) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e;
         const pointerSize = getPointerSize();
         const regs = readRegisters(pointerSize);
         const patternLength = options.patternLength;
@@ -4013,9 +4246,10 @@ var osed_bundle = (() => {
         const moduleFilter = options.module;
         const patternOffset = findOffset(regs.ip, patternLength);
         const seh = readSehPreview(pointerSize);
-        const stack = scanStack(regs.sp, stackBytesToRead);
-        const shellcode = findShellcodeCandidates(stack.base, stack.bytes);
-        const badcharStats = quickBadcharScan(stack.bytes, badchars);
+        const landingEvidence = landing(regs.sp, stackBytesToRead);
+        const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : void 0;
+        const shellcode = landingCandidateAddresses(landingEvidence);
+        const badcharStats = quickBadcharScan(stackBytes, badchars);
         const modules = listModulesWithMitigations(moduleFilter).map((module) => ({
           module: module.name,
           score: scoreModule(module),
@@ -4032,7 +4266,7 @@ var osed_bundle = (() => {
           ipBackedByModule,
           exceptionCode: regs.exceptionCode
         }) ? "yes" : "no";
-        const badSp = stack.bytes ? "no" : "yes";
+        const badSp = stackBytes ? "no" : "yes";
         section("CONTROL");
         print(`EIP/RIP controlled: ${eipControlled}`);
         print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
@@ -4044,7 +4278,7 @@ var osed_bundle = (() => {
         section("STACK");
         print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
         print(`Bad stack pointer: ${badSp}`);
-        print(`SP points into cyclic pattern: ${stack.bytes && regs.sp ? findOffset(regs.sp, patternLength) ? "yes" : "no" : "unknown"}`);
+        print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? findOffset(regs.sp, patternLength) ? "yes" : "no" : "unknown"}`);
         if (shellcode.length > 0) {
           print("Shellcode candidates:");
           for (const candidate of shellcode) {
@@ -4098,7 +4332,10 @@ var osed_bundle = (() => {
           }))
         );
         const warnings = [];
-        if (stack.warning) warnings.push(stack.warning);
+        warnings.push(...(_e = (_d = landingEvidence.memory) == null ? void 0 : _d.warnings) != null ? _e : []);
+        if (landingEvidence.address === void 0) warnings.push(landingEvidence.recommendation);
+        else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
+        else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
         if (seh.warning) warnings.push(seh.warning);
         const findings = [
           {
@@ -4114,7 +4351,8 @@ var osed_bundle = (() => {
               sp: regs.sp,
               spName: regs.spName,
               badPointer: badSp === "yes",
-              shellcodeCandidates: shellcode
+              shellcodeCandidates: shellcode,
+              landing: landingEvidence
             },
             gadgets,
             modules,
@@ -5988,7 +6226,7 @@ var osed_bundle = (() => {
       var _a;
       const hostAny = host;
       const source = (_a = hostAny.currentProcess) == null ? void 0 : _a.Modules;
-      const items = toArray(source);
+      const items = toArray2(source);
       return items.map((entry) => {
         var _a2, _b, _c, _d, _e, _f;
         const moduleAny = entry;
@@ -6052,7 +6290,7 @@ var osed_bundle = (() => {
       return [{ Error: message }];
     }
   };
-  function toArray(value) {
+  function toArray2(value) {
     if (Array.isArray(value)) {
       return value;
     }
@@ -6074,7 +6312,7 @@ var osed_bundle = (() => {
     }
     const control = (_g = (_f = (_e = hostAny.namespace) == null ? void 0 : _e.Debugger) == null ? void 0 : _f.Utility) == null ? void 0 : _g.Control;
     const result3 = exec.call(control, command);
-    return toArray(result3).map((line) => String(line));
+    return toArray2(result3).map((line) => String(line));
   }
   function parseProtectFromVprot(lines) {
     for (const line of lines) {
@@ -6247,6 +6485,92 @@ var osed_bundle = (() => {
     return rows.map((row) => new DxRow(row));
   }
 
+  // src/commands/memory.ts
+  function flag(value) {
+    return value === null ? "unknown" : value ? "yes" : "no";
+  }
+  function createMemoryCommand() {
+    return {
+      name: "memory",
+      description: "Inspect normalized memory-region evidence for an address.",
+      usage: "dx @$osed().memory(0x41414141)",
+      examples: ["dx @$osed().memory(0x41414141)", 'dx @$osed().memory("0012F800")'],
+      schema: { address: { type: ["number", "string"], required: true } },
+      execute(options) {
+        const address = normalizeAddress(options.address);
+        const evidence = memoryRegion(address);
+        section("Memory Evidence");
+        info(`Address: ${formatAddress(address, 8)}`);
+        table(
+          [
+            { key: "read", header: "Read" },
+            { key: "write", header: "Write" },
+            { key: "exec", header: "Exec" },
+            { key: "guard", header: "Guard" },
+            { key: "noAccess", header: "No access" },
+            { key: "commit", header: "Committed" },
+            { key: "type", header: "Type" }
+          ],
+          [{
+            read: flag(evidence.readable),
+            write: flag(evidence.writable),
+            exec: flag(evidence.executable),
+            guard: flag(evidence.guarded),
+            noAccess: flag(evidence.noAccess),
+            commit: flag(evidence.committed),
+            type: evidence.regionType
+          }]
+        );
+        for (const warning of evidence.warnings) warn(warning);
+        return { command: "memory", args: options, success: true, findings: [evidence], warnings: evidence.warnings, errors: [] };
+      }
+    };
+  }
+
+  // src/commands/landing.ts
+  function createLandingCommand() {
+    return {
+      name: "landing",
+      description: "Analyze exploit-relevant evidence at ESP/RSP or an explicit address.",
+      usage: "dx @$osed().landing()",
+      examples: ["dx @$osed().landing()", "dx @$osed().landing(0x0012F800)"],
+      schema: { address: { type: ["number", "string"] } },
+      execute(options) {
+        const address = options.address === void 0 ? void 0 : normalizeAddress(options.address);
+        const evidence = landing(address);
+        section("Landing Evidence");
+        if (evidence.address !== void 0) info(`Address: ${formatAddress(evidence.address, 8)}`);
+        table(
+          [
+            { key: "kind", header: "Observation" },
+            { key: "address", header: "Address" },
+            { key: "length", header: "Length" },
+            { key: "confidence", header: "Confidence" }
+          ],
+          evidence.observations.map((item) => {
+            var _a, _b;
+            return {
+              kind: item.kind,
+              address: item.address === void 0 ? "" : formatAddress(item.address, 8),
+              length: (_b = (_a = item.length) == null ? void 0 : _a.toString()) != null ? _b : "",
+              confidence: item.confidence.toFixed(2)
+            };
+          })
+        );
+        info(evidence.recommendation);
+        const available = evidence.address !== void 0;
+        return {
+          command: "landing",
+          args: options,
+          success: available,
+          findings: [evidence],
+          warnings: available ? [] : [evidence.recommendation],
+          errors: []
+        };
+      }
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -6278,6 +6602,8 @@ var osed_bundle = (() => {
       createPivotCommand(),
       createSehPprCommand(),
       createTriageCommand(),
+      createMemoryCommand(),
+      createLandingCommand(),
       createEncodeCommand(),
       createNopCommand(),
       createRopTemplateCommand(),
@@ -6501,6 +6827,30 @@ var osed_bundle = (() => {
       return true;
     };
     api.sc = createShellcodeNamespace();
+    const analysisAddress = (value) => {
+      if (typeof value === "bigint" && value >= BigInt(0)) return value;
+      if (typeof value === "number" && Number.isInteger(value) && value >= 0) return BigInt(value);
+      if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value.trim())) {
+        return BigInt(`0x${value.trim().replace(/^0x/i, "").replace(/`/g, "")}`);
+      }
+      throw new Error("Address must be a non-negative integer, bigint, or hex string.");
+    };
+    const commandAddress = (value) => {
+      const address = analysisAddress(value);
+      return address <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(address) : `0x${address.toString(16)}`;
+    };
+    api.memory = (address) => {
+      invoke("memory", [commandAddress(address)]);
+      return lastResult == null ? void 0 : lastResult.findings[0];
+    };
+    api.can_execute = (address) => {
+      const evidence = api.memory(address);
+      return evidence.executable;
+    };
+    api.landing = (address) => {
+      invoke("landing", address === void 0 ? [] : [commandAddress(address)]);
+      return lastResult == null ? void 0 : lastResult.findings[0];
+    };
     return api;
   }
   function isPlainObject(value) {
@@ -6618,6 +6968,9 @@ var osed_bundle = (() => {
           module: args[2],
           stackBytes: args[3]
         };
+      case "memory":
+      case "landing":
+        return { address: args[0] };
       default:
         return { value: args[0] };
     }

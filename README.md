@@ -58,6 +58,9 @@ dx @$osed().rop_suggest("essfunc", 50)
 | --- | --- |
 | `help(command?)` | List commands or print the schema for one. |
 | `triage(length?, badchars?, module?, stackBytes?)` | Fast crash triage: control detection, SEH chain, stack context, gadget summary. |
+| `memory(address)` | Return normalized memory-region evidence, including tri-state access flags and raw protection metadata. |
+| `can_execute(address)` | Project the normalized executable flag from `memory(address)` as `true`, `false`, or `null`. |
+| `landing(address?)` | Analyze bytes and memory evidence at an address, defaulting to ESP/RSP. |
 | `modules(filter?)` | List loaded modules with ASLR/SafeSEH/DEP/CFG state. |
 | `badchars(address, exclude?)` | Compare memory against the expected byte sequence and highlight deviations. |
 
@@ -69,6 +72,21 @@ dx @$osed().pattern_offset(0x39654138)
 ```
 
 Also available as `pattern.create` / `pattern.offset`.
+
+### Memory and landing evidence
+
+```text
+dx @$osed().memory(0x0012F800)
+dx @$osed().can_execute(0x0012F800)
+dx @$osed().landing()             ; defaults to ESP/RSP
+dx @$osed().landing(0x0012F800)   ; inspect an explicit address
+```
+
+`memory()` normalizes WinDbg protection metadata into `readable`, `writable`, `executable`, `guarded`, `noAccess`, `committed`, and `regionType`. Boolean fields use three states: `true`, `false`, and `null` when WinDbg cannot establish the value. Original numeric protection, state, and type values remain under `raw`.
+
+`landing()` returns sampled bytes plus atomic observations such as NOP runs, repeated marker bytes, cyclic-pattern matches, memory permissions, disassembly status, and inaccessible or truncated ranges. These are observations, not claims that an address contains shellcode.
+
+`triage()` consumes this same landing evidence instead of independently reading and classifying stack bytes.
 
 ### SEH
 
@@ -145,6 +163,8 @@ Every command stores its structured output. Access it after the `dx` call return
 dx @$osed().last_result()
 dx @$osed().last_summary()
 ```
+
+`memory()` and `landing()` also return their evidence objects directly. `can_execute()` returns `true`, `false`, or `null`; it does not issue an independent query path beyond normalized memory evidence.
 
 ---
 

@@ -21,6 +21,19 @@
 9. Register command in `src/index.ts`.
 10. Document it in `Documentation/COMMANDS.md`.
 
+## Analysis Layer
+
+Read `Documentation/ANALYSIS_ARCHITECTURE.md` before adding or changing code under `src/analysis/`.
+
+The analysis layer owns debugger evidence collection and normalization. Commands consume and render that evidence. If a command needs evidence that is not available, extend the analysis contract and its tests instead of querying WinDbg or duplicating classification logic in the command.
+
+Current analysis modules:
+
+- `analysis/memory.ts`: normalizes region protection, state, and type while preserving raw numeric values.
+- `analysis/landing.ts`: samples landing bytes and emits atomic, range-backed observations.
+
+Tests for analysis code must cover unknown separately from confirmed false. Confidence tests must also verify bounds and order independence when aggregation is involved.
+
 ## Rebuild and Reload During Live Debugging
 
 1. `npm run build`

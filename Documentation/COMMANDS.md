@@ -1,7 +1,7 @@
 # Command Reference
 
 All user-facing entry points are invoked via `dx @$osed().<name>(...)`.
-Command calls return `true`/`false` for concise `dx` output.
+Most command calls return `true`/`false` for concise `dx` output. `memory()` and `landing()` return their structured evidence directly, while `can_execute()` returns `true`, `false`, or `null`.
 Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 
 ## Top-Level Commands
@@ -17,6 +17,8 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
 | `seh` | `dx @$osed().seh()` | `dx @$osed().seh()` | Walks the current thread SEH chain. x86-only in v1. |
 | `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, SEH, stack, and gadget context. |
+| `memory` | `dx @$osed().memory(address)` | `dx @$osed().memory(0x0012F800)` | Returns normalized region evidence. Unknown semantic flags are `null`; raw numeric metadata is preserved. |
+| `landing` | `dx @$osed().landing(address?)` | `dx @$osed().landing()` | Returns byte-range and memory observations at an explicit address or ESP/RSP. |
 | `modules` | `dx @$osed().modules(filter?)` | `dx @$osed().modules("essfunc")` | Lists modules and mitigation state. |
 | `rop` | `dx @$osed().rop(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop("essfunc")` | Sets module scope for legacy ROP exploration and module triage. |
 | `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("essfunc", "FF E4")` | Finds byte sequences in executable sections. |
@@ -28,6 +30,40 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `encode` | `dx @$osed().encode(shellcode, exclude?, key?)` | `dx @$osed().encode({ shellcode: "fc e8...", exclude: [0, 10, 13] })` | XOR-encodes shellcode to avoid bad characters. |
 | `nop` | `dx @$osed().nop(length, byte?)` | `dx @$osed().nop(16)` | Generates a NOP sled. |
 | `rop_template` | `dx @$osed().rop_template(api?, module?)` | `dx @$osed().rop_template("VirtualProtect", "essfunc")` | Prints a commented ROP chain skeleton. |
+
+## Analysis Evidence Helpers
+
+### `memory(address)`
+
+The returned evidence contains the queried address, region boundaries when available, semantic access flags, region type, raw numeric values, source, and warnings.
+
+Semantic flags are tri-state:
+
+| Value | Meaning |
+| --- | --- |
+| `true` | WinDbg metadata confirms the property. |
+| `false` | WinDbg metadata confirms the property is absent. |
+| `null` | The property could not be established. |
+
+`can_execute(address)` is exactly the `executable` projection of normalized memory evidence. It therefore returns `boolean | null`; unknown metadata is never converted to `false`.
+
+### `landing(address?)`
+
+With no address, `landing()` uses the current architecture's stack pointer (`ESP` or `RSP`). The evidence contains:
+
+- queried address and normalized memory evidence;
+- sampled bytes and requested byte count;
+- atomic observations with `kind`, `confidence`, optional address and length, and supporting details;
+- derived aggregate confidence;
+- the current compatibility recommendation field.
+
+Observation kinds currently include NOP and repeated-byte runs, marker bytes, cyclic-pattern matches, known payload prefixes, legacy low-printability windows, memory access and execution state, disassembly status, and inaccessible or truncated byte ranges. A debugger API failure remains unknown and is not reported as a confirmed negative result.
+
+Confidence is derived metadata used for presentation. It is bounded to `[0,1]`, deterministic across observation ordering, and excluded from observation identity.
+
+### Triage integration
+
+`triage()` uses `LandingEvidence` for stack bytes, landing candidates, read status, and bad-character sampling. It does not independently rescan stack bytes for landing signals. Existing control, SEH, module, and gadget analysis remains separate.
 
 ## Format String Namespace
 
@@ -162,3 +198,4 @@ These are exposed on `osed` for inspection and cleanup, but they are not part of
 | `last_result` | `dx @$osed().last_result()` | `dx @$osed().last_result()` | Returns the full structured result from the last command. |
 | `last_summary` | `dx @$osed().last_summary()` | `dx @$osed().last_summary()` | Returns a compact summary of the last command result. |
 | `clear_last_result` | `dx @$osed().clear_last_result()` | `dx @$osed().clear_last_result()` | Clears the stored result snapshot. |
+| `can_execute` | `dx @$osed().can_execute(address)` | `dx @$osed().can_execute(0x0012F800)` | Returns the executable field from normalized memory evidence without a separate analysis path. |

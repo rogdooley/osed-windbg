@@ -46,6 +46,8 @@ import { buildCapabilityIndexFromRpPlusText, summarizeCapabilities, type Capabil
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
 import { getPointerSize } from "./core/memory";
+import { createMemoryCommand } from "./commands/memory";
+import { createLandingCommand } from "./commands/landing";
 
 type OsedApi = {
   [name: string]: unknown;
@@ -84,6 +86,8 @@ function registerAll(): void {
     createPivotCommand(),
     createSehPprCommand(),
     createTriageCommand(),
+    createMemoryCommand(),
+    createLandingCommand(),
     createEncodeCommand(),
     createNopCommand(),
     createRopTemplateCommand(),
@@ -327,6 +331,32 @@ function bindApi(): OsedApi {
 
   api.sc = createShellcodeNamespace();
 
+  const analysisAddress = (value: unknown): bigint => {
+    if (typeof value === "bigint" && value >= BigInt(0)) return value;
+    if (typeof value === "number" && Number.isInteger(value) && value >= 0) return BigInt(value);
+    if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value.trim())) {
+      return BigInt(`0x${value.trim().replace(/^0x/i, "").replace(/`/g, "")}`);
+    }
+    throw new Error("Address must be a non-negative integer, bigint, or hex string.");
+  };
+
+  const commandAddress = (value: unknown): number | string => {
+    const address = analysisAddress(value);
+    return address <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(address) : `0x${address.toString(16)}`;
+  };
+  api.memory = (address: unknown) => {
+    invoke("memory", [commandAddress(address)]);
+    return lastResult?.findings[0];
+  };
+  api.can_execute = (address: unknown) => {
+    const evidence = (api.memory as (value: unknown) => { executable: boolean | null })(address);
+    return evidence.executable;
+  };
+  api.landing = (address?: unknown) => {
+    invoke("landing", address === undefined ? [] : [commandAddress(address)]);
+    return lastResult?.findings[0];
+  };
+
   return api;
 }
 
@@ -455,6 +485,9 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
         module: args[2],
         stackBytes: args[3],
       };
+    case "memory":
+    case "landing":
+      return { address: args[0] };
     default:
       return { value: args[0] };
   }

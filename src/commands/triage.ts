@@ -1,8 +1,9 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
-import { getPointerSize, readMemory, readPointer } from "../core/memory";
+import { getPointerSize, readPointer } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
 import { decodeOffsetNeedle, generateCyclicPattern, generateMsfPattern } from "../logic/pattern_logic";
+import { LandingEvidence, landing } from "../analysis/landing";
 import { findModuleByAddress, listModulesWithMitigations, ModuleMitigation } from "./modules";
 
 type RegisterSnapshot = {
@@ -190,51 +191,15 @@ export function isInstructionPointerControlled(evidence: IpControlEvidence): boo
   return evidence.ipBackedByModule === false;
 }
 
-function scanStack(sp: bigint | undefined, size: number): { base?: bigint; bytes?: Uint8Array; warning?: string } {
-  if (sp === undefined) {
-    return { warning: "Stack pointer unavailable." };
-  }
-  try {
-    const bytes = readMemory(sp, size);
-    return { base: sp, bytes };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    return { warning: `Stack read failed: ${msg}` };
-  }
-}
-
-function findShellcodeCandidates(stackBase: bigint | undefined, stackBytes: Uint8Array | undefined): bigint[] {
-  if (!stackBase || !stackBytes) {
-    return [];
-  }
-
-  const hits = new Set<bigint>();
-
-  for (let i = 0; i <= stackBytes.length - 8; i += 1) {
-    let nopRun = 0;
-    for (let j = i; j < stackBytes.length && stackBytes[j] === 0x90; j += 1) {
-      nopRun += 1;
-    }
-    if (nopRun >= 8) {
-      hits.add(stackBase + BigInt(i));
-      i += nopRun;
-    }
-  }
-
-  for (let i = 0; i <= stackBytes.length - 32; i += 4) {
-    const window = stackBytes.slice(i, i + 32);
-    let zeroes = 0;
-    let printable = 0;
-    for (const b of window) {
-      if (b === 0x00) zeroes += 1;
-      if (b >= 0x20 && b <= 0x7e) printable += 1;
-    }
-    if (zeroes <= 1 && printable <= 8) {
-      hits.add(stackBase + BigInt(i));
-    }
-  }
-
-  return [...hits].sort((a, b) => (a < b ? -1 : 1)).slice(0, 5);
+export function landingCandidateAddresses(evidence: LandingEvidence): bigint[] {
+  const candidateKinds = new Set(["nop_sled_detected", "payload_like_bytes"]);
+  const addresses = evidence.observations
+    .filter((item) => candidateKinds.has(item.kind) && item.address !== undefined)
+    .map((item) => item.address!);
+  return [...new Set(addresses.map(String))]
+    .map(BigInt)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .slice(0, 5);
 }
 
 function scoreModule(module: ModuleMitigation): number {
@@ -359,9 +324,10 @@ export function createTriageCommand(): Command {
 
       const patternOffset = findOffset(regs.ip, patternLength);
       const seh = readSehPreview(pointerSize);
-      const stack = scanStack(regs.sp, stackBytesToRead);
-      const shellcode = findShellcodeCandidates(stack.base, stack.bytes);
-      const badcharStats = quickBadcharScan(stack.bytes, badchars);
+      const landingEvidence = landing(regs.sp, stackBytesToRead);
+      const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : undefined;
+      const shellcode = landingCandidateAddresses(landingEvidence);
+      const badcharStats = quickBadcharScan(stackBytes, badchars);
 
       const modules = listModulesWithMitigations(moduleFilter)
         .map((module) => ({
@@ -386,7 +352,7 @@ export function createTriageCommand(): Command {
       })
         ? "yes"
         : "no";
-      const badSp = stack.bytes ? "no" : "yes";
+      const badSp = stackBytes ? "no" : "yes";
 
       out.section("CONTROL");
       out.print(`EIP/RIP controlled: ${eipControlled}`);
@@ -401,7 +367,7 @@ export function createTriageCommand(): Command {
       out.section("STACK");
       out.print(`${regs.spName ?? "SP"}: ${regs.sp !== undefined ? out.formatAddress(regs.sp, pointerSize) : "n/a"}`);
       out.print(`Bad stack pointer: ${badSp}`);
-      out.print(`SP points into cyclic pattern: ${stack.bytes && regs.sp ? (findOffset(regs.sp, patternLength) ? "yes" : "no") : "unknown"}`);
+      out.print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? (findOffset(regs.sp, patternLength) ? "yes" : "no") : "unknown"}`);
       if (shellcode.length > 0) {
         out.print("Shellcode candidates:");
         for (const candidate of shellcode) {
@@ -460,7 +426,10 @@ export function createTriageCommand(): Command {
       );
 
       const warnings: string[] = [];
-      if (stack.warning) warnings.push(stack.warning);
+      warnings.push(...(landingEvidence.memory?.warnings ?? []));
+      if (landingEvidence.address === undefined) warnings.push(landingEvidence.recommendation);
+      else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
+      else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
       if (seh.warning) warnings.push(seh.warning);
 
       const findings = [
@@ -478,6 +447,7 @@ export function createTriageCommand(): Command {
             spName: regs.spName,
             badPointer: badSp === "yes",
             shellcodeCandidates: shellcode,
+            landing: landingEvidence,
           },
           gadgets,
           modules,

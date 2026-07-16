@@ -51,6 +51,9 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().seh()`
 - `dx @$osed().seh.visualize()`
 - `dx @$osed().triage()`
+- `dx @$osed().memory(0x0012F800)`
+- `dx @$osed().can_execute(0x0012F800)`
+- `dx @$osed().landing()`
 - `dx @$osed().rop_suggest({ module: "essfunc", engine: "semantic" })`
 - `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")`
 - `dx @$osed().rop.query({ capability: "STACK_PIVOT", executableOnly: true })`
@@ -75,6 +78,8 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().sc.iat_ptr("app.exe", "VirtualAlloc")`
 
 For the full command matrix, see `Documentation/COMMANDS.md`.
+
+For the normative dependency and evidence rules governing `src/analysis/`, see `Documentation/ANALYSIS_ARCHITECTURE.md`.
 
 ## Troubleshooting
 
