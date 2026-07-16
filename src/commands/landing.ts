@@ -1,4 +1,4 @@
-import { landing } from "../analysis/landing";
+import { landing, serializeLandingEvidence } from "../analysis/landing";
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { normalizeAddress } from "../core/validation";
@@ -35,7 +35,7 @@ export function createLandingCommand(): Command {
         command: "landing",
         args: options,
         success: available,
-        findings: [evidence],
+        findings: [serializeLandingEvidence(evidence)],
         warnings: available ? [] : [evidence.recommendation],
         errors: [],
       };

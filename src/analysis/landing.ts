@@ -1,6 +1,6 @@
 import { getPointerSize, tryReadMemory } from "../core/memory";
 import { generateCyclicPattern, generateMsfPattern } from "../logic/pattern_logic";
-import { MemoryRegionEvidence, memoryRegion } from "./memory";
+import { MemoryRegionEvidence, SerializedMemoryRegionEvidence, memoryRegion, serializeMemoryRegionEvidence } from "./memory";
 
 export interface Observation {
   kind: string;
@@ -16,6 +16,24 @@ export interface LandingEvidence {
   bytes: number[];
   requestedBytes: number;
   observations: Observation[];
+  confidence: number;
+  recommendation: string;
+}
+
+export interface SerializedObservation {
+  kind: string;
+  confidence: number;
+  address?: string;
+  length?: number;
+  details: Record<string, unknown>;
+}
+
+export interface SerializedLandingEvidence {
+  address?: string;
+  memory?: SerializedMemoryRegionEvidence;
+  bytes: number[];
+  requestedBytes: number;
+  observations: SerializedObservation[];
   confidence: number;
   recommendation: string;
 }
@@ -40,6 +58,41 @@ function stableDetails(value: unknown): string {
       .join(",")}}`;
   }
   return `${typeof value}:${String(value)}`;
+}
+
+function formatAddressValue(value: bigint): string {
+  return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+}
+
+function serializeUnknown(value: unknown): unknown {
+  if (typeof value === "bigint") return formatAddressValue(value);
+  if (Array.isArray(value)) return value.map(serializeUnknown);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = serializeUnknown(entry);
+    }
+    return out;
+  }
+  return value;
+}
+
+export function serializeLandingEvidence(evidence: LandingEvidence): SerializedLandingEvidence {
+  return {
+    address: evidence.address === undefined ? undefined : formatAddressValue(evidence.address),
+    memory: evidence.memory === undefined ? undefined : serializeMemoryRegionEvidence(evidence.memory),
+    bytes: [...evidence.bytes],
+    requestedBytes: evidence.requestedBytes,
+    observations: evidence.observations.map((item) => ({
+      kind: item.kind,
+      confidence: item.confidence,
+      address: item.address === undefined ? undefined : formatAddressValue(item.address),
+      length: item.length,
+      details: serializeUnknown(item.details) as Record<string, unknown>,
+    })),
+    confidence: evidence.confidence,
+    recommendation: evidence.recommendation,
+  };
 }
 
 /** Stable derived identity without adding mutable identity state to evidence. */

@@ -3741,6 +3741,27 @@ var osed_bundle = (() => {
   function protectionBase(protection) {
     return protection & 255;
   }
+  function formatAddressValue(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+  }
+  function serializeMemoryRegionEvidence(evidence) {
+    return {
+      address: formatAddressValue(evidence.address),
+      baseAddress: evidence.baseAddress === void 0 ? void 0 : formatAddressValue(evidence.baseAddress),
+      allocationBase: evidence.allocationBase === void 0 ? void 0 : formatAddressValue(evidence.allocationBase),
+      regionSize: evidence.regionSize === void 0 ? void 0 : `0x${evidence.regionSize.toString(16).toUpperCase()}`,
+      readable: evidence.readable,
+      writable: evidence.writable,
+      executable: evidence.executable,
+      guarded: evidence.guarded,
+      noAccess: evidence.noAccess,
+      committed: evidence.committed,
+      regionType: evidence.regionType,
+      raw: __spreadValues({}, evidence.raw),
+      source: evidence.source,
+      warnings: [...evidence.warnings]
+    };
+  }
   function normalizeMemoryRegion(address, raw, source = "vprot") {
     const protection = raw.protection;
     const base = protection === void 0 ? void 0 : protectionBase(protection);
@@ -3850,6 +3871,38 @@ var osed_bundle = (() => {
     "executable_region",
     "disassembly_succeeded"
   ]);
+  function formatAddressValue2(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+  }
+  function serializeUnknown(value) {
+    if (typeof value === "bigint") return formatAddressValue2(value);
+    if (Array.isArray(value)) return value.map(serializeUnknown);
+    if (value && typeof value === "object") {
+      const out = {};
+      for (const [key2, entry] of Object.entries(value)) {
+        out[key2] = serializeUnknown(entry);
+      }
+      return out;
+    }
+    return value;
+  }
+  function serializeLandingEvidence(evidence) {
+    return {
+      address: evidence.address === void 0 ? void 0 : formatAddressValue2(evidence.address),
+      memory: evidence.memory === void 0 ? void 0 : serializeMemoryRegionEvidence(evidence.memory),
+      bytes: [...evidence.bytes],
+      requestedBytes: evidence.requestedBytes,
+      observations: evidence.observations.map((item) => ({
+        kind: item.kind,
+        confidence: item.confidence,
+        address: item.address === void 0 ? void 0 : formatAddressValue2(item.address),
+        length: item.length,
+        details: serializeUnknown(item.details)
+      })),
+      confidence: evidence.confidence,
+      recommendation: evidence.recommendation
+    };
+  }
   function calculateLandingConfidence(observations) {
     const contributions = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind)).map((item) => Math.max(0, Math.min(1, Number.isFinite(item.confidence) ? item.confidence : 0))).sort((left, right) => left - right);
     if (contributions.length === 0) return 0;
@@ -6522,7 +6575,7 @@ var osed_bundle = (() => {
           }]
         );
         for (const warning of evidence.warnings) warn(warning);
-        return { command: "memory", args: options, success: true, findings: [evidence], warnings: evidence.warnings, errors: [] };
+        return { command: "memory", args: options, success: true, findings: [serializeMemoryRegionEvidence(evidence)], warnings: evidence.warnings, errors: [] };
       }
     };
   }
@@ -6563,7 +6616,7 @@ var osed_bundle = (() => {
           command: "landing",
           args: options,
           success: available,
-          findings: [evidence],
+          findings: [serializeLandingEvidence(evidence)],
           warnings: available ? [] : [evidence.recommendation],
           errors: []
         };

@@ -34,6 +34,28 @@ export interface MemoryRegionEvidence {
   warnings: string[];
 }
 
+export interface SerializedMemoryRegionEvidence {
+  address: string;
+  baseAddress?: string;
+  allocationBase?: string;
+  regionSize?: string;
+  readable: EvidenceFlag;
+  writable: EvidenceFlag;
+  executable: EvidenceFlag;
+  guarded: EvidenceFlag;
+  noAccess: EvidenceFlag;
+  committed: EvidenceFlag;
+  regionType: MemoryRegionType;
+  raw: {
+    state?: number;
+    protection?: number;
+    allocationProtection?: number;
+    type?: number;
+  };
+  source: "vprot" | "unavailable";
+  warnings: string[];
+}
+
 const PAGE_NOACCESS = 0x01;
 const PAGE_READONLY = 0x02;
 const PAGE_READWRITE = 0x04;
@@ -50,6 +72,29 @@ const MEM_IMAGE = 0x1000000;
 
 function protectionBase(protection: number): number {
   return protection & 0xff;
+}
+
+function formatAddressValue(value: bigint): string {
+  return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+}
+
+export function serializeMemoryRegionEvidence(evidence: MemoryRegionEvidence): SerializedMemoryRegionEvidence {
+  return {
+    address: formatAddressValue(evidence.address),
+    baseAddress: evidence.baseAddress === undefined ? undefined : formatAddressValue(evidence.baseAddress),
+    allocationBase: evidence.allocationBase === undefined ? undefined : formatAddressValue(evidence.allocationBase),
+    regionSize: evidence.regionSize === undefined ? undefined : `0x${evidence.regionSize.toString(16).toUpperCase()}`,
+    readable: evidence.readable,
+    writable: evidence.writable,
+    executable: evidence.executable,
+    guarded: evidence.guarded,
+    noAccess: evidence.noAccess,
+    committed: evidence.committed,
+    regionType: evidence.regionType,
+    raw: { ...evidence.raw },
+    source: evidence.source,
+    warnings: [...evidence.warnings],
+  };
 }
 
 export function normalizeMemoryRegion(address: bigint, raw: RawMemoryRegion, source: MemoryRegionEvidence["source"] = "vprot"): MemoryRegionEvidence {

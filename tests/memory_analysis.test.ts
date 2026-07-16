@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { normalizeMemoryRegion, parseVprot } from "../src/analysis/memory";
+import { normalizeMemoryRegion, parseVprot, serializeMemoryRegionEvidence } from "../src/analysis/memory";
 
 describe("memory analysis", () => {
   test("normalizes Win32 protection, state, and type flags", () => {
@@ -71,6 +71,26 @@ describe("memory analysis", () => {
       noAccess: null,
       committed: false,
       regionType: "unknown",
+    });
+  });
+
+  test("serializes address fields into dx-safe strings", () => {
+    const evidence = normalizeMemoryRegion(BigInt("0x625011d3"), {
+      baseAddress: BigInt("0x62501000"),
+      allocationBase: BigInt("0x62500000"),
+      regionSize: BigInt("0x1000"),
+      state: 0x1000,
+      protection: 0x20,
+      type: 0x1000000,
+    });
+
+    expect(serializeMemoryRegionEvidence(evidence)).toMatchObject({
+      address: "0x00000000625011D3",
+      baseAddress: "0x0000000062501000",
+      allocationBase: "0x0000000062500000",
+      regionSize: "0x1000",
+      executable: true,
+      regionType: "image",
     });
   });
 });

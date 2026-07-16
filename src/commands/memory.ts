@@ -1,4 +1,4 @@
-import { memoryRegion } from "../analysis/memory";
+import { memoryRegion, serializeMemoryRegionEvidence } from "../analysis/memory";
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { normalizeAddress } from "../core/validation";
@@ -40,7 +40,7 @@ export function createMemoryCommand(): Command {
         }],
       );
       for (const warning of evidence.warnings) out.warn(warning);
-      return { command: "memory", args: options, success: true, findings: [evidence], warnings: evidence.warnings, errors: [] };
+      return { command: "memory", args: options, success: true, findings: [serializeMemoryRegionEvidence(evidence)], warnings: evidence.warnings, errors: [] };
     },
   };
 }
