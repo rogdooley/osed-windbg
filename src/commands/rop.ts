@@ -2,7 +2,7 @@ import { Command, CommandResult, ValidationFlags } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize, readMemory, tryReadMemory } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
-import { knownPatterns, type GadgetPattern, validateInstructionCandidate } from "../logic/instruction_validation";
+import { knownPatternsForPointerSize, type GadgetPattern, validateInstructionCandidateForPointerSize } from "../logic/instruction_validation";
 import { buildRopIndexFromSequences } from "../rop";
 import { parseInstruction } from "../semantics";
 import { SEMANTIC_SCHEMA_VERSION, type InstructionSequence, type InstructionSequenceSource, type Provenance } from "../semantics/types";
@@ -57,6 +57,7 @@ function validationPass(flags: ValidationFlags): boolean {
 }
 
 function collectValidatedPatternHits(pattern: GadgetPattern, options: ScanOptions): { hits: ValidatedPatternHit[]; warnings: string[]; stats: Record<string, number> } {
+  const pointerSize = getPointerSize();
   const scan = scanPattern(
     {
       module: options.module,
@@ -75,7 +76,7 @@ function collectValidatedPatternHits(pattern: GadgetPattern, options: ScanOption
       continue;
     }
 
-    const validated = validateInstructionCandidate(candidate, true, true);
+    const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
     if (!validationPass(validated.flags)) {
       continue;
     }
@@ -173,7 +174,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
   const allHits: ValidatedPatternHit[] = [];
   let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
 
-  for (const pattern of knownPatterns()) {
+  for (const pattern of knownPatternsForPointerSize(pointerSize)) {
     const result = collectValidatedPatternHits(pattern, options);
     allHits.push(...result.hits);
     combinedWarnings.push(...result.warnings);
@@ -240,6 +241,40 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
     warnings: combinedWarnings,
     errors: [],
     stats: { ...combinedStats, canonicalResults: gadgets.length },
+  };
+}
+
+function runLegacyRopSuggest(options: RopSuggestOptions, initialWarnings: string[] = []): CommandResult {
+  const combinedFindings: unknown[] = [];
+  const combinedWarnings: string[] = [...initialWarnings];
+  let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+
+  const pointerSize = getPointerSize();
+  for (const pattern of knownPatternsForPointerSize(pointerSize)) {
+    const result = scanForPattern(`ROP Suggest: ${pattern.name}`, pattern, options);
+    combinedFindings.push(
+      ...result.findings.map((finding) => ({ ...(finding as Record<string, unknown>), pattern: pattern.name })),
+    );
+    combinedWarnings.push(...result.warnings);
+    combinedStats = {
+      sectionsScanned: combinedStats.sectionsScanned + (result.stats?.sectionsScanned ?? 0),
+      chunksRead: combinedStats.chunksRead + (result.stats?.chunksRead ?? 0),
+      chunksSkipped: combinedStats.chunksSkipped + (result.stats?.chunksSkipped ?? 0),
+      results: combinedStats.results + (result.stats?.results ?? 0),
+      stoppedEarly: combinedStats.stoppedEarly + (result.stats?.stoppedEarly ?? 0),
+    };
+  }
+
+  out.whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
+
+  return {
+    command: "rop_suggest",
+    args: options,
+    success: true,
+    findings: combinedFindings,
+    warnings: combinedWarnings,
+    errors: [],
+    stats: combinedStats,
   };
 }
 
@@ -363,39 +398,13 @@ export function createRopCommands(): Command[] {
     execute(options: Record<string, unknown>): CommandResult {
       const scanOptions = normalizeRopSuggest(options);
       if (scanOptions.engine === "semantic") {
+        if (getPointerSize() === 8) {
+          return runLegacyRopSuggest(scanOptions, ["Semantic ROP backend is currently x86-only; used x64 byte-pattern scanner instead."]);
+        }
         return runSemanticRopSuggest(scanOptions);
       }
 
-      const combinedFindings: unknown[] = [];
-      const combinedWarnings: string[] = [];
-      let combinedStats: Record<string, number> = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
-
-      for (const pattern of knownPatterns()) {
-        const result = scanForPattern(`ROP Suggest: ${pattern.name}`, pattern, scanOptions);
-        combinedFindings.push(
-          ...result.findings.map((finding) => ({ ...(finding as Record<string, unknown>), pattern: pattern.name })),
-        );
-        combinedWarnings.push(...result.warnings);
-        combinedStats = {
-          sectionsScanned: combinedStats.sectionsScanned + (result.stats?.sectionsScanned ?? 0),
-          chunksRead: combinedStats.chunksRead + (result.stats?.chunksRead ?? 0),
-          chunksSkipped: combinedStats.chunksSkipped + (result.stats?.chunksSkipped ?? 0),
-          results: combinedStats.results + (result.stats?.results ?? 0),
-          stoppedEarly: combinedStats.stoppedEarly + (result.stats?.stoppedEarly ?? 0),
-        };
-      }
-
-      out.whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
-
-      return {
-        command: "rop_suggest",
-        args: options,
-        success: true,
-        findings: combinedFindings,
-        warnings: combinedWarnings,
-        errors: [],
-        stats: combinedStats,
-      };
+      return runLegacyRopSuggest(scanOptions);
     },
   };
 

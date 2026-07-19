@@ -211,7 +211,7 @@ function scoreModule(module: ModuleMitigation): number {
   return score;
 }
 
-function scanGadgets(moduleFilter?: string): { jmp: string[]; call: string[]; ppr: string[]; pivots: string[] } {
+function scanGadgets(pointerSize: 4 | 8, moduleFilter?: string): { jmp: string[]; call: string[]; ppr: string[]; pivots: string[] } {
   const fmt = (address: bigint): string => {
     const mod = findModuleByAddress(address);
     if (!mod) {
@@ -225,17 +225,26 @@ function scanGadgets(moduleFilter?: string): { jmp: string[]; call: string[]; pp
   const callHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 0x4000 }, Uint8Array.from([0xff, 0xd4])).hits;
 
   const pprHits: bigint[] = [];
-  for (let a = 0x58; a <= 0x5f && pprHits.length < 12; a += 1) {
-    for (let b = 0x58; b <= 0x5f && pprHits.length < 12; b += 1) {
-      const hits = scanPattern(
-        { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 0x4000 },
-        Uint8Array.from([a, b, 0xc3]),
-      ).hits;
-      pprHits.push(...hits);
+  if (pointerSize === 4) {
+    for (let a = 0x58; a <= 0x5f && pprHits.length < 12; a += 1) {
+      for (let b = 0x58; b <= 0x5f && pprHits.length < 12; b += 1) {
+        const hits = scanPattern(
+          { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 0x4000 },
+          Uint8Array.from([a, b, 0xc3]),
+        ).hits;
+        pprHits.push(...hits);
+      }
     }
   }
 
-  const pivotPatterns = [Uint8Array.from([0x94, 0xc3]), Uint8Array.from([0x54, 0xc3]), Uint8Array.from([0x8b, 0xe5, 0xc3])];
+  const pivotPatterns = pointerSize === 8
+    ? [
+        Uint8Array.from([0x48, 0x94, 0xc3]),
+        Uint8Array.from([0x54, 0xc3]),
+        Uint8Array.from([0x48, 0x89, 0xec, 0xc3]),
+        Uint8Array.from([0x48, 0x89, 0xc4, 0xc3]),
+      ]
+    : [Uint8Array.from([0x94, 0xc3]), Uint8Array.from([0x54, 0xc3]), Uint8Array.from([0x8b, 0xe5, 0xc3])];
   const pivotHits: bigint[] = [];
   for (const pattern of pivotPatterns) {
     const hits = scanPattern(
@@ -341,7 +350,7 @@ export function createTriageCommand(): Command {
         .sort((a, b) => b.score - a.score)
         .slice(0, 6);
 
-      const gadgets = scanGadgets(moduleFilter);
+      const gadgets = scanGadgets(pointerSize, moduleFilter);
 
       const ipBackedByModule = regs.ip !== undefined ? findModuleByAddress(regs.ip) !== undefined : undefined;
       const eipControlled = isInstructionPointerControlled({
@@ -355,14 +364,18 @@ export function createTriageCommand(): Command {
       const badSp = stackBytes ? "no" : "yes";
 
       out.section("CONTROL");
-      out.print(`EIP/RIP controlled: ${eipControlled}`);
+      out.print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
       out.print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
       out.print(`Pattern: ${patternOffset ? patternOffset.kind : "n/a"}`);
 
       out.section("SEH");
-      out.print(`Overwritten: ${seh.overwritten}`);
-      out.print(`Next SEH: ${seh.next !== undefined ? out.formatAddress(seh.next, 4) : "n/a"}`);
-      out.print(`Handler: ${seh.handler !== undefined ? out.formatAddress(seh.handler, 4) : "n/a"}`);
+      if (pointerSize === 8) {
+        out.print("Not applicable: classic SEH overwrite workflow is x86-only.");
+      } else {
+        out.print(`Overwritten: ${seh.overwritten}`);
+        out.print(`Next SEH: ${seh.next !== undefined ? out.formatAddress(seh.next, 4) : "n/a"}`);
+        out.print(`Handler: ${seh.handler !== undefined ? out.formatAddress(seh.handler, 4) : "n/a"}`);
+      }
 
       out.section("STACK");
       out.print(`${regs.spName ?? "SP"}: ${regs.sp !== undefined ? out.formatAddress(regs.sp, pointerSize) : "n/a"}`);
@@ -378,12 +391,14 @@ export function createTriageCommand(): Command {
       }
 
       out.section("GADGETS");
-      out.print("JMP ESP/RSP:");
+      out.print(pointerSize === 8 ? "JMP RSP:" : "JMP ESP:");
       for (const line of gadgets.jmp) out.print(`  ${line}`);
-      out.print("CALL ESP/RSP:");
+      out.print(pointerSize === 8 ? "CALL RSP:" : "CALL ESP:");
       for (const line of gadgets.call) out.print(`  ${line}`);
-      out.print("POP POP RET:");
-      for (const line of gadgets.ppr) out.print(`  ${line}`);
+      if (pointerSize === 4) {
+        out.print("POP POP RET:");
+        for (const line of gadgets.ppr) out.print(`  ${line}`);
+      }
       out.print("Stack pivots:");
       for (const line of gadgets.pivots) out.print(`  ${line}`);
 

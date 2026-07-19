@@ -48,6 +48,7 @@ import { formatAddress } from "./core/output";
 import { getPointerSize } from "./core/memory";
 import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand } from "./commands/landing";
+import { createMathCommand } from "./commands/math";
 
 type OsedApi = {
   [name: string]: unknown;
@@ -88,6 +89,7 @@ function registerAll(): void {
     createTriageCommand(),
     createMemoryCommand(),
     createLandingCommand(),
+    createMathCommand(),
     createEncodeCommand(),
     createNopCommand(),
     createRopTemplateCommand(),
@@ -356,6 +358,10 @@ function bindApi(): OsedApi {
     invoke("landing", address === undefined ? [] : [commandAddress(address)]);
     return lastResult?.findings[0];
   };
+  api.math = (...args: unknown[]) => {
+    invoke("math", args);
+    return lastResult?.findings[0];
+  };
 
   return api;
 }
@@ -418,6 +424,8 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
       return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
     case "modules":
       return { filter: args[0] };
+    case "math":
+      return { value: args[0], bits: args[1] };
     case "rop":
     case "rop_suggest":
     case "pivots":

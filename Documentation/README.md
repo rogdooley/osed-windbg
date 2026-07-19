@@ -29,6 +29,7 @@ That sequence shows the script’s value without requiring any prior setup beyon
 
 - WinDbg Preview (modern JavaScript provider)
 - Node.js 20+
+- x86 for the full classic OSED workflow; x64 for memory, landing, PE/import/export, math, triage context, and RSP gadget evidence.
 
 ## Install and Build
 
@@ -54,6 +55,7 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().memory(0x0012F800)`
 - `dx @$osed().can_execute(0x0012F800)`
 - `dx @$osed().landing()`
+- `dx @$osed().math(0xFFFFFFD6, 32)`
 - `dx @$osed().rop_suggest({ module: "essfunc", engine: "semantic" })`
 - `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")`
 - `dx @$osed().rop.query({ capability: "STACK_PIVOT", executableOnly: true })`
@@ -74,6 +76,7 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().sc.exportwalk("kernel32", "GetProcAddress")`
 - `dx @$osed().sc.iat()`
 - `dx @$osed().sc.iat("app.exe")`
+- `dx @$osed().sc.iat("app.exe", "Virtual")`
 - `dx @$osed().sc.iat_find("VirtualAlloc")`
 - `dx @$osed().sc.iat_ptr("app.exe", "VirtualAlloc")`
 

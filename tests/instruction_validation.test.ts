@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { knownPatterns, validateInstructionCandidate } from "../src/logic/instruction_validation";
+import {
+  knownPatterns,
+  knownPatternsForPointerSize,
+  validateInstructionCandidate,
+  validateInstructionCandidateForPointerSize,
+} from "../src/logic/instruction_validation";
 
 describe("instruction_validation", () => {
   test("knownPatterns includes all 8 pop-reg ; ret gadgets", () => {
@@ -100,5 +105,26 @@ describe("instruction_validation", () => {
     const result = validateInstructionCandidate(Uint8Array.from([0x89, 0x08, 0xc3]), true, true);
     expect(result.flags.decoded).toBe(true);
     expect(result.mnemonic).toBe("mov [eax], ecx ; ret");
+  });
+
+  test("x64 pattern catalog includes rsp dispatch and 64-bit pivots", () => {
+    const patterns = knownPatternsForPointerSize(8);
+    expect(patterns.some((p) => p.mnemonic === "jmp rsp" && p.bytes.join(" ") === "255 228")).toBe(true);
+    expect(patterns.some((p) => p.mnemonic === "call rsp")).toBe(true);
+    expect(patterns.some((p) => p.mnemonic === "xchg rax, rsp ; ret")).toBe(true);
+    expect(patterns.some((p) => p.mnemonic === "mov rsp, rbp ; ret")).toBe(true);
+  });
+
+  test("x64 validator does not classify REX prefix 40 C3 as x86 inc eax ; ret", () => {
+    const x86 = validateInstructionCandidateForPointerSize(Uint8Array.from([0x40, 0xc3]), true, true, 4);
+    const x64 = validateInstructionCandidateForPointerSize(Uint8Array.from([0x40, 0xc3]), true, true, 8);
+    expect(x86.mnemonic).toBe("inc eax ; ret");
+    expect(x64.flags.decoded).toBe(false);
+  });
+
+  test("x64 validator classifies FF E4 as jmp rsp", () => {
+    const result = validateInstructionCandidateForPointerSize(Uint8Array.from([0xff, 0xe4]), true, true, 8);
+    expect(result.flags.decoded).toBe(true);
+    expect(result.mnemonic).toBe("jmp rsp");
   });
 });

@@ -1,6 +1,6 @@
 # osed-windbg
 
-A WinDbg Preview JavaScript extension for Windows x86 exploit development. Automates the mechanical work — pattern matching, bad-char comparison, gadget scanning, format-string payload construction, shellcode encoding — so you stay focused on the exploit logic.
+A WinDbg Preview JavaScript extension for Windows exploit development. Automates the mechanical work — pattern matching, bad-char comparison, gadget scanning, memory evidence, import/export inspection, and payload-layout math — so you stay focused on the exploit logic.
 
 All commands run from the WinDbg `dx` evaluator. No Python, no external tools, no context switching.
 
@@ -11,7 +11,8 @@ All commands run from the WinDbg `dx` evaluator. No Python, no external tools, n
 ## Requirements
 
 - WinDbg Preview (WinDbgX) with DbgModel/JavaScript support
-- x86 target (most commands; `sc.*` and `rop.scan/query` work on any arch)
+- x86 target for the full classic OSED workflow.
+- x64 target for memory/landing evidence, PE/import/export helpers, math, triage context, `JMP/CALL RSP`, and x64 stack-pivot scanning.
 
 ---
 
@@ -80,6 +81,7 @@ dx @$osed().memory(0x0012F800)
 dx @$osed().can_execute(0x0012F800)
 dx @$osed().landing()             ; defaults to ESP/RSP
 dx @$osed().landing(0x0012F800)   ; inspect an explicit address
+dx @$osed().math(0xFFFFFFD6, 32)  ; hex/signed/unsigned/LE bytes
 ```
 
 `memory()` normalizes WinDbg protection metadata into `readable`, `writable`, `executable`, `guarded`, `noAccess`, `committed`, and `regionType`. Boolean fields use three states: `true`, `false`, and `null` when WinDbg cannot establish the value. Original numeric protection, state, and type values remain under `raw`.
@@ -87,6 +89,8 @@ dx @$osed().landing(0x0012F800)   ; inspect an explicit address
 `landing()` returns sampled bytes plus atomic observations such as NOP runs, repeated marker bytes, cyclic-pattern matches, memory permissions, disassembly status, and inaccessible or truncated ranges. These are observations, not claims that an address contains shellcode.
 
 `triage()` consumes this same landing evidence instead of independently reading and classifying stack bytes.
+
+`math()` formats integers as hex, signed, unsigned, little-endian bytes, and two's complement for the selected width (`8`, `16`, `32`, or `64`; default `32`).
 
 ### SEH
 
@@ -192,6 +196,7 @@ TypeScript source is in `src/`. The build produces a single self-contained JS fi
 
 ## Notes
 
-- Most commands target x86 (cdecl/stdcall calling conventions, 4-byte pointers). `sc.*` and the semantic ROP namespace work on any architecture.
+- Classic SEH, PPR, format-string offset mapping, PUSHAD ROP templates, and semantic ROP scoring remain x86-oriented.
+- x64 support is evidence-first: register naming, pointer formatting, memory permissions, landing analysis, `JMP/CALL RSP`, and RSP pivot byte-pattern scans. The semantic ROP backend is still x86-only; x64 `rop_suggest(..., "semantic")` falls back to the x64 byte-pattern scanner with a warning.
 - The `encode` command supports payloads up to 65535 bytes. The XOR decoder stub is 21 bytes (≤255-byte payload) or 23 bytes (256–65535 bytes); fixed bytes in the stub are checked against the badchar list.
 - `fmt.offset` reads TEB `NtTib.StackBase`/`StackLimit` for stack pointer classification; it requires an x86 target broken in at the format call site.

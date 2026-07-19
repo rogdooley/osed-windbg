@@ -1,7 +1,7 @@
 # Command Reference
 
 All user-facing entry points are invoked via `dx @$osed().<name>(...)`.
-Most command calls return `true`/`false` for concise `dx` output. `memory()` and `landing()` return their structured evidence directly, while `can_execute()` returns `true`, `false`, or `null`.
+Most command calls return `true`/`false` for concise `dx` output. `memory()`, `landing()`, and `math()` return their structured evidence directly, while `can_execute()` returns `true`, `false`, or `null`.
 Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 
 ## Top-Level Commands
@@ -16,16 +16,17 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `egghunter` | `dx @$osed().egghunter(tag?, mode?, wow64?)` | `dx @$osed().egghunter("W00T", "ntaccess", false)` | Emits egghunter shellcode as hex and Python bytes. |
 | `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
 | `seh` | `dx @$osed().seh()` | `dx @$osed().seh()` | Walks the current thread SEH chain. x86-only in v1. |
-| `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, SEH, stack, and gadget context. |
+| `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, stack, and gadget context. Uses EIP/ESP on x86 and RIP/RSP on x64; SEH/PPR evidence is x86-only. |
 | `memory` | `dx @$osed().memory(address)` | `dx @$osed().memory(0x0012F800)` | Returns normalized region evidence. Unknown semantic flags are `null`; raw numeric metadata is preserved. |
 | `landing` | `dx @$osed().landing(address?)` | `dx @$osed().landing()` | Returns byte-range and memory observations at an explicit address or ESP/RSP. |
+| `math` | `dx @$osed().math(value, bits?)` | `dx @$osed().math(0xFFFFFFD6, 32)` | Formats integers as hex, signed, unsigned, little-endian bytes, and two's complement. |
 | `modules` | `dx @$osed().modules(filter?)` | `dx @$osed().modules("essfunc")` | Lists modules and mitigation state. |
 | `rop` | `dx @$osed().rop(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop("essfunc")` | Sets module scope for legacy ROP exploration and module triage. |
 | `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("essfunc", "FF E4")` | Finds byte sequences in executable sections. |
 | `rop_suggest` | `dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)` | `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")` | Suggests validated gadget patterns. |
 | `retn` | `dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().retn("essfunc")` | Finds `retn N` gadgets for stdcall chain adjustment. |
 | `add_esp` | `dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().add_esp("essfunc")` | Finds `add esp, N ; ret` gadgets. |
-| `pivots` | `dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().pivots("essfunc")` | Finds stack pivot candidates. |
+| `pivots` | `dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().pivots("essfunc")` | Finds stack pivot candidates. Uses ESP patterns on x86 and RSP patterns on x64. |
 | `seh_ppr` | `dx @$osed().seh_ppr(module?, exclude?, maxResults?, executableOnly?, mode?)` | `dx @$osed().seh_ppr("libspp.dll", "00 0A 0D")` | Finds and ranks `pop ; pop ; ret` gadgets. |
 | `encode` | `dx @$osed().encode(shellcode, exclude?, key?)` | `dx @$osed().encode({ shellcode: "fc e8...", exclude: [0, 10, 13] })` | XOR-encodes shellcode to avoid bad characters. |
 | `nop` | `dx @$osed().nop(length, byte?)` | `dx @$osed().nop(16)` | Generates a NOP sled. |
@@ -60,6 +61,12 @@ With no address, `landing()` uses the current architecture's stack pointer (`ESP
 Observation kinds currently include NOP and repeated-byte runs, marker bytes, cyclic-pattern matches, known payload prefixes, legacy low-printability windows, memory access and execution state, disassembly status, and inaccessible or truncated byte ranges. A debugger API failure remains unknown and is not reported as a confirmed negative result.
 
 Confidence is derived metadata used for presentation. It is bounded to `[0,1]`, deterministic across observation ordering, and excluded from observation identity.
+
+### `math(value, bits?)`
+
+`math()` formats integer values for debugger arithmetic and payload layout work. `bits` defaults to `32` and accepts `8`, `16`, `32`, or `64`.
+
+The returned evidence contains `hex`, `unsigned`, `signed`, `littleEndianBytes`, and `twosComplement`. Negative inputs are masked into the selected width, so `math(-42, 32)` reports `0xFFFFFFD6` and `D6 FF FF FF`.
 
 ### Triage integration
 
@@ -185,7 +192,7 @@ The `sc` namespace exposes module, PE, export, hash, and IAT helpers.
 
 | Helper | Syntax | Example | Notes |
 | --- | --- | --- | --- |
-| `sc.iat` | `dx @$osed().sc.iat(module?)` | `dx @$osed().sc.iat("app.exe")` | Enumerates imported addresses for a module. |
+| `sc.iat` | `dx @$osed().sc.iat(module?, filter?)` | `dx @$osed().sc.iat("app.exe", "Virtual")` | Enumerates imported addresses for a module, optionally filtering by DLL or symbol substring. |
 | `sc.iat_find` | `dx @$osed().sc.iat_find(symbol)` | `dx @$osed().sc.iat_find("VirtualAlloc")` | Searches all loaded modules for matching IAT entries. |
 | `sc.iat_ptr` | `dx @$osed().sc.iat_ptr(module, symbol)` | `dx @$osed().sc.iat_ptr("app.exe", "VirtualAlloc")` | Resolves an IAT slot and target pointer for one symbol. |
 

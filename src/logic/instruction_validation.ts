@@ -69,6 +69,40 @@ const KNOWN_PATTERNS: GadgetPattern[] = [
   { name: "pushad_ret", bytes: [0x60, 0xc3], mnemonic: "pushad ; ret" },
 ];
 
+const X64_PATTERNS: GadgetPattern[] = [
+  { name: "pop_rax_ret", bytes: [0x58, 0xc3], mnemonic: "pop rax ; ret" },
+  { name: "pop_rcx_ret", bytes: [0x59, 0xc3], mnemonic: "pop rcx ; ret" },
+  { name: "pop_rdx_ret", bytes: [0x5a, 0xc3], mnemonic: "pop rdx ; ret" },
+  { name: "pop_rbx_ret", bytes: [0x5b, 0xc3], mnemonic: "pop rbx ; ret" },
+  { name: "pop_rsp_ret", bytes: [0x5c, 0xc3], mnemonic: "pop rsp ; ret" },
+  { name: "pop_rbp_ret", bytes: [0x5d, 0xc3], mnemonic: "pop rbp ; ret" },
+  { name: "pop_rsi_ret", bytes: [0x5e, 0xc3], mnemonic: "pop rsi ; ret" },
+  { name: "pop_rdi_ret", bytes: [0x5f, 0xc3], mnemonic: "pop rdi ; ret" },
+  { name: "pop_r8_ret", bytes: [0x41, 0x58, 0xc3], mnemonic: "pop r8 ; ret" },
+  { name: "pop_r9_ret", bytes: [0x41, 0x59, 0xc3], mnemonic: "pop r9 ; ret" },
+  { name: "pop_r10_ret", bytes: [0x41, 0x5a, 0xc3], mnemonic: "pop r10 ; ret" },
+  { name: "pop_r11_ret", bytes: [0x41, 0x5b, 0xc3], mnemonic: "pop r11 ; ret" },
+  { name: "pop_r12_ret", bytes: [0x41, 0x5c, 0xc3], mnemonic: "pop r12 ; ret" },
+  { name: "pop_r13_ret", bytes: [0x41, 0x5d, 0xc3], mnemonic: "pop r13 ; ret" },
+  { name: "pop_r14_ret", bytes: [0x41, 0x5e, 0xc3], mnemonic: "pop r14 ; ret" },
+  { name: "pop_r15_ret", bytes: [0x41, 0x5f, 0xc3], mnemonic: "pop r15 ; ret" },
+  { name: "jmp_rsp", bytes: [0xff, 0xe4], mnemonic: "jmp rsp" },
+  { name: "call_rsp", bytes: [0xff, 0xd4], mnemonic: "call rsp" },
+  { name: "jmp_rax", bytes: [0xff, 0xe0], mnemonic: "jmp rax" },
+  { name: "call_rax", bytes: [0xff, 0xd0], mnemonic: "call rax" },
+  { name: "push_rsp_ret", bytes: [0x54, 0xc3], mnemonic: "push rsp ; ret" },
+  { name: "leave_ret", bytes: [0xc9, 0xc3], mnemonic: "leave ; ret" },
+  { name: "xchg_rax_rsp_ret", bytes: [0x48, 0x94, 0xc3], mnemonic: "xchg rax, rsp ; ret" },
+  { name: "xchg_rcx_rsp_ret", bytes: [0x48, 0x87, 0xcc, 0xc3], mnemonic: "xchg rcx, rsp ; ret" },
+  { name: "xchg_rdx_rsp_ret", bytes: [0x48, 0x87, 0xd4, 0xc3], mnemonic: "xchg rdx, rsp ; ret" },
+  { name: "xchg_rbx_rsp_ret", bytes: [0x48, 0x87, 0xdc, 0xc3], mnemonic: "xchg rbx, rsp ; ret" },
+  { name: "xchg_rbp_rsp_ret", bytes: [0x48, 0x87, 0xec, 0xc3], mnemonic: "xchg rbp, rsp ; ret" },
+  { name: "xchg_rsi_rsp_ret", bytes: [0x48, 0x87, 0xf4, 0xc3], mnemonic: "xchg rsi, rsp ; ret" },
+  { name: "xchg_rdi_rsp_ret", bytes: [0x48, 0x87, 0xfc, 0xc3], mnemonic: "xchg rdi, rsp ; ret" },
+  { name: "mov_rsp_rbp_ret", bytes: [0x48, 0x89, 0xec, 0xc3], mnemonic: "mov rsp, rbp ; ret" },
+  { name: "mov_rsp_rax_ret", bytes: [0x48, 0x89, 0xc4, 0xc3], mnemonic: "mov rsp, rax ; ret" },
+];
+
 const POP_REGS: Array<{ code: number; name: string }> = [
   { code: 0x58, name: "eax" },
   { code: 0x59, name: "ecx" },
@@ -141,12 +175,37 @@ export function knownPatterns(): GadgetPattern[] {
   return ALL_PATTERNS;
 }
 
+export function knownPatternsForPointerSize(pointerSize: 4 | 8): GadgetPattern[] {
+  return pointerSize === 8 ? X64_PATTERNS : ALL_PATTERNS;
+}
+
 export function validateInstructionCandidate(
   candidateBytes: Uint8Array,
   executable: boolean,
   moduleBacked: boolean,
 ): InstructionValidationResult {
   const matched = ALL_PATTERNS.find((pattern) => sameBytes(candidateBytes, pattern.bytes));
+
+  return {
+    flags: {
+      executable,
+      moduleBacked,
+      decoded: matched !== undefined,
+      mnemonicMatch: matched !== undefined,
+      badcharSafe: true,
+    },
+    mnemonic: matched?.mnemonic,
+  };
+}
+
+export function validateInstructionCandidateForPointerSize(
+  candidateBytes: Uint8Array,
+  executable: boolean,
+  moduleBacked: boolean,
+  pointerSize: 4 | 8,
+): InstructionValidationResult {
+  const patterns = knownPatternsForPointerSize(pointerSize);
+  const matched = patterns.find((pattern) => sameBytes(candidateBytes, pattern.bytes));
 
   return {
     flags: {

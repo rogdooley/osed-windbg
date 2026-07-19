@@ -1441,6 +1441,39 @@ var osed_bundle = (() => {
     // pushad ; ret — push all 8 GP regs (PUSHAD VirtualProtect DEP bypass technique)
     { name: "pushad_ret", bytes: [96, 195], mnemonic: "pushad ; ret" }
   ];
+  var X64_PATTERNS = [
+    { name: "pop_rax_ret", bytes: [88, 195], mnemonic: "pop rax ; ret" },
+    { name: "pop_rcx_ret", bytes: [89, 195], mnemonic: "pop rcx ; ret" },
+    { name: "pop_rdx_ret", bytes: [90, 195], mnemonic: "pop rdx ; ret" },
+    { name: "pop_rbx_ret", bytes: [91, 195], mnemonic: "pop rbx ; ret" },
+    { name: "pop_rsp_ret", bytes: [92, 195], mnemonic: "pop rsp ; ret" },
+    { name: "pop_rbp_ret", bytes: [93, 195], mnemonic: "pop rbp ; ret" },
+    { name: "pop_rsi_ret", bytes: [94, 195], mnemonic: "pop rsi ; ret" },
+    { name: "pop_rdi_ret", bytes: [95, 195], mnemonic: "pop rdi ; ret" },
+    { name: "pop_r8_ret", bytes: [65, 88, 195], mnemonic: "pop r8 ; ret" },
+    { name: "pop_r9_ret", bytes: [65, 89, 195], mnemonic: "pop r9 ; ret" },
+    { name: "pop_r10_ret", bytes: [65, 90, 195], mnemonic: "pop r10 ; ret" },
+    { name: "pop_r11_ret", bytes: [65, 91, 195], mnemonic: "pop r11 ; ret" },
+    { name: "pop_r12_ret", bytes: [65, 92, 195], mnemonic: "pop r12 ; ret" },
+    { name: "pop_r13_ret", bytes: [65, 93, 195], mnemonic: "pop r13 ; ret" },
+    { name: "pop_r14_ret", bytes: [65, 94, 195], mnemonic: "pop r14 ; ret" },
+    { name: "pop_r15_ret", bytes: [65, 95, 195], mnemonic: "pop r15 ; ret" },
+    { name: "jmp_rsp", bytes: [255, 228], mnemonic: "jmp rsp" },
+    { name: "call_rsp", bytes: [255, 212], mnemonic: "call rsp" },
+    { name: "jmp_rax", bytes: [255, 224], mnemonic: "jmp rax" },
+    { name: "call_rax", bytes: [255, 208], mnemonic: "call rax" },
+    { name: "push_rsp_ret", bytes: [84, 195], mnemonic: "push rsp ; ret" },
+    { name: "leave_ret", bytes: [201, 195], mnemonic: "leave ; ret" },
+    { name: "xchg_rax_rsp_ret", bytes: [72, 148, 195], mnemonic: "xchg rax, rsp ; ret" },
+    { name: "xchg_rcx_rsp_ret", bytes: [72, 135, 204, 195], mnemonic: "xchg rcx, rsp ; ret" },
+    { name: "xchg_rdx_rsp_ret", bytes: [72, 135, 212, 195], mnemonic: "xchg rdx, rsp ; ret" },
+    { name: "xchg_rbx_rsp_ret", bytes: [72, 135, 220, 195], mnemonic: "xchg rbx, rsp ; ret" },
+    { name: "xchg_rbp_rsp_ret", bytes: [72, 135, 236, 195], mnemonic: "xchg rbp, rsp ; ret" },
+    { name: "xchg_rsi_rsp_ret", bytes: [72, 135, 244, 195], mnemonic: "xchg rsi, rsp ; ret" },
+    { name: "xchg_rdi_rsp_ret", bytes: [72, 135, 252, 195], mnemonic: "xchg rdi, rsp ; ret" },
+    { name: "mov_rsp_rbp_ret", bytes: [72, 137, 236, 195], mnemonic: "mov rsp, rbp ; ret" },
+    { name: "mov_rsp_rax_ret", bytes: [72, 137, 196, 195], mnemonic: "mov rsp, rax ; ret" }
+  ];
   var POP_REGS = [
     { code: 88, name: "eax" },
     { code: 89, name: "ecx" },
@@ -1511,8 +1544,25 @@ var osed_bundle = (() => {
   function knownPatterns() {
     return ALL_PATTERNS;
   }
+  function knownPatternsForPointerSize(pointerSize) {
+    return pointerSize === 8 ? X64_PATTERNS : ALL_PATTERNS;
+  }
   function validateInstructionCandidate(candidateBytes, executable, moduleBacked) {
     const matched = ALL_PATTERNS.find((pattern) => sameBytes(candidateBytes, pattern.bytes));
+    return {
+      flags: {
+        executable,
+        moduleBacked,
+        decoded: matched !== void 0,
+        mnemonicMatch: matched !== void 0,
+        badcharSafe: true
+      },
+      mnemonic: matched == null ? void 0 : matched.mnemonic
+    };
+  }
+  function validateInstructionCandidateForPointerSize(candidateBytes, executable, moduleBacked, pointerSize) {
+    const patterns = knownPatternsForPointerSize(pointerSize);
+    const matched = patterns.find((pattern) => sameBytes(candidateBytes, pattern.bytes));
     return {
       flags: {
         executable,
@@ -2784,6 +2834,7 @@ var osed_bundle = (() => {
   }
   function collectValidatedPatternHits(pattern, options) {
     var _a;
+    const pointerSize = getPointerSize();
     const scan = scanPattern(
       {
         module: options.module,
@@ -2799,7 +2850,7 @@ var osed_bundle = (() => {
       if (!candidate) {
         continue;
       }
-      const validated = validateInstructionCandidate(candidate, true, true);
+      const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
       if (!validationPass(validated.flags)) {
         continue;
       }
@@ -2885,7 +2936,7 @@ var osed_bundle = (() => {
     const combinedWarnings = [];
     const allHits = [];
     let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
-    for (const pattern of knownPatterns()) {
+    for (const pattern of knownPatternsForPointerSize(pointerSize)) {
       const result3 = collectValidatedPatternHits(pattern, options);
       allHits.push(...result3.hits);
       combinedWarnings.push(...result3.warnings);
@@ -2948,6 +2999,37 @@ var osed_bundle = (() => {
       warnings: combinedWarnings,
       errors: [],
       stats: __spreadProps(__spreadValues({}, combinedStats), { canonicalResults: gadgets.length })
+    };
+  }
+  function runLegacyRopSuggest(options, initialWarnings = []) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    const combinedFindings = [];
+    const combinedWarnings = [...initialWarnings];
+    let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
+    const pointerSize = getPointerSize();
+    for (const pattern of knownPatternsForPointerSize(pointerSize)) {
+      const result3 = scanForPattern(`ROP Suggest: ${pattern.name}`, pattern, options);
+      combinedFindings.push(
+        ...result3.findings.map((finding) => __spreadProps(__spreadValues({}, finding), { pattern: pattern.name }))
+      );
+      combinedWarnings.push(...result3.warnings);
+      combinedStats = {
+        sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a = result3.stats) == null ? void 0 : _a.sectionsScanned) != null ? _b : 0),
+        chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
+        chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
+        results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
+        stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0)
+      };
+    }
+    whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
+    return {
+      command: "rop_suggest",
+      args: options,
+      success: true,
+      findings: combinedFindings,
+      warnings: combinedWarnings,
+      errors: [],
+      stats: combinedStats
     };
   }
   function createRopCommands() {
@@ -3061,38 +3143,14 @@ var osed_bundle = (() => {
         engine: { type: "string", enum: ["legacy", "semantic"], default: "legacy" }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
         const scanOptions = normalizeRopSuggest(options);
         if (scanOptions.engine === "semantic") {
+          if (getPointerSize() === 8) {
+            return runLegacyRopSuggest(scanOptions, ["Semantic ROP backend is currently x86-only; used x64 byte-pattern scanner instead."]);
+          }
           return runSemanticRopSuggest(scanOptions);
         }
-        const combinedFindings = [];
-        const combinedWarnings = [];
-        let combinedStats = { sectionsScanned: 0, chunksRead: 0, chunksSkipped: 0, results: 0, stoppedEarly: 0 };
-        for (const pattern of knownPatterns()) {
-          const result3 = scanForPattern(`ROP Suggest: ${pattern.name}`, pattern, scanOptions);
-          combinedFindings.push(
-            ...result3.findings.map((finding) => __spreadProps(__spreadValues({}, finding), { pattern: pattern.name }))
-          );
-          combinedWarnings.push(...result3.warnings);
-          combinedStats = {
-            sectionsScanned: combinedStats.sectionsScanned + ((_b = (_a = result3.stats) == null ? void 0 : _a.sectionsScanned) != null ? _b : 0),
-            chunksRead: combinedStats.chunksRead + ((_d = (_c = result3.stats) == null ? void 0 : _c.chunksRead) != null ? _d : 0),
-            chunksSkipped: combinedStats.chunksSkipped + ((_f = (_e = result3.stats) == null ? void 0 : _e.chunksSkipped) != null ? _f : 0),
-            results: combinedStats.results + ((_h = (_g = result3.stats) == null ? void 0 : _g.results) != null ? _h : 0),
-            stoppedEarly: combinedStats.stoppedEarly + ((_j = (_i = result3.stats) == null ? void 0 : _i.stoppedEarly) != null ? _j : 0)
-          };
-        }
-        whyItMatters("Validated gadget suggestions reduce false positives during ROP chain construction.");
-        return {
-          command: "rop_suggest",
-          args: options,
-          success: true,
-          findings: combinedFindings,
-          warnings: combinedWarnings,
-          errors: [],
-          stats: combinedStats
-        };
+        return runLegacyRopSuggest(scanOptions);
       }
     };
     const retnGadgets = {
@@ -3274,6 +3332,19 @@ var osed_bundle = (() => {
     { sequence: "mov esp, eax ; ret", bytes: [137, 196, 195] },
     { sequence: "leave ; ret", bytes: [201, 195] }
   ];
+  var X64_PIVOT_PATTERNS = [
+    { sequence: "xchg rax, rsp ; ret", bytes: [72, 148, 195] },
+    { sequence: "xchg rcx, rsp ; ret", bytes: [72, 135, 204, 195] },
+    { sequence: "xchg rdx, rsp ; ret", bytes: [72, 135, 212, 195] },
+    { sequence: "xchg rbx, rsp ; ret", bytes: [72, 135, 220, 195] },
+    { sequence: "xchg rsi, rsp ; ret", bytes: [72, 135, 244, 195] },
+    { sequence: "xchg rdi, rsp ; ret", bytes: [72, 135, 252, 195] },
+    { sequence: "xchg rbp, rsp ; ret", bytes: [72, 135, 236, 195] },
+    { sequence: "push rsp ; ret", bytes: [84, 195] },
+    { sequence: "mov rsp, rbp ; ret", bytes: [72, 137, 236, 195] },
+    { sequence: "mov rsp, rax ; ret", bytes: [72, 137, 196, 195] },
+    { sequence: "leave ; ret", bytes: [201, 195] }
+  ];
   function buildSequence(address, sequence) {
     const moduleInfo = findModuleByAddress(address);
     const provenance = {
@@ -3314,12 +3385,13 @@ var osed_bundle = (() => {
         mode: { type: "string", enum: ["fast", "thorough"], default: "fast" }
       },
       execute(options) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         const pointerSize = getPointerSize();
+        const patterns = pointerSize === 8 ? X64_PIVOT_PATTERNS : PIVOT_PATTERNS;
         const warnings = [];
         const sequenceHits = [];
         const detailsByAddress = /* @__PURE__ */ new Map();
-        for (const pivot of PIVOT_PATTERNS) {
+        for (const pivot of patterns) {
           const scan = scanPattern(
             {
               module: options.module,
@@ -3332,7 +3404,7 @@ var osed_bundle = (() => {
           warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
           for (const hit of scan.hits) {
             const candidate = readMemory(hit, pivot.bytes.length);
-            const validated = validateInstructionCandidate(candidate, true, true);
+            const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
             if (!validated.flags.decoded || !validated.flags.mnemonicMatch || !validated.flags.executable) {
               continue;
             }
@@ -3343,21 +3415,25 @@ var osed_bundle = (() => {
             sequenceHits.push(buildSequence(hit, pivot.sequence));
           }
         }
-        const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits));
-        const findings = capabilityIndex.query({
+        const findings = pointerSize === 8 ? [...detailsByAddress.entries()].map(([address, detail]) => ({
+          address,
+          sequence: detail.sequence,
+          offset: `0x${address.toString(16).toUpperCase()}`,
+          flags: detail.flags
+        })).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_c = options.maxResults) != null ? _c : 50, 200)) : buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits)).query({
           capability: "STACK_PIVOT",
           executableOnly: true
         }).map((gadget) => {
-          var _a2, _b2, _c2, _d;
+          var _a2, _b2, _c2, _d2;
           const address = BigInt((_b2 = (_a2 = gadget.locations[0]) == null ? void 0 : _a2.virtualAddress) != null ? _b2 : 0);
           const detail = detailsByAddress.get(address);
           return {
             address,
             sequence: (_c2 = detail == null ? void 0 : detail.sequence) != null ? _c2 : gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
             offset: `0x${address.toString(16).toUpperCase()}`,
-            flags: (_d = detail == null ? void 0 : detail.flags) != null ? _d : {}
+            flags: (_d2 = detail == null ? void 0 : detail.flags) != null ? _d2 : {}
           };
-        }).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_c = options.maxResults) != null ? _c : 50, 200));
+        }).sort((left, right) => left.address < right.address ? -1 : 1).slice(0, Math.min((_d = options.maxResults) != null ? _d : 50, 200));
         section("Stack Pivot Candidates");
         table(
           [
@@ -4196,7 +4272,7 @@ var osed_bundle = (() => {
     if (module.safeseh === "disabled") score += 30;
     return score;
   }
-  function scanGadgets(moduleFilter) {
+  function scanGadgets(pointerSize, moduleFilter) {
     const fmt = (address) => {
       const mod = findModuleByAddress(address);
       if (!mod) {
@@ -4208,16 +4284,23 @@ var osed_bundle = (() => {
     const jmpHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 228])).hits;
     const callHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 212])).hits;
     const pprHits = [];
-    for (let a = 88; a <= 95 && pprHits.length < 12; a += 1) {
-      for (let b = 88; b <= 95 && pprHits.length < 12; b += 1) {
-        const hits = scanPattern(
-          { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 16384 },
-          Uint8Array.from([a, b, 195])
-        ).hits;
-        pprHits.push(...hits);
+    if (pointerSize === 4) {
+      for (let a = 88; a <= 95 && pprHits.length < 12; a += 1) {
+        for (let b = 88; b <= 95 && pprHits.length < 12; b += 1) {
+          const hits = scanPattern(
+            { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 16384 },
+            Uint8Array.from([a, b, 195])
+          ).hits;
+          pprHits.push(...hits);
+        }
       }
     }
-    const pivotPatterns = [Uint8Array.from([148, 195]), Uint8Array.from([84, 195]), Uint8Array.from([139, 229, 195])];
+    const pivotPatterns = pointerSize === 8 ? [
+      Uint8Array.from([72, 148, 195]),
+      Uint8Array.from([84, 195]),
+      Uint8Array.from([72, 137, 236, 195]),
+      Uint8Array.from([72, 137, 196, 195])
+    ] : [Uint8Array.from([148, 195]), Uint8Array.from([84, 195]), Uint8Array.from([139, 229, 195])];
     const pivotHits = [];
     for (const pattern of pivotPatterns) {
       const hits = scanPattern(
@@ -4311,7 +4394,7 @@ var osed_bundle = (() => {
           safeseh: module.safeseh,
           system: module.system
         })).sort((a, b) => b.score - a.score).slice(0, 6);
-        const gadgets = scanGadgets(moduleFilter);
+        const gadgets = scanGadgets(pointerSize, moduleFilter);
         const ipBackedByModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) !== void 0 : void 0;
         const eipControlled = isInstructionPointerControlled({
           patternMatched: patternOffset !== void 0,
@@ -4321,13 +4404,17 @@ var osed_bundle = (() => {
         }) ? "yes" : "no";
         const badSp = stackBytes ? "no" : "yes";
         section("CONTROL");
-        print(`EIP/RIP controlled: ${eipControlled}`);
+        print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
         print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
         print(`Pattern: ${patternOffset ? patternOffset.kind : "n/a"}`);
         section("SEH");
-        print(`Overwritten: ${seh.overwritten}`);
-        print(`Next SEH: ${seh.next !== void 0 ? formatAddress(seh.next, 4) : "n/a"}`);
-        print(`Handler: ${seh.handler !== void 0 ? formatAddress(seh.handler, 4) : "n/a"}`);
+        if (pointerSize === 8) {
+          print("Not applicable: classic SEH overwrite workflow is x86-only.");
+        } else {
+          print(`Overwritten: ${seh.overwritten}`);
+          print(`Next SEH: ${seh.next !== void 0 ? formatAddress(seh.next, 4) : "n/a"}`);
+          print(`Handler: ${seh.handler !== void 0 ? formatAddress(seh.handler, 4) : "n/a"}`);
+        }
         section("STACK");
         print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
         print(`Bad stack pointer: ${badSp}`);
@@ -4341,12 +4428,14 @@ var osed_bundle = (() => {
           print("Shellcode candidates: none");
         }
         section("GADGETS");
-        print("JMP ESP/RSP:");
+        print(pointerSize === 8 ? "JMP RSP:" : "JMP ESP:");
         for (const line of gadgets.jmp) print(`  ${line}`);
-        print("CALL ESP/RSP:");
+        print(pointerSize === 8 ? "CALL RSP:" : "CALL ESP:");
         for (const line of gadgets.call) print(`  ${line}`);
-        print("POP POP RET:");
-        for (const line of gadgets.ppr) print(`  ${line}`);
+        if (pointerSize === 4) {
+          print("POP POP RET:");
+          for (const line of gadgets.ppr) print(`  ${line}`);
+        }
         print("Stack pivots:");
         for (const line of gadgets.pivots) print(`  ${line}`);
         section("CONTEXT");
@@ -6117,13 +6206,17 @@ var osed_bundle = (() => {
     algorithms() {
       return this.hashResolver.listAlgorithms();
     }
-    iat(moduleName) {
+    iat(moduleName, filter) {
       const lookup = moduleName ? this.findModule(moduleName) : this.findMainModule();
       if (lookup.kind !== "ok") {
         return this.lookupFailureRows(lookup);
       }
       try {
-        const rows = this.iatResolver.enumerateIat(lookup.module).map((entry) => {
+        const needle = filter == null ? void 0 : filter.trim().toLowerCase();
+        const rows = this.iatResolver.enumerateIat(lookup.module).filter((entry) => {
+          if (!needle) return true;
+          return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
+        }).map((entry) => {
           var _a, _b;
           return {
             Owner: entry.ownerModule,
@@ -6138,7 +6231,7 @@ var osed_bundle = (() => {
           };
         });
         if (rows.length === 0) {
-          return this.errorRows(`No IAT entries found for ${lookup.module.name}.`);
+          return this.errorRows(filter ? `No IAT entries in ${lookup.module.name} matched "${filter}".` : `No IAT entries found for ${lookup.module.name}.`);
         }
         return rows;
       } catch (error2) {
@@ -6518,7 +6611,7 @@ var osed_bundle = (() => {
       export: (module, symbol) => toDxRows(helper.export(module, symbol)),
       exportat: (module, ordinalIndex) => toDxRows(helper.exportat(module, ordinalIndex)),
       exportwalk: (module, symbol, verbose) => toDxRows(helper.exportwalk(module, symbol, verbose)),
-      iat: (module) => toDxRows(helper.iat(module)),
+      iat: (module, filter) => toDxRows(helper.iat(module, filter)),
       iat_find: (symbol) => toDxRows(helper.iat_find(symbol)),
       iat_ptr: (module, symbol) => toDxRows(helper.iat_ptr(module, symbol))
     };
@@ -6624,6 +6717,113 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/logic/math_logic.ts
+  var VALID_BITS = /* @__PURE__ */ new Set([8, 16, 32, 64]);
+  function normalizeMathBits(value) {
+    const bits = value === void 0 ? 32 : value;
+    if (typeof bits !== "number" || !Number.isInteger(bits) || !VALID_BITS.has(bits)) {
+      throw new Error("bits must be one of: 8, 16, 32, 64.");
+    }
+    return bits;
+  }
+  function parseMathValue(value) {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+        throw new Error("value must be an integer.");
+      }
+      return BigInt(value);
+    }
+    if (typeof value !== "string") {
+      throw new Error("value must be an integer, bigint, decimal string, or hex string.");
+    }
+    const text = value.trim().replace(/`/g, "");
+    if (/^-?0x[0-9a-f]+$/i.test(text)) {
+      const negative = text.startsWith("-");
+      const hex = negative ? text.slice(3) : text.slice(2);
+      const parsed = BigInt(`0x${hex}`);
+      return negative ? -parsed : parsed;
+    }
+    if (/^-?[0-9]+$/.test(text)) {
+      return BigInt(text);
+    }
+    if (/^[0-9a-f]+$/i.test(text) && /[a-f]/i.test(text)) {
+      return BigInt(`0x${text}`);
+    }
+    throw new Error("value strings must be decimal or hex, e.g. -42, 0xFFFFFFD6, or FFD6.");
+  }
+  function analyzeMathValue(rawValue, rawBits) {
+    const bits = normalizeMathBits(rawBits);
+    const value = parseMathValue(rawValue);
+    const modulus = BigInt(1) << BigInt(bits);
+    const mask = modulus - BigInt(1);
+    const unsigned = value & mask;
+    const signBit = BigInt(1) << BigInt(bits - 1);
+    const signed = (unsigned & signBit) !== BigInt(0) ? unsigned - modulus : unsigned;
+    const width = bits / 4;
+    const byteCount = bits / 8;
+    const hex = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const littleEndianBytes = [];
+    for (let i = 0; i < byteCount; i += 1) {
+      const byte = Number(unsigned >> BigInt(i * 8) & BigInt(255));
+      littleEndianBytes.push(byte.toString(16).toUpperCase().padStart(2, "0"));
+    }
+    return {
+      input: typeof rawValue === "string" ? rawValue : value.toString(),
+      bits,
+      hex,
+      unsigned: unsigned.toString(),
+      signed: signed.toString(),
+      littleEndianBytes: littleEndianBytes.join(" "),
+      twosComplement: hex
+    };
+  }
+
+  // src/commands/math.ts
+  function createMathCommand() {
+    return {
+      name: "math",
+      description: "Format an integer as hex, signed, unsigned, little-endian bytes, and two's complement.",
+      usage: "dx @$osed().math(value, bits?)",
+      examples: [
+        "dx @$osed().math(0xFFFFFFD6)",
+        "dx @$osed().math(-42, 32)",
+        "dx @$osed().math(0x625011D3, 32)"
+      ],
+      schema: {
+        value: { type: ["number", "string"], required: true },
+        bits: { type: "number", default: 32 }
+      },
+      execute(options) {
+        const evidence = analyzeMathValue(options.value, options.bits);
+        section("Math");
+        table(
+          [
+            { key: "field", header: "Field", width: 18 },
+            { key: "value", header: "Value", width: 24 }
+          ],
+          [
+            { field: "Input", value: evidence.input },
+            { field: "Bits", value: evidence.bits.toString() },
+            { field: "Hex", value: evidence.hex },
+            { field: "Unsigned", value: evidence.unsigned },
+            { field: "Signed", value: evidence.signed },
+            { field: "Little-endian", value: evidence.littleEndianBytes },
+            { field: "Two's complement", value: evidence.twosComplement }
+          ]
+        );
+        return {
+          command: "math",
+          args: options,
+          success: true,
+          findings: [evidence],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -6657,6 +6857,7 @@ var osed_bundle = (() => {
       createTriageCommand(),
       createMemoryCommand(),
       createLandingCommand(),
+      createMathCommand(),
       createEncodeCommand(),
       createNopCommand(),
       createRopTemplateCommand(),
@@ -6904,6 +7105,10 @@ var osed_bundle = (() => {
       invoke("landing", address === void 0 ? [] : [commandAddress(address)]);
       return lastResult == null ? void 0 : lastResult.findings[0];
     };
+    api.math = (...args) => {
+      invoke("math", args);
+      return lastResult == null ? void 0 : lastResult.findings[0];
+    };
     return api;
   }
   function isPlainObject(value) {
@@ -6958,6 +7163,8 @@ var osed_bundle = (() => {
         return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
       case "modules":
         return { filter: args[0] };
+      case "math":
+        return { value: args[0], bits: args[1] };
       case "rop":
       case "rop_suggest":
       case "pivots":

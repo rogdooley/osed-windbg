@@ -2,7 +2,7 @@ import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize, readMemory } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
-import { validateInstructionCandidate } from "../logic/instruction_validation";
+import { validateInstructionCandidateForPointerSize } from "../logic/instruction_validation";
 import { buildCapabilityIndex, buildRopIndexFromSequences } from "../rop";
 import { parseInstruction } from "../semantics";
 import { SEMANTIC_SCHEMA_VERSION, type InstructionSequence, type InstructionSequenceSource, type Provenance } from "../semantics/types";
@@ -19,6 +19,20 @@ const PIVOT_PATTERNS: Array<{ sequence: string; bytes: number[] }> = [
   { sequence: "push esp ; ret", bytes: [0x54, 0xc3] },
   { sequence: "mov esp, ebp ; ret", bytes: [0x8b, 0xe5, 0xc3] },
   { sequence: "mov esp, eax ; ret", bytes: [0x89, 0xc4, 0xc3] },
+  { sequence: "leave ; ret", bytes: [0xc9, 0xc3] },
+];
+
+const X64_PIVOT_PATTERNS: Array<{ sequence: string; bytes: number[] }> = [
+  { sequence: "xchg rax, rsp ; ret", bytes: [0x48, 0x94, 0xc3] },
+  { sequence: "xchg rcx, rsp ; ret", bytes: [0x48, 0x87, 0xcc, 0xc3] },
+  { sequence: "xchg rdx, rsp ; ret", bytes: [0x48, 0x87, 0xd4, 0xc3] },
+  { sequence: "xchg rbx, rsp ; ret", bytes: [0x48, 0x87, 0xdc, 0xc3] },
+  { sequence: "xchg rsi, rsp ; ret", bytes: [0x48, 0x87, 0xf4, 0xc3] },
+  { sequence: "xchg rdi, rsp ; ret", bytes: [0x48, 0x87, 0xfc, 0xc3] },
+  { sequence: "xchg rbp, rsp ; ret", bytes: [0x48, 0x87, 0xec, 0xc3] },
+  { sequence: "push rsp ; ret", bytes: [0x54, 0xc3] },
+  { sequence: "mov rsp, rbp ; ret", bytes: [0x48, 0x89, 0xec, 0xc3] },
+  { sequence: "mov rsp, rax ; ret", bytes: [0x48, 0x89, 0xc4, 0xc3] },
   { sequence: "leave ; ret", bytes: [0xc9, 0xc3] },
 ];
 
@@ -72,11 +86,12 @@ export function createPivotCommand(): Command {
     },
     execute(options: Record<string, unknown>): CommandResult {
       const pointerSize = getPointerSize();
+      const patterns = pointerSize === 8 ? X64_PIVOT_PATTERNS : PIVOT_PATTERNS;
       const warnings: string[] = [];
       const sequenceHits: InstructionSequence[] = [];
       const detailsByAddress = new Map<bigint, { sequence: string; flags: Record<string, unknown> }>();
 
-      for (const pivot of PIVOT_PATTERNS) {
+      for (const pivot of patterns) {
         const scan = scanPattern(
           {
             module: options.module as string | undefined,
@@ -91,7 +106,7 @@ export function createPivotCommand(): Command {
 
         for (const hit of scan.hits) {
           const candidate = readMemory(hit, pivot.bytes.length);
-          const validated = validateInstructionCandidate(candidate, true, true);
+          const validated = validateInstructionCandidateForPointerSize(candidate, true, true, pointerSize);
           if (!validated.flags.decoded || !validated.flags.mnemonicMatch || !validated.flags.executable) {
             continue;
           }
@@ -104,24 +119,33 @@ export function createPivotCommand(): Command {
         }
       }
 
-      const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits));
-      const findings: PivotFinding[] = capabilityIndex
-        .query({
-          capability: "STACK_PIVOT",
-          executableOnly: true,
-        })
-        .map((gadget) => {
-          const address = BigInt(gadget.locations[0]?.virtualAddress ?? 0);
-          const detail = detailsByAddress.get(address);
-          return {
-            address,
-            sequence: detail?.sequence ?? gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
-            offset: `0x${address.toString(16).toUpperCase()}`,
-            flags: detail?.flags ?? {},
-          };
-        })
-        .sort((left, right) => (left.address < right.address ? -1 : 1))
-        .slice(0, Math.min((options.maxResults as number | undefined) ?? 50, 200));
+      const findings: PivotFinding[] = pointerSize === 8
+        ? [...detailsByAddress.entries()]
+            .map(([address, detail]) => ({
+              address,
+              sequence: detail.sequence,
+              offset: `0x${address.toString(16).toUpperCase()}`,
+              flags: detail.flags,
+            }))
+            .sort((left, right) => (left.address < right.address ? -1 : 1))
+            .slice(0, Math.min((options.maxResults as number | undefined) ?? 50, 200))
+        : buildCapabilityIndex(buildRopIndexFromSequences(sequenceHits))
+            .query({
+              capability: "STACK_PIVOT",
+              executableOnly: true,
+            })
+            .map((gadget) => {
+              const address = BigInt(gadget.locations[0]?.virtualAddress ?? 0);
+              const detail = detailsByAddress.get(address);
+              return {
+                address,
+                sequence: detail?.sequence ?? gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+                offset: `0x${address.toString(16).toUpperCase()}`,
+                flags: detail?.flags ?? {},
+              };
+            })
+            .sort((left, right) => (left.address < right.address ? -1 : 1))
+            .slice(0, Math.min((options.maxResults as number | undefined) ?? 50, 200));
 
       out.section("Stack Pivot Candidates");
       out.table(

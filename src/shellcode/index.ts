@@ -1093,26 +1093,32 @@ class ShellcodeHelper {
     return this.hashResolver.listAlgorithms();
   }
 
-  public iat(moduleName?: string): Array<Record<string, string>> {
+  public iat(moduleName?: string, filter?: string): Array<Record<string, string>> {
     const lookup = moduleName ? this.findModule(moduleName) : this.findMainModule();
     if (lookup.kind !== "ok") {
       return this.lookupFailureRows(lookup);
     }
 
     try {
-      const rows = this.iatResolver.enumerateIat(lookup.module).map((entry) => ({
-        Owner: entry.ownerModule,
-        DLL: entry.importDll,
-        Symbol: entry.symbol,
-        Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
-        Slot: toDmlAddress(entry.slot, "dps"),
-        Target: toDmlAddress(entry.target, "u"),
-        Module: entry.actualModule?.name ?? "unknown",
-        "Symbol+Offset": entry.nearest ? `${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}` : "",
-        Status: entry.status,
-      }));
+      const needle = filter?.trim().toLowerCase();
+      const rows = this.iatResolver.enumerateIat(lookup.module)
+        .filter((entry) => {
+          if (!needle) return true;
+          return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
+        })
+        .map((entry) => ({
+          Owner: entry.ownerModule,
+          DLL: entry.importDll,
+          Symbol: entry.symbol,
+          Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
+          Slot: toDmlAddress(entry.slot, "dps"),
+          Target: toDmlAddress(entry.target, "u"),
+          Module: entry.actualModule?.name ?? "unknown",
+          "Symbol+Offset": entry.nearest ? `${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}` : "",
+          Status: entry.status,
+        }));
       if (rows.length === 0) {
-        return this.errorRows(`No IAT entries found for ${lookup.module.name}.`);
+        return this.errorRows(filter ? `No IAT entries in ${lookup.module.name} matched "${filter}".` : `No IAT entries found for ${lookup.module.name}.`);
       }
       return rows;
     } catch (error) {
@@ -1585,7 +1591,7 @@ export function createShellcodeNamespace(): {
   export: (module: string, symbol: string) => unknown[];
   exportat: (module: string, ordinalIndex: number) => unknown[];
   exportwalk: (module: string, symbol?: string, verbose?: boolean) => unknown[];
-  iat: (module?: string) => unknown[];
+  iat: (module?: string, filter?: string) => unknown[];
   iat_find: (symbol: string) => unknown[];
   iat_ptr: (module: string, symbol: string) => unknown[];
 } {
@@ -1608,7 +1614,7 @@ export function createShellcodeNamespace(): {
     export: (module: string, symbol: string) => toDxRows(helper.export(module, symbol)),
     exportat: (module: string, ordinalIndex: number) => toDxRows(helper.exportat(module, ordinalIndex)),
     exportwalk: (module: string, symbol?: string, verbose?: boolean) => toDxRows(helper.exportwalk(module, symbol, verbose)),
-    iat: (module?: string) => toDxRows(helper.iat(module)),
+    iat: (module?: string, filter?: string) => toDxRows(helper.iat(module, filter)),
     iat_find: (symbol: string) => toDxRows(helper.iat_find(symbol)),
     iat_ptr: (module: string, symbol: string) => toDxRows(helper.iat_ptr(module, symbol)),
   };
