@@ -43,6 +43,65 @@ describe("semantic pipeline", () => {
     expect(semantic.summary.stackDelta.values.exact.has(12)).toBe(true);
   });
 
+  test("net transforms rebase sequential pop stack slots to entry ESP", async () => {
+    const provider = new RPPlusProvider("0x1000: pop esi ; pop edi ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const semantic = composeSemanticSequence(sequence);
+
+    expect(semantic.summary.registerTransforms.esi).toEqual({
+      kind: "memory",
+      confidence: "EXACT",
+      address: { kind: "affine", base: "esp", offset: { kind: "constant", value: 0 } },
+    });
+    expect(semantic.summary.registerTransforms.edi).toEqual({
+      kind: "memory",
+      confidence: "EXACT",
+      address: { kind: "affine", base: "esp", offset: { kind: "constant", value: 4 } },
+    });
+    expect(semantic.summary.registerTransforms.esp).toEqual({
+      kind: "affine",
+      base: "esp",
+      offset: { kind: "constant", value: 12 },
+    });
+  });
+
+  test("net transforms fold xchg atomically and preserve restored registers", async () => {
+    const provider = new RPPlusProvider("0x1000: xchg esi, eax ; add eax, 4 ; xchg esi, eax ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const semantic = composeSemanticSequence(sequence);
+
+    expect(semantic.summary.registerTransforms.eax).toEqual({
+      kind: "affine",
+      base: "eax",
+      offset: { kind: "constant", value: 0 },
+    });
+    expect(semantic.summary.registerTransforms.esi).toEqual({
+      kind: "affine",
+      base: "esi",
+      offset: { kind: "constant", value: 4 },
+    });
+  });
+
+  test("net transforms model lea as register plus constant", async () => {
+    const provider = new RPPlusProvider("0x1000: lea esi, [eax+4] ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const semantic = composeSemanticSequence(sequence);
+
+    expect(semantic.summary.registerTransforms.esi).toEqual({
+      kind: "affine",
+      base: "eax",
+      offset: { kind: "constant", value: 4 },
+    });
+  });
+
+  test("net transforms degrade beyond one register offset plus constant boundary", async () => {
+    const provider = new RPPlusProvider("0x1000: add esi, ecx ; add esi, 4 ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const semantic = composeSemanticSequence(sequence);
+
+    expect(semantic.summary.registerTransforms.esi).toEqual({ kind: "unknown" });
+  });
+
   test("composeSemanticSequence calculates stack delta for ret imm", async () => {
     const provider = new RPPlusProvider("0x1000: ret 0x10 ;");
     const [sequence] = await loadAll(provider);
@@ -154,6 +213,55 @@ describe("semantic pipeline", () => {
     const sequences = await loadAll(provider);
     const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequences));
     expect(capabilityIndex.query({ preserves: ["eax"] }).length).toBe(0);
+  });
+
+  test("preserves admits gadgets that clobber and restore a register", async () => {
+    const provider = new RPPlusProvider("0x1000: xchg esi, eax ; add eax, 4 ; xchg esi, eax ; ret ;");
+    const sequences = await loadAll(provider);
+    const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequences));
+    // eax is written transiently by the middle ADD but restored at gadget exit.
+    expect(capabilityIndex.query({ preserves: ["eax"] }).length).toBe(1);
+    // esi nets to +4, so it is not preserved.
+    expect(capabilityIndex.query({ preserves: ["esi"] }).length).toBe(0);
+  });
+
+  test("preservesThroughout is strict where preserves is net", async () => {
+    const provider = new RPPlusProvider("0x1000: xchg esi, eax ; add eax, 4 ; xchg esi, eax ; ret ;");
+    const sequences = await loadAll(provider);
+    const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequences));
+    expect(capabilityIndex.query({ preserves: ["eax"] }).length).toBe(1);
+    expect(capabilityIndex.query({ preservesThroughout: ["eax"] }).length).toBe(0);
+  });
+
+  test("transforms match a self-relative +4 across add/inc/lea equivalents", async () => {
+    const forms = [
+      "0x1000: add esi, 4 ; ret ;",
+      "0x1000: inc esi ; inc esi ; inc esi ; inc esi ; ret ;",
+      "0x1000: lea esi, [esi+4] ; ret ;",
+    ];
+    for (const text of forms) {
+      const sequences = await loadAll(new RPPlusProvider(text));
+      const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequences));
+      expect(capabilityIndex.query({ transforms: [{ register: "esi", base: "esi", offset: 4 }] }).length).toBe(1);
+    }
+  });
+
+  test("transforms match a memory load and a register copy", async () => {
+    const popIndex = buildCapabilityIndex(buildRopIndexFromSequences(await loadAll(new RPPlusProvider("0x1000: pop esi ; ret ;"))));
+    expect(popIndex.query({ transforms: [{ register: "esi", fromMemory: true }] }).length).toBe(1);
+
+    const movIndex = buildCapabilityIndex(buildRopIndexFromSequences(await loadAll(new RPPlusProvider("0x1000: mov esi, eax ; ret ;"))));
+    expect(movIndex.query({ transforms: [{ register: "esi", base: "eax", offset: 0 }] }).length).toBe(1);
+  });
+
+  test("transforms reject unknown nets but match exact parametric offsets", async () => {
+    // Two accumulations across register and constant exceed the affine closure → unknown.
+    const degraded = buildCapabilityIndex(buildRopIndexFromSequences(await loadAll(new RPPlusProvider("0x1000: add esi, ecx ; add esi, 4 ; ret ;"))));
+    expect(degraded.query({ transforms: [{ register: "esi", base: "esi", offset: 4 }] }).length).toBe(0);
+
+    // A single register add is an exact, queryable parametric transform.
+    const parametric = buildCapabilityIndex(buildRopIndexFromSequences(await loadAll(new RPPlusProvider("0x1000: add esi, ecx ; ret ;"))));
+    expect(parametric.query({ transforms: [{ register: "esi", base: "esi", offsetRegister: "ecx" }] }).length).toBe(1);
   });
 
   test("memoryWrite: false excludes gadgets with unknown memory effects", async () => {

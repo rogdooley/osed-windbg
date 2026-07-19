@@ -1925,16 +1925,75 @@ var osed_bundle = (() => {
   function matchesExecutableOnly(gadget) {
     return gadget.locations.some((location) => location.executable !== "UNKNOWN");
   }
-  function queryRopGadgets(gadgets, query) {
+  function isIdentityTransform(register, expr) {
+    return !!expr && expr.kind === "affine" && expr.base === register && expr.offset.kind === "constant" && expr.offset.value === 0;
+  }
+  function matchesPreserves(gadget, registers) {
+    if (registers.length === 0) {
+      return true;
+    }
+    const transforms = gadget.semanticSummary.summary.registerTransforms;
+    return registers.every((register) => isIdentityTransform(register, transforms[register]));
+  }
+  function normalizeTransformQuery(query) {
     var _a, _b;
+    return {
+      register: query.register.trim().toLowerCase(),
+      base: (_a = query.base) == null ? void 0 : _a.trim().toLowerCase(),
+      offset: query.offset,
+      offsetRegister: (_b = query.offsetRegister) == null ? void 0 : _b.trim().toLowerCase(),
+      constant: query.constant,
+      fromMemory: query.fromMemory
+    };
+  }
+  function matchesTransform(expr, query) {
+    if (!expr) {
+      return false;
+    }
+    if (query.constant !== void 0) {
+      if (expr.kind !== "constant" || expr.value !== query.constant) {
+        return false;
+      }
+    }
+    if (query.fromMemory !== void 0 && expr.kind === "memory" !== query.fromMemory) {
+      return false;
+    }
+    const wantsAffine = query.base !== void 0 || query.offset !== void 0 || query.offsetRegister !== void 0;
+    if (wantsAffine) {
+      if (expr.kind !== "affine") {
+        return false;
+      }
+      if (query.base !== void 0 && expr.base !== query.base) {
+        return false;
+      }
+      if (query.offset !== void 0 && (expr.offset.kind !== "constant" || expr.offset.value !== query.offset)) {
+        return false;
+      }
+      if (query.offsetRegister !== void 0 && (expr.offset.kind !== "register" || expr.offset.register !== query.offsetRegister)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function matchesTransforms(gadget, queries) {
+    if (queries.length === 0) {
+      return true;
+    }
+    const transforms = gadget.semanticSummary.summary.registerTransforms;
+    return queries.every((query) => matchesTransform(transforms[query.register], query));
+  }
+  function queryRopGadgets(gadgets, query) {
+    var _a, _b, _c;
     const reads = normalizeRegisters(query.reads);
     const writes = normalizeRegisters(query.writes);
     const preserves = normalizeRegisters(query.preserves);
+    const preservesThroughout = normalizeRegisters(query.preservesThroughout);
+    const transforms = ((_a = query.transforms) != null ? _a : []).map(normalizeTransformQuery);
     const stackDelta = normalizeKinds(query.stackDelta);
     const capabilities = normalizeKinds(query.capability);
     const terminators = normalizeKinds(query.terminator);
-    const memoryReads = (_a = query.memoryReads) != null ? _a : query.memoryRead;
-    const memoryWrites = (_b = query.memoryWrites) != null ? _b : query.memoryWrite;
+    const memoryReads = (_b = query.memoryReads) != null ? _b : query.memoryRead;
+    const memoryWrites = (_c = query.memoryWrites) != null ? _c : query.memoryWrite;
     return gadgets.filter((gadget) => {
       if (query.executableOnly && !matchesExecutableOnly(gadget)) {
         return false;
@@ -1945,7 +2004,13 @@ var osed_bundle = (() => {
       if (!fieldSupportsAll(gadget.semanticSummary.summary.writes, writes)) {
         return false;
       }
-      if (!fieldExcludesAll(gadget.semanticSummary.summary.writes, preserves)) {
+      if (!matchesPreserves(gadget, preserves)) {
+        return false;
+      }
+      if (!fieldExcludesAll(gadget.semanticSummary.summary.writes, preservesThroughout)) {
+        return false;
+      }
+      if (!matchesTransforms(gadget, transforms)) {
         return false;
       }
       if (!matchesStackDelta(gadget.semanticSummary.summary.stackDelta, stackDelta)) {
@@ -2195,6 +2260,54 @@ var osed_bundle = (() => {
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) ? parsed >>> 0 : void 0;
   }
+  function parseImmediateValue(text) {
+    const raw = text.trim().toLowerCase();
+    if (/^-?0x[0-9a-f]+$/.test(raw)) {
+      const negative = raw.startsWith("-");
+      const hex = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex, 16);
+      return Number.isFinite(parsed) ? negative ? -parsed : parsed : void 0;
+    }
+    if (/^-?\d+$/.test(raw)) {
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) ? parsed : void 0;
+    }
+    return void 0;
+  }
+  function constantOffset(value) {
+    return { kind: "constant", value };
+  }
+  function selfPlus(value) {
+    return { kind: "affine", base: "self", offset: constantOffset(value) };
+  }
+  function registerExpr(register, offset = 0) {
+    return { kind: "affine", base: register, offset: constantOffset(offset) };
+  }
+  function constantExpr(value) {
+    return { kind: "constant", value };
+  }
+  function unknownExpr() {
+    return { kind: "unknown" };
+  }
+  function memoryExpr(address) {
+    return { kind: "memory", address, confidence: "EXACT" };
+  }
+  function memoryAddressExpression(text) {
+    const match = text.toLowerCase().match(/\[\s*([a-z]{3})(?:\s*([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/);
+    if (!match) {
+      return void 0;
+    }
+    const register = match[1];
+    if (!REGISTERS.includes(register)) {
+      return void 0;
+    }
+    const rawOffset = match[3] === void 0 ? 0 : parseImmediateValue(match[3]);
+    if (rawOffset === void 0) {
+      return void 0;
+    }
+    const offset = match[2] === "-" ? -rawOffset : rawOffset;
+    return registerExpr(register, offset);
+  }
   function unsupported(instruction) {
     const text = canonicalizeInstruction(instruction);
     const unknownField = () => makeField([], [], true, [text]);
@@ -2209,6 +2322,8 @@ var osed_bundle = (() => {
       memoryReads: unknownField(),
       memoryWrites: unknownField(),
       flowEffects: unknownField(),
+      registerEffects: {},
+      registerEffectsUnknown: true,
       evidence: [`unsupported instruction: ${text}`],
       supported: false
     };
@@ -2228,6 +2343,10 @@ var osed_bundle = (() => {
           stackDelta: { exact: [4] },
           memoryReads: ["[esp]"],
           flowEffects: [],
+          registerEffects: operand.register === "esp" ? { esp: unknownExpr() } : {
+            [operand.register]: memoryExpr(registerExpr("esp")),
+            esp: selfPlus(4)
+          },
           evidence: [`POP ${operand.register} reads stack and writes ${operand.register}`]
         };
       }
@@ -2245,6 +2364,7 @@ var osed_bundle = (() => {
           writes: ["esp"],
           stackDelta: { exact: [-4] },
           memoryWrites: ["[esp]"],
+          registerEffects: { esp: selfPlus(-4) },
           evidence: [`PUSH ${operand.register} decrements stack pointer`]
         };
       }
@@ -2261,6 +2381,7 @@ var osed_bundle = (() => {
           writes: ["esp"],
           stackDelta: { exact: [delta] },
           flowEffects: ["RETURN"],
+          registerEffects: { esp: selfPlus(delta) },
           evidence
         };
       }
@@ -2277,6 +2398,7 @@ var osed_bundle = (() => {
         return {
           reads: [right.register],
           writes: [left.register],
+          registerEffects: { [left.register]: registerExpr(right.register) },
           evidence: [`MOV ${left.register}, ${right.register}`]
         };
       }
@@ -2291,10 +2413,12 @@ var osed_bundle = (() => {
           return {};
         }
         const baseRegister = memoryBaseRegister(right.text);
+        const address = memoryAddressExpression(right.text);
         return {
           reads: baseRegister ? [baseRegister] : [],
           writes: [left.register],
           memoryReads: [right.text],
+          registerEffects: { [left.register]: address ? memoryExpr(address) : unknownExpr() },
           evidence: [`MOV ${left.register}, ${right.text}`]
         };
       }
@@ -2328,6 +2452,7 @@ var osed_bundle = (() => {
         return {
           reads: [reg],
           writes: [reg],
+          registerEffects: { [reg]: constantExpr(0) },
           evidence: [`XOR ${reg}, ${reg} zeros register`]
         };
       }
@@ -2344,6 +2469,7 @@ var osed_bundle = (() => {
         return {
           reads: [left.register, right.register],
           writes: [left.register],
+          registerEffects: { [left.register]: { kind: "affine", base: "self", offset: { kind: "register", register: right.register } } },
           evidence: [`ADD ${left.register}, ${right.register}`]
         };
       }
@@ -2357,10 +2483,12 @@ var osed_bundle = (() => {
         if (!isRegisterOperand(left) || right.kind !== "immediate") {
           return {};
         }
+        const imm = parseImmediateValue(right.text);
         return {
           reads: [left.register],
           writes: [left.register],
           stackDelta: left.register === "esp" ? { conservative: [Number.parseInt(right.text.replace(/^0x/, ""), 16) || 0] } : void 0,
+          registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(imm) },
           evidence: [`ADD ${left.register}, ${right.text}`]
         };
       }
@@ -2377,6 +2505,7 @@ var osed_bundle = (() => {
         return {
           reads: [left.register, right.register],
           writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
           evidence: [`SUB ${left.register}, ${right.register}`]
         };
       }
@@ -2390,9 +2519,11 @@ var osed_bundle = (() => {
         if (!isRegisterOperand(left) || right.kind !== "immediate") {
           return {};
         }
+        const imm = parseImmediateValue(right.text);
         return {
           reads: [left.register],
           writes: [left.register],
+          registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(-imm) },
           evidence: [`SUB ${left.register}, ${right.text}`]
         };
       }
@@ -2408,6 +2539,7 @@ var osed_bundle = (() => {
         return {
           reads: [operand.register],
           writes: [operand.register],
+          registerEffects: { [operand.register]: unknownExpr() },
           evidence: [`NEG ${operand.register}`]
         };
       }
@@ -2423,6 +2555,7 @@ var osed_bundle = (() => {
         return {
           reads: [operand.register],
           writes: [operand.register],
+          registerEffects: { [operand.register]: selfPlus(1) },
           evidence: [`INC ${operand.register}`]
         };
       }
@@ -2438,6 +2571,7 @@ var osed_bundle = (() => {
         return {
           reads: [operand.register],
           writes: [operand.register],
+          registerEffects: { [operand.register]: selfPlus(-1) },
           evidence: [`DEC ${operand.register}`]
         };
       }
@@ -2454,7 +2588,33 @@ var osed_bundle = (() => {
         return {
           reads: [left.register, right.register],
           writes: [left.register, right.register],
+          registerEffects: {
+            [left.register]: registerExpr(right.register),
+            [right.register]: registerExpr(left.register)
+          },
           evidence: [`XCHG ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "lea-reg-mem",
+      match: (instruction) => instruction.mnemonic === "lea" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "memory") {
+          return {};
+        }
+        const address = memoryAddressExpression(right.text);
+        if (!address) {
+          return {};
+        }
+        const base = memoryBaseRegister(right.text);
+        return {
+          reads: base ? [base] : [],
+          writes: [left.register],
+          registerEffects: { [left.register]: address },
+          evidence: [`LEA ${left.register}, ${right.text}`]
         };
       }
     },
@@ -2466,6 +2626,10 @@ var osed_bundle = (() => {
         writes: ["esp", "ebp"],
         stackDelta: { conservative: [4] },
         memoryReads: ["[ebp]"],
+        registerEffects: {
+          esp: registerExpr("ebp", 4),
+          ebp: memoryExpr(registerExpr("ebp"))
+        },
         evidence: ["LEAVE restores frame and pops saved base pointer"]
       })
     },
@@ -2479,6 +2643,7 @@ var osed_bundle = (() => {
           writes: ["esp"],
           stackDelta: { exact: [-4] },
           flowEffects: ["CALL"],
+          registerEffects: { esp: selfPlus(-4) },
           evidence: [`CALL ${instruction.operands.join(", ")}`]
         };
       }
@@ -2508,7 +2673,7 @@ var osed_bundle = (() => {
     return makeField((_a = values == null ? void 0 : values.exact) != null ? _a : [], (_b = values == null ? void 0 : values.conservative) != null ? _b : [], (_c = values == null ? void 0 : values.unknown) != null ? _c : false, evidence);
   }
   function fromRuleResult(instruction, index, result3, supported) {
-    var _a;
+    var _a, _b;
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       instructionIndex: index,
@@ -2520,7 +2685,9 @@ var osed_bundle = (() => {
       memoryReads: buildSemanticField({ exact: result3.memoryReads }, result3.evidence),
       memoryWrites: buildSemanticField({ exact: result3.memoryWrites }, result3.evidence),
       flowEffects: buildSemanticField({ exact: result3.flowEffects }, result3.evidence),
-      evidence: (_a = result3.evidence) != null ? _a : [],
+      registerEffects: (_a = result3.registerEffects) != null ? _a : {},
+      registerEffectsUnknown: false,
+      evidence: (_b = result3.evidence) != null ? _b : [],
       supported
     };
   }
@@ -2543,6 +2710,7 @@ var osed_bundle = (() => {
   }
 
   // src/semantics/compose.ts
+  var REGISTERS2 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
   function makeSet2(exact = [], conservative = [], unknown = false) {
     return {
       exact: new Set(exact),
@@ -2580,6 +2748,79 @@ var osed_bundle = (() => {
   }
   function emptyField() {
     return makeField2();
+  }
+  function registerIdentity(register) {
+    return { kind: "affine", base: register, offset: { kind: "constant", value: 0 } };
+  }
+  function initialRegisterTransforms() {
+    return Object.fromEntries(REGISTERS2.map((register) => [register, registerIdentity(register)]));
+  }
+  function unknownExpr2() {
+    return { kind: "unknown" };
+  }
+  function isZeroOffset(offset) {
+    return offset.kind === "constant" && offset.value === 0;
+  }
+  function addOffset(expr, offset) {
+    if (offset.kind === "unknown" || expr.kind === "unknown") {
+      return unknownExpr2();
+    }
+    if (isZeroOffset(offset)) {
+      return expr;
+    }
+    if (expr.kind === "constant") {
+      return offset.kind === "constant" ? { kind: "constant", value: expr.value + offset.value } : unknownExpr2();
+    }
+    if (expr.kind !== "affine") {
+      return unknownExpr2();
+    }
+    if (expr.offset.kind !== "constant") {
+      return unknownExpr2();
+    }
+    if (offset.kind === "constant") {
+      return {
+        kind: "affine",
+        base: expr.base,
+        offset: { kind: "constant", value: expr.offset.value + offset.value }
+      };
+    }
+    if (expr.offset.value !== 0) {
+      return unknownExpr2();
+    }
+    return {
+      kind: "affine",
+      base: expr.base,
+      offset
+    };
+  }
+  function substituteExpr(expr, state, target) {
+    if (expr.kind === "constant" || expr.kind === "unknown") {
+      return expr;
+    }
+    if (expr.kind === "memory") {
+      return {
+        kind: "memory",
+        address: substituteExpr(expr.address, state, target),
+        confidence: expr.confidence
+      };
+    }
+    const baseExpr = expr.base === "self" ? target ? state[target] : unknownExpr2() : expr.base === "none" ? { kind: "affine", base: "none", offset: { kind: "constant", value: 0 } } : state[expr.base];
+    return addOffset(baseExpr, expr.offset);
+  }
+  function aggregateRegisterTransforms(instructionSemantics) {
+    let state = initialRegisterTransforms();
+    for (const step of instructionSemantics) {
+      if (step.registerEffectsUnknown) {
+        state = Object.fromEntries(REGISTERS2.map((register) => [register, unknownExpr2()]));
+        continue;
+      }
+      const nextState = __spreadValues({}, state);
+      for (const [register, effect] of Object.entries(step.registerEffects)) {
+        nextState[register] = substituteExpr(effect, state, register);
+      }
+      state = nextState;
+    }
+    return state;
   }
   function appendField(current, next) {
     return mergeField(current, next);
@@ -2635,7 +2876,8 @@ var osed_bundle = (() => {
       flags: emptyField(),
       memoryReads: emptyField(),
       memoryWrites: emptyField(),
-      flowEffects: emptyField()
+      flowEffects: emptyField(),
+      registerTransforms: initialRegisterTransforms()
     };
   }
   function composeSemanticSequence(sequence) {
@@ -2651,6 +2893,7 @@ var osed_bundle = (() => {
       summary.flowEffects = appendField(summary.flowEffects, semantic.flowEffects);
     }
     summary.stackDelta = aggregateStackDelta(instructionSemantics);
+    summary.registerTransforms = aggregateRegisterTransforms(instructionSemantics);
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       instructionSequenceId: sequence.id,

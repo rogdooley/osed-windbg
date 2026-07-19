@@ -51,10 +51,31 @@ export interface RopCapability {
   evidence: string[];
 }
 
+// Asserts a net register transform at gadget exit. Only the provided fields are
+// checked; each is matched against the gadget's aggregated `registerTransforms`
+// entry for `register`. An unknown net transform satisfies no positive field.
+export interface RegisterTransformQuery {
+  register: string;
+  // Net value is `base + offset`. Use the register's own name as `base` for a
+  // self-relative change (e.g. `{ register: "esi", base: "esi", offset: 4 }`).
+  base?: string;
+  offset?: number;
+  offsetRegister?: string;
+  // Net value is a fixed constant (e.g. zeroed / set).
+  constant?: number;
+  // Net value is loaded from memory (pop-like / dereference).
+  fromMemory?: boolean;
+}
+
 export interface RopQuery {
   reads?: string[];
   writes?: string[];
+  // Net-unchanged at gadget exit: the register's aggregated transform is exactly
+  // identity. Admits gadgets that clobber and restore (e.g. xchg/…/xchg).
   preserves?: string[];
+  // Strict: the register is never written by any instruction in the gadget.
+  preservesThroughout?: string[];
+  transforms?: RegisterTransformQuery[];
   stackDelta?: number | number[];
   capability?: CapabilityKind | CapabilityKind[];
   terminator?: TerminatorKind | TerminatorKind[];

@@ -5,6 +5,9 @@ import {
   Instruction,
   InstructionSemantic,
   Register,
+  RegisterEffectMap,
+  RegisterExpr,
+  RegisterOffset,
   SEMANTIC_SCHEMA_VERSION,
   SemanticField,
   SemanticSet,
@@ -26,6 +29,7 @@ interface RuleResult {
   memoryReads?: string[];
   memoryWrites?: string[];
   flowEffects?: FlowEffectKind[];
+  registerEffects?: RegisterEffectMap;
   evidence?: string[];
 }
 
@@ -151,6 +155,62 @@ function immediateOperand(instruction: Instruction): number | undefined {
   return Number.isFinite(parsed) ? parsed >>> 0 : undefined;
 }
 
+function parseImmediateValue(text: string): number | undefined {
+  const raw = text.trim().toLowerCase();
+  if (/^-?0x[0-9a-f]+$/.test(raw)) {
+    const negative = raw.startsWith("-");
+    const hex = negative ? raw.slice(3) : raw.slice(2);
+    const parsed = Number.parseInt(hex, 16);
+    return Number.isFinite(parsed) ? (negative ? -parsed : parsed) : undefined;
+  }
+  if (/^-?\d+$/.test(raw)) {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function constantOffset(value: number): RegisterOffset {
+  return { kind: "constant", value };
+}
+
+function selfPlus(value: number): RegisterExpr {
+  return { kind: "affine", base: "self", offset: constantOffset(value) };
+}
+
+function registerExpr(register: Register, offset = 0): RegisterExpr {
+  return { kind: "affine", base: register, offset: constantOffset(offset) };
+}
+
+function constantExpr(value: number): RegisterExpr {
+  return { kind: "constant", value };
+}
+
+function unknownExpr(): RegisterExpr {
+  return { kind: "unknown" };
+}
+
+function memoryExpr(address: RegisterExpr): RegisterExpr {
+  return { kind: "memory", address, confidence: "EXACT" };
+}
+
+function memoryAddressExpression(text: string): RegisterExpr | undefined {
+  const match = text.toLowerCase().match(/\[\s*([a-z]{3})(?:\s*([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/);
+  if (!match) {
+    return undefined;
+  }
+  const register = match[1] as Register;
+  if (!REGISTERS.includes(register)) {
+    return undefined;
+  }
+  const rawOffset = match[3] === undefined ? 0 : parseImmediateValue(match[3]);
+  if (rawOffset === undefined) {
+    return undefined;
+  }
+  const offset = match[2] === "-" ? -rawOffset : rawOffset;
+  return registerExpr(register, offset);
+}
+
 function stackReadEvidence(text: string): string {
   return `${text} reads stack`;
 }
@@ -173,6 +233,8 @@ function unsupported(instruction: Instruction): InstructionSemantic {
     memoryReads: unknownField<string>(),
     memoryWrites: unknownField<string>(),
     flowEffects: unknownField<FlowEffectKind>(),
+    registerEffects: {},
+    registerEffectsUnknown: true,
     evidence: [`unsupported instruction: ${text}`],
     supported: false,
   };
@@ -193,6 +255,12 @@ const RULES: Rule[] = [
         stackDelta: { exact: [4] },
         memoryReads: ["[esp]"],
         flowEffects: [],
+        registerEffects: operand.register === "esp"
+          ? { esp: unknownExpr() }
+          : {
+              [operand.register]: memoryExpr(registerExpr("esp")),
+              esp: selfPlus(4),
+            },
         evidence: [`POP ${operand.register} reads stack and writes ${operand.register}`],
       };
     },
@@ -210,6 +278,7 @@ const RULES: Rule[] = [
         writes: ["esp"],
         stackDelta: { exact: [-4] },
         memoryWrites: ["[esp]"],
+        registerEffects: { esp: selfPlus(-4) },
         evidence: [`PUSH ${operand.register} decrements stack pointer`],
       };
     },
@@ -228,6 +297,7 @@ const RULES: Rule[] = [
         writes: ["esp"],
         stackDelta: { exact: [delta] },
         flowEffects: ["RETURN"],
+        registerEffects: { esp: selfPlus(delta) },
         evidence,
       };
     },
@@ -244,6 +314,7 @@ const RULES: Rule[] = [
       return {
         reads: [right.register],
         writes: [left.register],
+        registerEffects: { [left.register]: registerExpr(right.register) },
         evidence: [`MOV ${left.register}, ${right.register}`],
       };
     },
@@ -258,10 +329,12 @@ const RULES: Rule[] = [
         return {};
       }
       const baseRegister = memoryBaseRegister(right.text);
+      const address = memoryAddressExpression(right.text);
       return {
         reads: baseRegister ? [baseRegister] : [],
         writes: [left.register],
         memoryReads: [right.text],
+        registerEffects: { [left.register]: address ? memoryExpr(address) : unknownExpr() },
         evidence: [`MOV ${left.register}, ${right.text}`],
       };
     },
@@ -295,6 +368,7 @@ const RULES: Rule[] = [
       return {
         reads: [reg],
         writes: [reg],
+        registerEffects: { [reg]: constantExpr(0) },
         evidence: [`XOR ${reg}, ${reg} zeros register`],
       };
     },
@@ -311,6 +385,7 @@ const RULES: Rule[] = [
       return {
         reads: [left.register, right.register],
         writes: [left.register],
+        registerEffects: { [left.register]: { kind: "affine", base: "self", offset: { kind: "register", register: right.register } } },
         evidence: [`ADD ${left.register}, ${right.register}`],
       };
     },
@@ -324,10 +399,12 @@ const RULES: Rule[] = [
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
         return {};
       }
+      const imm = parseImmediateValue(right.text);
       return {
         reads: [left.register],
         writes: [left.register],
         stackDelta: left.register === "esp" ? { conservative: [Number.parseInt(right.text.replace(/^0x/, ""), 16) || 0] } : undefined,
+        registerEffects: { [left.register]: imm === undefined ? unknownExpr() : selfPlus(imm) },
         evidence: [`ADD ${left.register}, ${right.text}`],
       };
     },
@@ -344,6 +421,7 @@ const RULES: Rule[] = [
       return {
         reads: [left.register, right.register],
         writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
         evidence: [`SUB ${left.register}, ${right.register}`],
       };
     },
@@ -357,9 +435,11 @@ const RULES: Rule[] = [
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
         return {};
       }
+      const imm = parseImmediateValue(right.text);
       return {
         reads: [left.register],
         writes: [left.register],
+        registerEffects: { [left.register]: imm === undefined ? unknownExpr() : selfPlus(-imm) },
         evidence: [`SUB ${left.register}, ${right.text}`],
       };
     },
@@ -375,6 +455,7 @@ const RULES: Rule[] = [
       return {
         reads: [operand.register],
         writes: [operand.register],
+        registerEffects: { [operand.register]: unknownExpr() },
         evidence: [`NEG ${operand.register}`],
       };
     },
@@ -390,6 +471,7 @@ const RULES: Rule[] = [
       return {
         reads: [operand.register],
         writes: [operand.register],
+        registerEffects: { [operand.register]: selfPlus(1) },
         evidence: [`INC ${operand.register}`],
       };
     },
@@ -405,6 +487,7 @@ const RULES: Rule[] = [
       return {
         reads: [operand.register],
         writes: [operand.register],
+        registerEffects: { [operand.register]: selfPlus(-1) },
         evidence: [`DEC ${operand.register}`],
       };
     },
@@ -421,7 +504,33 @@ const RULES: Rule[] = [
       return {
         reads: [left.register, right.register],
         writes: [left.register, right.register],
+        registerEffects: {
+          [left.register]: registerExpr(right.register),
+          [right.register]: registerExpr(left.register),
+        },
         evidence: [`XCHG ${left.register}, ${right.register}`],
+      };
+    },
+  },
+  {
+    name: "lea-reg-mem",
+    match: (instruction) => instruction.mnemonic === "lea" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || right.kind !== "memory") {
+        return {};
+      }
+      const address = memoryAddressExpression(right.text);
+      if (!address) {
+        return {};
+      }
+      const base = memoryBaseRegister(right.text);
+      return {
+        reads: base ? [base] : [],
+        writes: [left.register],
+        registerEffects: { [left.register]: address },
+        evidence: [`LEA ${left.register}, ${right.text}`],
       };
     },
   },
@@ -433,6 +542,10 @@ const RULES: Rule[] = [
       writes: ["esp", "ebp"],
       stackDelta: { conservative: [4] },
       memoryReads: ["[ebp]"],
+      registerEffects: {
+        esp: registerExpr("ebp", 4),
+        ebp: memoryExpr(registerExpr("ebp")),
+      },
       evidence: ["LEAVE restores frame and pops saved base pointer"],
     }),
   },
@@ -444,6 +557,7 @@ const RULES: Rule[] = [
       writes: ["esp"],
       stackDelta: { exact: [-4] },
       flowEffects: ["CALL"],
+      registerEffects: { esp: selfPlus(-4) },
       evidence: [`CALL ${instruction.operands.join(", ")}`],
     }),
   },
@@ -488,6 +602,8 @@ function fromRuleResult(instruction: Instruction, index: number, result: RuleRes
     memoryReads: buildSemanticField<string>({ exact: result.memoryReads }, result.evidence),
     memoryWrites: buildSemanticField<string>({ exact: result.memoryWrites }, result.evidence),
     flowEffects: buildSemanticField<FlowEffectKind>({ exact: result.flowEffects }, result.evidence),
+    registerEffects: result.registerEffects ?? {},
+    registerEffectsUnknown: false,
     evidence: result.evidence ?? [],
     supported,
   };

@@ -6,7 +6,9 @@
   "type": "commonjs",
   "scripts": {
     "build": "node build.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck:semantics": "node node_modules/typescript/lib/tsc.js --noEmit -p tsconfig.semantics.json",
+    "typecheck:semantic-rop": "node node_modules/typescript/lib/tsc.js --noEmit -p tsconfig.semantic-rop.json"
   },
   "devDependencies": {
     "esbuild": "0.27.0",

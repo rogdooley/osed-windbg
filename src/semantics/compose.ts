@@ -3,12 +3,18 @@ import { analyzeInstruction } from "./instruction-semantics";
 import {
   Confidence,
   InstructionSequence,
+  Register,
+  RegisterExpr,
+  RegisterOffset,
+  RegisterTransformMap,
   SemanticField,
   SemanticSequence,
   SemanticSummary,
   SemanticSet,
   SEMANTIC_SCHEMA_VERSION,
 } from "./types";
+
+const REGISTERS: Register[] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
 
 function makeSet<T>(exact: T[] = [], conservative: T[] = [], unknown = false): SemanticSet<T> {
   return {
@@ -52,6 +58,103 @@ function mergeField<T>(left: SemanticField<T>, right: SemanticField<T>): Semanti
 
 function emptyField<T>(): SemanticField<T> {
   return makeField<T>();
+}
+
+function registerIdentity(register: Register): RegisterExpr {
+  return { kind: "affine", base: register, offset: { kind: "constant", value: 0 } };
+}
+
+function initialRegisterTransforms(): RegisterTransformMap {
+  return Object.fromEntries(REGISTERS.map((register) => [register, registerIdentity(register)])) as RegisterTransformMap;
+}
+
+function unknownExpr(): RegisterExpr {
+  return { kind: "unknown" };
+}
+
+function isZeroOffset(offset: RegisterOffset): boolean {
+  return offset.kind === "constant" && offset.value === 0;
+}
+
+function addOffset(expr: RegisterExpr, offset: RegisterOffset): RegisterExpr {
+  if (offset.kind === "unknown" || expr.kind === "unknown") {
+    return unknownExpr();
+  }
+
+  if (isZeroOffset(offset)) {
+    return expr;
+  }
+
+  if (expr.kind === "constant") {
+    return offset.kind === "constant" ? { kind: "constant", value: expr.value + offset.value } : unknownExpr();
+  }
+
+  if (expr.kind !== "affine") {
+    return unknownExpr();
+  }
+
+  if (expr.offset.kind !== "constant") {
+    return unknownExpr();
+  }
+
+  if (offset.kind === "constant") {
+    return {
+      kind: "affine",
+      base: expr.base,
+      offset: { kind: "constant", value: expr.offset.value + offset.value },
+    };
+  }
+
+  if (expr.offset.value !== 0) {
+    return unknownExpr();
+  }
+
+  return {
+    kind: "affine",
+    base: expr.base,
+    offset,
+  };
+}
+
+function substituteExpr(expr: RegisterExpr, state: RegisterTransformMap, target?: Register): RegisterExpr {
+  if (expr.kind === "constant" || expr.kind === "unknown") {
+    return expr;
+  }
+
+  if (expr.kind === "memory") {
+    return {
+      kind: "memory",
+      address: substituteExpr(expr.address, state, target),
+      confidence: expr.confidence,
+    };
+  }
+
+  const baseExpr = expr.base === "self"
+    ? (target ? state[target] : unknownExpr())
+    : expr.base === "none"
+      ? { kind: "affine" as const, base: "none" as const, offset: { kind: "constant" as const, value: 0 } }
+      : state[expr.base];
+
+  return addOffset(baseExpr, expr.offset);
+}
+
+function aggregateRegisterTransforms(instructionSemantics: SemanticSequence["instructionSemantics"]): RegisterTransformMap {
+  let state = initialRegisterTransforms();
+
+  for (const step of instructionSemantics) {
+    if (step.registerEffectsUnknown) {
+      state = Object.fromEntries(REGISTERS.map((register) => [register, unknownExpr()])) as RegisterTransformMap;
+      continue;
+    }
+
+    const nextState: RegisterTransformMap = { ...state };
+    for (const [register, effect] of Object.entries(step.registerEffects) as Array<[Register, RegisterExpr]>) {
+      nextState[register] = substituteExpr(effect, state, register);
+    }
+    state = nextState;
+  }
+
+  return state;
 }
 
 function appendField<T>(current: SemanticField<T>, next: SemanticField<T>): SemanticField<T> {
@@ -117,6 +220,7 @@ function makeSummary(): SemanticSummary {
     memoryReads: emptyField(),
     memoryWrites: emptyField(),
     flowEffects: emptyField(),
+    registerTransforms: initialRegisterTransforms(),
   };
 }
 
@@ -139,6 +243,7 @@ export function composeSemanticSequence(sequence: InstructionSequence): Semantic
   }
 
   summary.stackDelta = aggregateStackDelta(instructionSemantics);
+  summary.registerTransforms = aggregateRegisterTransforms(instructionSemantics);
 
   return {
     schemaVersion: SEMANTIC_SCHEMA_VERSION,

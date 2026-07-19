@@ -1,5 +1,6 @@
-import { SemanticField } from "../semantics/types";
-import { CapabilityIndex, RopGadget, RopQuery, TerminatorKind } from "./types";
+import { Register, RegisterExpr, SemanticField } from "../semantics/types";
+import type { CapabilityIndex } from "./capabilities";
+import { RegisterTransformQuery, RopGadget, RopQuery, TerminatorKind } from "./types";
 
 function normalizeRegisters(registers?: string[]): string[] {
   return (registers ?? [])
@@ -7,7 +8,7 @@ function normalizeRegisters(registers?: string[]): string[] {
     .filter((register) => register.length > 0);
 }
 
-function normalizeKinds<T extends string>(values?: T | T[]): T[] {
+function normalizeKinds<T>(values?: T | T[]): T[] {
   if (values === undefined) {
     return [];
   }
@@ -93,10 +94,83 @@ function matchesExecutableOnly(gadget: RopGadget): boolean {
   return gadget.locations.some((location) => location.executable !== "UNKNOWN");
 }
 
+// A register is net-preserved iff its aggregated transform is exactly identity
+// (base is the register itself, constant offset of zero). Unknown, memory, and
+// constant transforms all fail, matching the conservative discipline elsewhere:
+// an unproven net effect is never treated as "preserved".
+function isIdentityTransform(register: string, expr: RegisterExpr | undefined): boolean {
+  return (
+    !!expr &&
+    expr.kind === "affine" &&
+    expr.base === register &&
+    expr.offset.kind === "constant" &&
+    expr.offset.value === 0
+  );
+}
+
+function matchesPreserves(gadget: RopGadget, registers: string[]): boolean {
+  if (registers.length === 0) {
+    return true;
+  }
+  const transforms = gadget.semanticSummary.summary.registerTransforms;
+  return registers.every((register) => isIdentityTransform(register, transforms[register as Register]));
+}
+
+function normalizeTransformQuery(query: RegisterTransformQuery): RegisterTransformQuery {
+  return {
+    register: query.register.trim().toLowerCase(),
+    base: query.base?.trim().toLowerCase(),
+    offset: query.offset,
+    offsetRegister: query.offsetRegister?.trim().toLowerCase(),
+    constant: query.constant,
+    fromMemory: query.fromMemory,
+  };
+}
+
+function matchesTransform(expr: RegisterExpr | undefined, query: RegisterTransformQuery): boolean {
+  if (!expr) {
+    return false;
+  }
+  if (query.constant !== undefined) {
+    if (expr.kind !== "constant" || expr.value !== query.constant) {
+      return false;
+    }
+  }
+  if (query.fromMemory !== undefined && (expr.kind === "memory") !== query.fromMemory) {
+    return false;
+  }
+  const wantsAffine = query.base !== undefined || query.offset !== undefined || query.offsetRegister !== undefined;
+  if (wantsAffine) {
+    if (expr.kind !== "affine") {
+      return false;
+    }
+    if (query.base !== undefined && expr.base !== query.base) {
+      return false;
+    }
+    if (query.offset !== undefined && (expr.offset.kind !== "constant" || expr.offset.value !== query.offset)) {
+      return false;
+    }
+    if (query.offsetRegister !== undefined && (expr.offset.kind !== "register" || expr.offset.register !== query.offsetRegister)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function matchesTransforms(gadget: RopGadget, queries: RegisterTransformQuery[]): boolean {
+  if (queries.length === 0) {
+    return true;
+  }
+  const transforms = gadget.semanticSummary.summary.registerTransforms;
+  return queries.every((query) => matchesTransform(transforms[query.register as Register], query));
+}
+
 export function queryRopGadgets(gadgets: RopGadget[], query: RopQuery): RopGadget[] {
   const reads = normalizeRegisters(query.reads);
   const writes = normalizeRegisters(query.writes);
   const preserves = normalizeRegisters(query.preserves);
+  const preservesThroughout = normalizeRegisters(query.preservesThroughout);
+  const transforms = (query.transforms ?? []).map(normalizeTransformQuery);
   const stackDelta = normalizeKinds(query.stackDelta);
   const capabilities = normalizeKinds(query.capability);
   const terminators = normalizeKinds(query.terminator);
@@ -116,7 +190,17 @@ export function queryRopGadgets(gadgets: RopGadget[], query: RopQuery): RopGadge
       return false;
     }
 
-    if (!fieldExcludesAll(gadget.semanticSummary.summary.writes, preserves)) {
+    // Net-preserve: register is unchanged at gadget exit (transform is identity).
+    if (!matchesPreserves(gadget, preserves)) {
+      return false;
+    }
+
+    // Strict-preserve: register is never written at any step in the gadget.
+    if (!fieldExcludesAll(gadget.semanticSummary.summary.writes, preservesThroughout)) {
+      return false;
+    }
+
+    if (!matchesTransforms(gadget, transforms)) {
       return false;
     }
 

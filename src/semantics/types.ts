@@ -16,6 +16,20 @@ export type Register =
 
 export type FlowEffectKind = "RETURN" | "CALL" | "JUMP";
 
+export type RegisterOffset =
+  | { kind: "constant"; value: number }
+  | { kind: "register"; register: Register }
+  | { kind: "unknown" };
+
+export type RegisterExpr =
+  | { kind: "affine"; base: "self" | Register | "none"; offset: RegisterOffset }
+  | { kind: "constant"; value: number }
+  | { kind: "memory"; address: RegisterExpr; confidence: Confidence }
+  | { kind: "unknown" };
+
+export type RegisterEffectMap = Partial<Record<Register, RegisterExpr>>;
+export type RegisterTransformMap = Record<Register, RegisterExpr>;
+
 export interface SemanticSet<T> {
   exact: Set<T>;
   conservative: Set<T>;
@@ -73,6 +87,8 @@ export interface InstructionSemantic {
   memoryReads: SemanticField<string>;
   memoryWrites: SemanticField<string>;
   flowEffects: SemanticField<FlowEffectKind>;
+  registerEffects: RegisterEffectMap;
+  registerEffectsUnknown: boolean;
   evidence: string[];
   supported: boolean;
 }
@@ -86,6 +102,7 @@ export interface SemanticSummary {
   memoryReads: SemanticField<string>;
   memoryWrites: SemanticField<string>;
   flowEffects: SemanticField<FlowEffectKind>;
+  registerTransforms: RegisterTransformMap;
 }
 
 export interface SemanticSequence {
@@ -95,4 +112,3 @@ export interface SemanticSequence {
   instructionSemantics: InstructionSemantic[];
   summary: SemanticSummary;
 }
-
