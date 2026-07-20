@@ -3,6 +3,8 @@ import * as out from "../core/output";
 import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES } from "../core/help_catalog";
 
 export function createHelpCommand(registry: CommandRegistry): Command {
+  const firstExample = (examples: string[]): string => examples[0] ?? "";
+
   return {
     name: "help",
     description: "List commands or show detailed command help.",
@@ -21,8 +23,13 @@ export function createHelpCommand(registry: CommandRegistry): Command {
           [
             { key: "name", header: "Command", width: 16 },
             { key: "description", header: "Description", width: 40 },
+            { key: "example", header: "Example", width: 34 },
           ],
-          commands.map((command) => ({ name: command.name, description: command.description })),
+          commands.map((command) => ({
+            name: command.name,
+            description: command.description,
+            example: firstExample(command.examples),
+          })),
         );
         const groups = new Map<string, typeof NAMESPACE_HELP_ENTRIES>();
         for (const entry of NAMESPACE_HELP_ENTRIES) {
@@ -35,8 +42,13 @@ export function createHelpCommand(registry: CommandRegistry): Command {
             [
               { key: "name", header: "Helper", width: 22 },
               { key: "description", header: "Description", width: 56 },
+              { key: "example", header: "Example", width: 34 },
             ],
-            entries.map((entry) => ({ name: entry.name, description: entry.description })),
+            entries.map((entry) => ({
+              name: entry.name,
+              description: entry.description,
+              example: firstExample(entry.examples),
+            })),
           );
         }
         out.info("Use help(\"name\") for details, e.g. dx @$osed().help(\"sc.iat\").");

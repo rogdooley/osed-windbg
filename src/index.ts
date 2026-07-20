@@ -45,6 +45,7 @@ import { createShellcodeNamespace } from "./shellcode";
 import { buildCapabilityIndexFromRpPlusText, summarizeCapabilities, type CapabilityIndex, type RopQuery } from "./rop";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
+import * as out from "./core/output";
 import { getPointerSize } from "./core/memory";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
@@ -123,6 +124,16 @@ function bindApi(): OsedApi {
     lastResult = result;
   };
 
+  const renderRows = (title: string, rows: Array<Record<string, string>>): void => {
+    out.section(title);
+    if (rows.length > 0 && "Error" in rows[0]) {
+      out.error(rows[0].Error);
+      return;
+    }
+    const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+    out.table(keys.map((key) => ({ key, header: key })), rows);
+  };
+
   const formatSet = (values: Set<unknown>): string => {
     return [...values].map((value) => String(value)).join(", ");
   };
@@ -177,6 +188,7 @@ function bindApi(): OsedApi {
   const helperHelp = (name: string): Array<Record<string, string>> => {
     const entry = findHelpEntry(name);
     const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
+    renderRows(`Help: ${name}`, rows);
     setResult({
       command: "help",
       args: { command: name },
@@ -191,6 +203,9 @@ function bindApi(): OsedApi {
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): Array<Record<string, string>> => {
     currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
     const rows = summarizeCapabilities(currentRopCorpus);
+    out.section("ROP Corpus Loaded");
+    out.info(`Gadgets: ${currentRopCorpus.gadgets.length}`);
+    out.info(`Capabilities: ${rows.length}`);
     setResult({
       command: "rop.scan",
       args: { text, ...options },
@@ -258,6 +273,7 @@ function bindApi(): OsedApi {
     const query = isPlainObject(args[0]) ? (args[0] as RopQuery) : undefined;
     if (!query) {
       const rows = [{ Error: "rop.query requires a query object." }];
+      renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
         args: {},
@@ -270,6 +286,7 @@ function bindApi(): OsedApi {
     }
     if (!currentRopCorpus) {
       const rows = [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+      renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
         args: query as Record<string, unknown>,
@@ -283,6 +300,7 @@ function bindApi(): OsedApi {
 
     const gadgets = currentRopCorpus.query(query);
     const rows = queryRows(query);
+    renderRows("ROP Query", rows);
     setResult({
       command: "rop.query",
       args: query as Record<string, unknown>,
@@ -299,6 +317,7 @@ function bindApi(): OsedApi {
       return helperHelp("rop.capabilities");
     }
     const rows = capabilityRows();
+    renderRows("ROP Capabilities", rows);
     setResult({
       command: "rop.capabilities",
       args: {},

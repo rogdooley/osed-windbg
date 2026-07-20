@@ -26,7 +26,10 @@ describe("help command", () => {
     const list = help.execute({});
     expect(list.success).toBe(true);
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "sc.iat" })]));
-    expect(logs.join("")).toContain("sc Namespace Helpers");
+    const rendered = logs.join("");
+    expect(rendered).toContain("sc Namespace Helpers");
+    expect(rendered).toContain("Example");
+    expect(rendered).toContain("dx @$osed().sc.iat()");
 
     const detail = help.execute({ command: "sc.iat" });
     expect(detail.success).toBe(true);
@@ -36,5 +39,25 @@ describe("help command", () => {
   test("shellcode helpers accept help without reading debugger state", () => {
     const sc = createShellcodeNamespace();
     expect(sc.iat("help")).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
+  });
+
+  test("shellcode modules use short names while preserving paths", () => {
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: () => undefined },
+      currentProcess: {
+        Modules: [
+          {
+            Name: "C:\\labs\\service.exe",
+            Path: "C:\\labs\\service.exe",
+            BaseAddress: BigInt(0x400000),
+            EndAddress: BigInt(0x42e000),
+          },
+        ],
+      },
+    };
+
+    const [row] = createShellcodeNamespace().modules() as Array<Record<string, string>>;
+    expect(row.Name).toBe("service.exe");
+    expect(row.Path).toBe("C:\\labs\\service.exe");
   });
 });

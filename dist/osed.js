@@ -3909,6 +3909,10 @@ var osed_bundle = (() => {
 
   // src/commands/help.ts
   function createHelpCommand(registry2) {
+    const firstExample = (examples) => {
+      var _a;
+      return (_a = examples[0]) != null ? _a : "";
+    };
     return {
       name: "help",
       description: "List commands or show detailed command help.",
@@ -3926,9 +3930,14 @@ var osed_bundle = (() => {
           table(
             [
               { key: "name", header: "Command", width: 16 },
-              { key: "description", header: "Description", width: 40 }
+              { key: "description", header: "Description", width: 40 },
+              { key: "example", header: "Example", width: 34 }
             ],
-            commands.map((command2) => ({ name: command2.name, description: command2.description }))
+            commands.map((command2) => ({
+              name: command2.name,
+              description: command2.description,
+              example: firstExample(command2.examples)
+            }))
           );
           const groups = /* @__PURE__ */ new Map();
           for (const entry of NAMESPACE_HELP_ENTRIES) {
@@ -3940,9 +3949,14 @@ var osed_bundle = (() => {
             table(
               [
                 { key: "name", header: "Helper", width: 22 },
-                { key: "description", header: "Description", width: 56 }
+                { key: "description", header: "Description", width: 56 },
+                { key: "example", header: "Example", width: 34 }
               ],
-              entries.map((entry) => ({ name: entry.name, description: entry.description }))
+              entries.map((entry) => ({
+                name: entry.name,
+                description: entry.description,
+                example: firstExample(entry.examples)
+              }))
             );
           }
           info('Use help("name") for details, e.g. dx @$osed().help("sc.iat").');
@@ -6872,8 +6886,9 @@ var osed_bundle = (() => {
       return items.map((entry) => {
         var _a2, _b, _c, _d, _e, _f;
         const moduleAny = entry;
-        const name = (_a2 = moduleAny.Name) != null ? _a2 : "<unknown>";
-        const path = (_b = moduleAny.Path) != null ? _b : name;
+        const rawName = (_a2 = moduleAny.Name) != null ? _a2 : "<unknown>";
+        const path = (_b = moduleAny.Path) != null ? _b : rawName;
+        const name = moduleBasename(rawName);
         const base = (_e = tryToBigInt((_d = (_c = moduleAny.BaseAddress) != null ? _c : moduleAny.Base) != null ? _d : moduleAny.Address)) != null ? _e : BigInt(0);
         let end = tryToBigInt(moduleAny.EndAddress);
         const sizeFromModule = tryToBigInt((_f = moduleAny.Size) != null ? _f : moduleAny.Length);
@@ -7091,33 +7106,51 @@ var osed_bundle = (() => {
     }
     return parsed >>> 0;
   }
+  function moduleBasename(value) {
+    const normalized = value.trim();
+    if (!normalized) {
+      return "<unknown>";
+    }
+    const parts = normalized.split(/[\\/]+/);
+    return parts[parts.length - 1] || normalized;
+  }
   function createShellcodeNamespace() {
     const helper = new ShellcodeHelper();
     const helperHelp = (name) => {
       const entry = findHelpEntry(name);
-      return toDxRows(entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
+      return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
     };
     const wantsHelp = (value) => value === "help";
+    const renderAndReturn = (title, rows) => {
+      section(title);
+      if (rows.length > 0 && "Error" in rows[0]) {
+        error(rows[0].Error);
+        return toDxRows(rows);
+      }
+      const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(rows.flatMap((row) => Object.keys(row)))];
+      table(keys.map((key2) => ({ key: key2, header: key2 })), rows);
+      return toDxRows(rows);
+    };
     return {
-      peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : toDxRows(helper.peb()),
-      modules: (help) => wantsHelp(help) ? helperHelp("sc.modules") : toDxRows(helper.modules()),
-      module_pages: (name) => wantsHelp(name) ? helperHelp("sc.module_pages") : toDxRows(helper.modulePages(name)),
-      page_summary: (name) => wantsHelp(name) ? helperHelp("sc.page_summary") : toDxRows(helper.pageSummary(name)),
-      base: (name) => wantsHelp(name) ? helperHelp("sc.base") : toDxRows(helper.base(name)),
-      pe: (name) => wantsHelp(name) ? helperHelp("sc.pe") : toDxRows(helper.pe(name)),
-      exports: (name, filter) => wantsHelp(name) ? helperHelp("sc.exports") : toDxRows(helper.exports(name, filter)),
-      resolve: (module, symbol) => wantsHelp(module) ? helperHelp("sc.resolve") : toDxRows(helper.resolve(module, symbol)),
-      hashes: (module, algorithm) => wantsHelp(module) ? helperHelp("sc.hashes") : toDxRows(helper.hashes(module, algorithm)),
-      hash: (name, algorithm) => wantsHelp(name) ? helperHelp("sc.hash") : toDxRows(helper.hash(name, algorithm)),
-      hashresolve: (module, hashValue, algorithm) => wantsHelp(module) ? helperHelp("sc.hashresolve") : toDxRows(helper.hashresolve(module, hashValue, algorithm)),
-      algorithms: (help) => wantsHelp(help) ? helperHelp("sc.algorithms") : toDxRows(helper.algorithms()),
-      exportdir: (module) => wantsHelp(module) ? helperHelp("sc.exportdir") : toDxRows(helper.exportdir(module)),
-      export: (module, symbol) => wantsHelp(module) ? helperHelp("sc.export") : toDxRows(helper.export(module, symbol)),
-      exportat: (module, ordinalIndex) => wantsHelp(module) ? helperHelp("sc.exportat") : toDxRows(helper.exportat(module, ordinalIndex)),
-      exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : toDxRows(helper.exportwalk(module, symbol, verbose)),
-      iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : toDxRows(helper.iat(module, filter)),
-      iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : toDxRows(helper.iat_find(symbol)),
-      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : toDxRows(helper.iat_ptr(module, symbol))
+      peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : renderAndReturn("sc.peb", helper.peb()),
+      modules: (help) => wantsHelp(help) ? helperHelp("sc.modules") : renderAndReturn("sc.modules", helper.modules()),
+      module_pages: (name) => wantsHelp(name) ? helperHelp("sc.module_pages") : renderAndReturn("sc.module_pages", helper.modulePages(name)),
+      page_summary: (name) => wantsHelp(name) ? helperHelp("sc.page_summary") : renderAndReturn("sc.page_summary", helper.pageSummary(name)),
+      base: (name) => wantsHelp(name) ? helperHelp("sc.base") : renderAndReturn("sc.base", helper.base(name)),
+      pe: (name) => wantsHelp(name) ? helperHelp("sc.pe") : renderAndReturn("sc.pe", helper.pe(name)),
+      exports: (name, filter) => wantsHelp(name) ? helperHelp("sc.exports") : renderAndReturn("sc.exports", helper.exports(name, filter)),
+      resolve: (module, symbol) => wantsHelp(module) ? helperHelp("sc.resolve") : renderAndReturn("sc.resolve", helper.resolve(module, symbol)),
+      hashes: (module, algorithm) => wantsHelp(module) ? helperHelp("sc.hashes") : renderAndReturn("sc.hashes", helper.hashes(module, algorithm)),
+      hash: (name, algorithm) => wantsHelp(name) ? helperHelp("sc.hash") : renderAndReturn("sc.hash", helper.hash(name, algorithm)),
+      hashresolve: (module, hashValue, algorithm) => wantsHelp(module) ? helperHelp("sc.hashresolve") : renderAndReturn("sc.hashresolve", helper.hashresolve(module, hashValue, algorithm)),
+      algorithms: (help) => wantsHelp(help) ? helperHelp("sc.algorithms") : renderAndReturn("sc.algorithms", helper.algorithms()),
+      exportdir: (module) => wantsHelp(module) ? helperHelp("sc.exportdir") : renderAndReturn("sc.exportdir", helper.exportdir(module)),
+      export: (module, symbol) => wantsHelp(module) ? helperHelp("sc.export") : renderAndReturn("sc.export", helper.export(module, symbol)),
+      exportat: (module, ordinalIndex) => wantsHelp(module) ? helperHelp("sc.exportat") : renderAndReturn("sc.exportat", helper.exportat(module, ordinalIndex)),
+      exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
+      iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
+      iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
+      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol))
     };
   }
   var DxRow = class {
@@ -7389,6 +7422,15 @@ var osed_bundle = (() => {
     const setResult = (result3) => {
       lastResult = result3;
     };
+    const renderRows = (title, rows) => {
+      section(title);
+      if (rows.length > 0 && "Error" in rows[0]) {
+        error(rows[0].Error);
+        return;
+      }
+      const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+      table(keys.map((key2) => ({ key: key2, header: key2 })), rows);
+    };
     const formatSet = (values) => {
       return [...values].map((value) => String(value)).join(", ");
     };
@@ -7438,6 +7480,7 @@ var osed_bundle = (() => {
     const helperHelp = (name) => {
       const entry = findHelpEntry(name);
       const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
+      renderRows(`Help: ${name}`, rows);
       setResult({
         command: "help",
         args: { command: name },
@@ -7451,6 +7494,9 @@ var osed_bundle = (() => {
     const scanCorpus = (text, options = {}) => {
       currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
       const rows = summarizeCapabilities(currentRopCorpus);
+      section("ROP Corpus Loaded");
+      info(`Gadgets: ${currentRopCorpus.gadgets.length}`);
+      info(`Capabilities: ${rows.length}`);
       setResult({
         command: "rop.scan",
         args: __spreadValues({ text }, options),
@@ -7514,6 +7560,7 @@ var osed_bundle = (() => {
       const query = isPlainObject(args[0]) ? args[0] : void 0;
       if (!query) {
         const rows2 = [{ Error: "rop.query requires a query object." }];
+        renderRows("ROP Query", rows2);
         setResult({
           command: "rop.query",
           args: {},
@@ -7526,6 +7573,7 @@ var osed_bundle = (() => {
       }
       if (!currentRopCorpus) {
         const rows2 = [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+        renderRows("ROP Query", rows2);
         setResult({
           command: "rop.query",
           args: query,
@@ -7538,6 +7586,7 @@ var osed_bundle = (() => {
       }
       const gadgets = currentRopCorpus.query(query);
       const rows = queryRows(query);
+      renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
         args: query,
@@ -7553,6 +7602,7 @@ var osed_bundle = (() => {
         return helperHelp("rop.capabilities");
       }
       const rows = capabilityRows();
+      renderRows("ROP Capabilities", rows);
       setResult({
         command: "rop.capabilities",
         args: {},
