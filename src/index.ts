@@ -316,15 +316,18 @@ function bindApi(): OsedApi {
     };
   }
 
-  const ropInvoke = api.rop as ((...args: unknown[]) => boolean) | undefined;
-  if (typeof ropInvoke === "function") {
-    const ropNamespace = Object.assign(ropInvoke, {
-      scan: executeRopScan,
-      query: executeRopQuery,
-      capabilities: executeRopCapabilities,
-    });
-    api.rop = ropNamespace;
-  }
+  api.rop = {
+    find: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.find");
+      }
+      return invoke("rop", args);
+    },
+    scan: executeRopScan,
+    query: executeRopQuery,
+    capabilities: executeRopCapabilities,
+  };
+  api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
   api.pattern = {
     create: (...args: unknown[]) => invoke("pattern_create", args),

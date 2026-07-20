@@ -3287,8 +3287,8 @@ var osed_bundle = (() => {
     const rop = {
       name: "rop",
       description: "ROP helper entrypoint and module triage.",
-      usage: "dx @$osed().rop({ module: 'essfunc', maxResults: 50 })",
-      examples: ["dx @$osed().rop({})", "dx @$osed().rop({ module: 'essfunc' })"],
+      usage: "dx @$osed().rop.find({ module: 'essfunc', maxResults: 50 })",
+      examples: ["dx @$osed().rop.find({})", "dx @$osed().rop.find({ module: 'essfunc' })"],
       schema: {
         module: { type: "string" },
         executableOnly: { type: "boolean", default: true },
@@ -3744,6 +3744,18 @@ var osed_bundle = (() => {
       examples: ["dx @$osed().fmt.offset(0x41414141, 40)"]
     },
     {
+      name: "rop_find",
+      description: "Flat alias for legacy ROP helper/module triage.",
+      usage: "dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)",
+      examples: ['dx @$osed().rop_find("essfunc")']
+    },
+    {
+      name: "rop.find",
+      description: "Runs the legacy ROP helper/module triage from the ROP namespace.",
+      usage: "dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)",
+      examples: ['dx @$osed().rop.find("essfunc")']
+    },
+    {
       name: "rop.scan",
       description: "Loads pasted RP++ output into the semantic ROP corpus.",
       usage: "dx @$osed().rop.scan(text, options?)",
@@ -3909,7 +3921,7 @@ var osed_bundle = (() => {
         var _a;
         const commandName = options.command;
         if (!commandName) {
-          const commands = registry2.getAll();
+          const commands = registry2.getAll().filter((command2) => command2.name !== "rop");
           section("OSED Commands");
           table(
             [
@@ -3958,7 +3970,7 @@ var osed_bundle = (() => {
           };
         }
         const command = registry2.get(commandName);
-        const helper = findHelpEntry(commandName);
+        const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
         if (!command && !helper) {
           return {
             command: "help",
@@ -7556,15 +7568,18 @@ var osed_bundle = (() => {
         return invoke(command.name, args);
       };
     }
-    const ropInvoke = api.rop;
-    if (typeof ropInvoke === "function") {
-      const ropNamespace = Object.assign(ropInvoke, {
-        scan: executeRopScan,
-        query: executeRopQuery,
-        capabilities: executeRopCapabilities
-      });
-      api.rop = ropNamespace;
-    }
+    api.rop = {
+      find: (...args) => {
+        if (args.length === 1 && args[0] === "help") {
+          return helperHelp("rop.find");
+        }
+        return invoke("rop", args);
+      },
+      scan: executeRopScan,
+      query: executeRopQuery,
+      capabilities: executeRopCapabilities
+    };
+    api.rop_find = (...args) => invoke("rop", args);
     api.pattern = {
       create: (...args) => invoke("pattern_create", args),
       offset: (...args) => invoke("pattern_offset", args)

@@ -15,7 +15,7 @@ export function createHelpCommand(registry: CommandRegistry): Command {
       const commandName = options.command as string | undefined;
 
       if (!commandName) {
-        const commands = registry.getAll();
+        const commands = registry.getAll().filter((command) => command.name !== "rop");
         out.section("OSED Commands");
         out.table(
           [
@@ -66,7 +66,7 @@ export function createHelpCommand(registry: CommandRegistry): Command {
       }
 
       const command = registry.get(commandName);
-      const helper = findHelpEntry(commandName);
+      const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
       if (!command && !helper) {
         return {
           command: "help",

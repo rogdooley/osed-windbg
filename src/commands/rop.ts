@@ -282,8 +282,8 @@ export function createRopCommands(): Command[] {
   const rop: Command = {
     name: "rop",
     description: "ROP helper entrypoint and module triage.",
-    usage: "dx @$osed().rop({ module: 'essfunc', maxResults: 50 })",
-    examples: ["dx @$osed().rop({})", "dx @$osed().rop({ module: 'essfunc' })"],
+    usage: "dx @$osed().rop.find({ module: 'essfunc', maxResults: 50 })",
+    examples: ["dx @$osed().rop.find({})", "dx @$osed().rop.find({ module: 'essfunc' })"],
     schema: {
       module: { type: "string" },
       executableOnly: { type: "boolean", default: true },

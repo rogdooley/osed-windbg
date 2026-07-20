@@ -37,6 +37,18 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().fmt.offset(0x41414141, 40)"],
   },
   {
+    name: "rop_find",
+    description: "Flat alias for legacy ROP helper/module triage.",
+    usage: "dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)",
+    examples: ["dx @$osed().rop_find(\"essfunc\")"],
+  },
+  {
+    name: "rop.find",
+    description: "Runs the legacy ROP helper/module triage from the ROP namespace.",
+    usage: "dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)",
+    examples: ["dx @$osed().rop.find(\"essfunc\")"],
+  },
+  {
     name: "rop.scan",
     description: "Loads pasted RP++ output into the semantic ROP corpus.",
     usage: "dx @$osed().rop.scan(text, options?)",

@@ -21,7 +21,7 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `landing` | `dx @$osed().landing(address?)` | `dx @$osed().landing()` | Returns byte-range and memory observations at an explicit address or ESP/RSP. |
 | `math` | `dx @$osed().math(value, bits?)` | `dx @$osed().math(0xFFFFFFD6, 32)` | Formats integers as hex, signed, unsigned, little-endian bytes, and two's complement. |
 | `modules` | `dx @$osed().modules(filter?)` | `dx @$osed().modules("essfunc")` | Lists modules and mitigation state. |
-| `rop` | `dx @$osed().rop(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop("essfunc")` | Sets module scope for legacy ROP exploration and module triage. |
+| `rop_find` | `dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop_find("essfunc")` | Flat alias for legacy ROP exploration and module triage. |
 | `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("essfunc", "FF E4")` | Finds byte sequences in executable sections. |
 | `rop_suggest` | `dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)` | `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")` | Suggests validated gadget patterns. |
 | `retn` | `dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().retn("essfunc")` | Finds `retn N` gadgets for stdcall chain adjustment. |
@@ -164,6 +164,7 @@ The `rop` runtime namespace is a semantic query surface layered on top of RP++ o
 
 | Helper | Syntax | Example | Notes |
 | --- | --- | --- | --- |
+| `rop.find` | `dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop.find("essfunc")` | Runs the legacy ROP helper/module triage from the ROP namespace. |
 | `rop.scan` | `dx @$osed().rop.scan(text, options?)` | `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")` | Builds a capability index from pasted RP++ output. |
 | `rop.query` | `dx @$osed().rop.query(query)` | `dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
