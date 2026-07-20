@@ -11,6 +11,6 @@ describe("rop_suggest command", () => {
       enum: ["legacy", "semantic"],
       default: "legacy",
     });
-    expect(ropSuggest?.examples).toContain("dx @$osed.rop_suggest({ module: 'essfunc', engine: 'semantic' })");
+    expect(ropSuggest?.examples).toContain("dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })");
   });
 });

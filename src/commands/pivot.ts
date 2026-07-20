@@ -76,8 +76,8 @@ export function createPivotCommand(): Command {
   return {
     name: "pivots",
     description: "Scan for stack pivot candidates.",
-    usage: "dx @$osed.pivots({ module: 'essfunc', maxResults: 50 })",
-    examples: ["dx @$osed.pivots({ module: 'essfunc' })", "dx @$osed.pivots({ mode: 'thorough' })"],
+    usage: "dx @$osed().pivots({ module: 'essfunc', maxResults: 50 })",
+    examples: ["dx @$osed().pivots({ module: 'essfunc' })", "dx @$osed().pivots({ mode: 'thorough' })"],
     schema: {
       module: { type: "string" },
       executableOnly: { type: "boolean", default: true },

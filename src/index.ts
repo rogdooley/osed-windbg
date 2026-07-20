@@ -46,6 +46,7 @@ import { buildCapabilityIndexFromRpPlusText, summarizeCapabilities, type Capabil
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
 import { getPointerSize } from "./core/memory";
+import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand } from "./commands/landing";
 import { createMathCommand } from "./commands/math";
@@ -109,6 +110,11 @@ function registerAll(): void {
 function bindApi(): OsedApi {
   const api: OsedApi = {};
   const invoke = (commandName: string, args: unknown[]) => {
+    if (args.length === 1 && args[0] === "help") {
+      const result = registry.execute("help", { command: commandName });
+      lastResult = result;
+      return result.success;
+    }
     const result = registry.execute(commandName, normalizeInvocation(commandName, args));
     lastResult = result;
     return result.success;
@@ -168,6 +174,20 @@ function bindApi(): OsedApi {
     return summarizeCapabilities(currentRopCorpus);
   };
 
+  const helperHelp = (name: string): Array<Record<string, string>> => {
+    const entry = findHelpEntry(name);
+    const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
+    setResult({
+      command: "help",
+      args: { command: name },
+      success: entry !== undefined,
+      findings: rows,
+      warnings: [],
+      errors: entry ? [] : [`Unknown helper '${name}'.`],
+    });
+    return rows;
+  };
+
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): Array<Record<string, string>> => {
     currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
     const rows = summarizeCapabilities(currentRopCorpus);
@@ -189,6 +209,9 @@ function bindApi(): OsedApi {
   };
 
   const executeRopScan = (...args: unknown[]): Array<Record<string, string>> => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.scan");
+    }
     if (args.length === 0) {
       const rows = [{ Error: "rop.scan requires RP++ text input." }];
       setResult({
@@ -229,6 +252,9 @@ function bindApi(): OsedApi {
   };
 
   const executeRopQuery = (...args: unknown[]): Array<Record<string, string>> => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.query");
+    }
     const query = isPlainObject(args[0]) ? (args[0] as RopQuery) : undefined;
     if (!query) {
       const rows = [{ Error: "rop.query requires a query object." }];
@@ -268,7 +294,10 @@ function bindApi(): OsedApi {
     return rows;
   };
 
-  const executeRopCapabilities = (): Array<Record<string, string>> => {
+  const executeRopCapabilities = (...args: unknown[]): Array<Record<string, string>> => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.capabilities");
+    }
     const rows = capabilityRows();
     setResult({
       command: "rop.capabilities",

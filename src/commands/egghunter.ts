@@ -42,10 +42,10 @@ export function createEgghunterCommand(): Command {
   return {
     name: "egghunter",
     description: "Generate NtAccess/SEH egghunter stubs.",
-    usage: "dx @$osed.egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+    usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
     examples: [
-      "dx @$osed.egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
-      "dx @$osed.egghunter({ tag: 'B33F', mode: 'seh', wow64: true })",
+      "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+      "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh', wow64: true })",
     ],
     schema: {
       tag: { type: "string", default: "W00T" },

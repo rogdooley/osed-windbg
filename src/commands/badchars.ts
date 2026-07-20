@@ -12,10 +12,10 @@ export function createBadcharsCommand(): Command {
   return {
     name: "badchars",
     description: "Identify bad characters from a memory byte sequence.",
-    usage: "dx @$osed.badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
+    usage: "dx @$osed().badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
     examples: [
-      "dx @$osed.badchars({ address: 0x00B8F900 })",
-      "dx @$osed.badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })",
+      "dx @$osed().badchars({ address: 0x00B8F900 })",
+      "dx @$osed().badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })",
     ],
     schema: {
       address: { type: ["number", "string"], required: true },

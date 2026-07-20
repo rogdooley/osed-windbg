@@ -10,10 +10,10 @@ export function createPatternCommands(): Command[] {
   const patternCreate: Command = {
     name: "pattern_create",
     description: "Generate cyclic pattern strings.",
-    usage: "dx @$osed.pattern_create({ length: 300, type: 'msf' })",
+    usage: "dx @$osed().pattern_create({ length: 300, type: 'msf' })",
     examples: [
-      "dx @$osed.pattern_create({ length: 300, type: 'msf' })",
-      "dx @$osed.pattern_create({ length: 800, type: 'cyclic' })",
+      "dx @$osed().pattern_create({ length: 300, type: 'msf' })",
+      "dx @$osed().pattern_create({ length: 800, type: 'cyclic' })",
     ],
     schema: {
       length: { type: "number", required: true, min: 1, max: 100000 },
@@ -42,10 +42,10 @@ export function createPatternCommands(): Command[] {
   const patternOffset: Command = {
     name: "pattern_offset",
     description: "Locate value offset inside a generated pattern.",
-    usage: "dx @$osed.pattern_offset({ value: 0x39654138, type: 'msf' })",
+    usage: "dx @$osed().pattern_offset({ value: 0x39654138, type: 'msf' })",
     examples: [
-      "dx @$osed.pattern_offset({ value: 0x39654138, type: 'msf' })",
-      "dx @$osed.pattern_offset({ value: '41326341', type: 'cyclic' })",
+      "dx @$osed().pattern_offset({ value: 0x39654138, type: 'msf' })",
+      "dx @$osed().pattern_offset({ value: '41326341', type: 'cyclic' })",
     ],
     schema: {
       value: { type: ["number", "string"], required: true },

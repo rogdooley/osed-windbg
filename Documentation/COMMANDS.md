@@ -32,6 +32,26 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `nop` | `dx @$osed().nop(length, byte?)` | `dx @$osed().nop(16)` | Generates a NOP sled. |
 | `rop_template` | `dx @$osed().rop_template(api?, module?)` | `dx @$osed().rop_template("VirtualProtect", "essfunc")` | Prints a commented ROP chain skeleton. |
 
+### Help Model
+
+`help()` lists both top-level commands and namespace helpers. Use a fully qualified helper name for namespace entries:
+
+```js
+dx @$osed().help()
+dx @$osed().help("badchars")
+dx @$osed().help("sc.iat")
+dx @$osed().help("rop.query")
+```
+
+Most callable helpers also accept `"help"` as their first argument and return usage without inspecting the target process:
+
+```js
+dx @$osed().math("help")
+dx @$osed().pattern.create("help")
+dx @$osed().sc.iat("help")
+dx @$osed().rop.query("help")
+```
+
 ## Analysis Evidence Helpers
 
 ### `memory(address)`

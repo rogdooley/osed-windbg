@@ -129,10 +129,10 @@ export function createRopTemplateCommand(): Command {
   return {
     name: "rop_template",
     description: "Print a commented VirtualProtect or WriteProcessMemory ROP chain skeleton.",
-    usage: "dx @$osed.rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
+    usage: "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
     examples: [
-      "dx @$osed.rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
-      "dx @$osed.rop_template({ api: 'WriteProcessMemory', module: 'essfunc' })",
+      "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
+      "dx @$osed().rop_template({ api: 'WriteProcessMemory', module: 'essfunc' })",
     ],
     schema: {
       api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory"], default: "VirtualProtect" },

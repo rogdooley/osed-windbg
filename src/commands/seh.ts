@@ -271,8 +271,8 @@ export function createSehCommand(): Command {
   return {
     name: "seh",
     description: "Walk current thread SEH chain.",
-    usage: "dx @$osed.seh({})",
-    examples: ["dx @$osed.seh({})", "dx @$osed.seh({})"],
+    usage: "dx @$osed().seh({})",
+    examples: ["dx @$osed().seh({})", "dx @$osed().seh({})"],
     schema: {},
     execute(options: Record<string, unknown>): CommandResult {
       const pointerSize = getPointerSize();

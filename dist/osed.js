@@ -390,10 +390,10 @@ var osed_bundle = (() => {
     const patternCreate = {
       name: "pattern_create",
       description: "Generate cyclic pattern strings.",
-      usage: "dx @$osed.pattern_create({ length: 300, type: 'msf' })",
+      usage: "dx @$osed().pattern_create({ length: 300, type: 'msf' })",
       examples: [
-        "dx @$osed.pattern_create({ length: 300, type: 'msf' })",
-        "dx @$osed.pattern_create({ length: 800, type: 'cyclic' })"
+        "dx @$osed().pattern_create({ length: 300, type: 'msf' })",
+        "dx @$osed().pattern_create({ length: 800, type: 'cyclic' })"
       ],
       schema: {
         length: { type: "number", required: true, min: 1, max: 1e5 },
@@ -417,10 +417,10 @@ var osed_bundle = (() => {
     const patternOffset = {
       name: "pattern_offset",
       description: "Locate value offset inside a generated pattern.",
-      usage: "dx @$osed.pattern_offset({ value: 0x39654138, type: 'msf' })",
+      usage: "dx @$osed().pattern_offset({ value: 0x39654138, type: 'msf' })",
       examples: [
-        "dx @$osed.pattern_offset({ value: 0x39654138, type: 'msf' })",
-        "dx @$osed.pattern_offset({ value: '41326341', type: 'cyclic' })"
+        "dx @$osed().pattern_offset({ value: 0x39654138, type: 'msf' })",
+        "dx @$osed().pattern_offset({ value: '41326341', type: 'cyclic' })"
       ],
       schema: {
         value: { type: ["number", "string"], required: true },
@@ -545,10 +545,10 @@ var osed_bundle = (() => {
     return {
       name: "badchars",
       description: "Identify bad characters from a memory byte sequence.",
-      usage: "dx @$osed.badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
+      usage: "dx @$osed().badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
       examples: [
-        "dx @$osed.badchars({ address: 0x00B8F900 })",
-        "dx @$osed.badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })"
+        "dx @$osed().badchars({ address: 0x00B8F900 })",
+        "dx @$osed().badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })"
       ],
       schema: {
         address: { type: ["number", "string"], required: true },
@@ -637,10 +637,10 @@ var osed_bundle = (() => {
     return {
       name: "egghunter",
       description: "Generate NtAccess/SEH egghunter stubs.",
-      usage: "dx @$osed.egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+      usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
       examples: [
-        "dx @$osed.egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
-        "dx @$osed.egghunter({ tag: 'B33F', mode: 'seh', wow64: true })"
+        "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+        "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh', wow64: true })"
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
@@ -818,8 +818,8 @@ var osed_bundle = (() => {
     return {
       name: "modules",
       description: "Enumerate modules and mitigation states.",
-      usage: "dx @$osed.modules({ filter: 'essfunc' })",
-      examples: ["dx @$osed.modules({})", "dx @$osed.modules({ filter: 'kernel32' })"],
+      usage: "dx @$osed().modules({ filter: 'essfunc' })",
+      examples: ["dx @$osed().modules({})", "dx @$osed().modules({ filter: 'kernel32' })"],
       schema: {
         filter: { type: "string" }
       },
@@ -1087,8 +1087,8 @@ var osed_bundle = (() => {
     return {
       name: "seh",
       description: "Walk current thread SEH chain.",
-      usage: "dx @$osed.seh({})",
-      examples: ["dx @$osed.seh({})", "dx @$osed.seh({})"],
+      usage: "dx @$osed().seh({})",
+      examples: ["dx @$osed().seh({})", "dx @$osed().seh({})"],
       schema: {},
       execute(options) {
         var _a;
@@ -3287,8 +3287,8 @@ var osed_bundle = (() => {
     const rop = {
       name: "rop",
       description: "ROP helper entrypoint and module triage.",
-      usage: "dx @$osed.rop({ module: 'essfunc', maxResults: 50 })",
-      examples: ["dx @$osed.rop({})", "dx @$osed.rop({ module: 'essfunc' })"],
+      usage: "dx @$osed().rop({ module: 'essfunc', maxResults: 50 })",
+      examples: ["dx @$osed().rop({})", "dx @$osed().rop({ module: 'essfunc' })"],
       schema: {
         module: { type: "string" },
         executableOnly: { type: "boolean", default: true },
@@ -3325,10 +3325,10 @@ var osed_bundle = (() => {
     const findBytes = {
       name: "find_bytes",
       description: "Find byte sequence hits in executable sections.",
-      usage: "dx @$osed.find_bytes({ module: 'essfunc', bytes: [0xFF,0xE4] })",
+      usage: "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0xFF,0xE4] })",
       examples: [
-        "dx @$osed.find_bytes({ module: 'essfunc', bytes: [0xFF, 0xE4] })",
-        "dx @$osed.find_bytes({ module: 'essfunc', bytes: [0x58, 0xC3], maxResults: 25 })"
+        "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0xFF, 0xE4] })",
+        "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0x58, 0xC3], maxResults: 25 })"
       ],
       schema: {
         module: { type: "string", required: true },
@@ -3380,11 +3380,11 @@ var osed_bundle = (() => {
     const ropSuggest = {
       name: "rop_suggest",
       description: "Suggest common exploit-friendly gadget patterns.",
-      usage: "dx @$osed.rop_suggest({ module: 'essfunc', engine: 'semantic' })",
+      usage: "dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })",
       examples: [
-        "dx @$osed.rop_suggest({ module: 'essfunc' })",
-        "dx @$osed.rop_suggest({ module: 'essfunc', engine: 'semantic' })",
-        "dx @$osed.rop_suggest({ mode: 'thorough', engine: 'legacy' })"
+        "dx @$osed().rop_suggest({ module: 'essfunc' })",
+        "dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })",
+        "dx @$osed().rop_suggest({ mode: 'thorough', engine: 'legacy' })"
       ],
       schema: {
         module: { type: "string" },
@@ -3407,10 +3407,10 @@ var osed_bundle = (() => {
     const retnGadgets = {
       name: "retn",
       description: "Scan for retn N gadgets that pop N bytes before returning.",
-      usage: "dx @$osed.retn({ module: 'essfunc', maxResults: 50 })",
+      usage: "dx @$osed().retn({ module: 'essfunc', maxResults: 50 })",
       examples: [
-        "dx @$osed.retn({ module: 'essfunc' })",
-        "dx @$osed.retn({ module: 'essfunc', maxResults: 100 })"
+        "dx @$osed().retn({ module: 'essfunc' })",
+        "dx @$osed().retn({ module: 'essfunc', maxResults: 100 })"
       ],
       schema: {
         module: { type: "string" },
@@ -3482,10 +3482,10 @@ var osed_bundle = (() => {
     const addEsp = {
       name: "add_esp",
       description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
-      usage: "dx @$osed.add_esp({ module: 'essfunc', maxResults: 50 })",
+      usage: "dx @$osed().add_esp({ module: 'essfunc', maxResults: 50 })",
       examples: [
-        "dx @$osed.add_esp({ module: 'essfunc' })",
-        "dx @$osed.add_esp({ module: 'essfunc', maxResults: 100 })"
+        "dx @$osed().add_esp({ module: 'essfunc' })",
+        "dx @$osed().add_esp({ module: 'essfunc', maxResults: 100 })"
       ],
       schema: {
         module: { type: "string" },
@@ -3627,8 +3627,8 @@ var osed_bundle = (() => {
     return {
       name: "pivots",
       description: "Scan for stack pivot candidates.",
-      usage: "dx @$osed.pivots({ module: 'essfunc', maxResults: 50 })",
-      examples: ["dx @$osed.pivots({ module: 'essfunc' })", "dx @$osed.pivots({ mode: 'thorough' })"],
+      usage: "dx @$osed().pivots({ module: 'essfunc', maxResults: 50 })",
+      examples: ["dx @$osed().pivots({ module: 'essfunc' })", "dx @$osed().pivots({ mode: 'thorough' })"],
       schema: {
         module: { type: "string" },
         executableOnly: { type: "boolean", default: true },
@@ -3711,17 +3711,202 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/core/help_catalog.ts
+  var NAMESPACE_HELP_ENTRIES = [
+    {
+      name: "pattern.create",
+      description: "Generates cyclic pattern text.",
+      usage: "dx @$osed().pattern.create(length, type?)",
+      examples: ['dx @$osed().pattern.create(300, "msf")']
+    },
+    {
+      name: "pattern.offset",
+      description: "Finds an offset in the selected pattern family.",
+      usage: "dx @$osed().pattern.offset(value, type?)",
+      examples: ['dx @$osed().pattern.offset(0x39654138, "msf")']
+    },
+    {
+      name: "seh.visualize",
+      description: "Walks the current thread SEH chain.",
+      usage: "dx @$osed().seh.visualize()",
+      examples: ["dx @$osed().seh.visualize()"]
+    },
+    {
+      name: "fmt.build",
+      description: "Builds a format-string write payload.",
+      usage: "dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?)",
+      examples: ["dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)"]
+    },
+    {
+      name: "fmt.offset",
+      description: "Finds the controlled format-string parameter index.",
+      usage: "dx @$osed().fmt.offset(marker?, count?, firstArg?)",
+      examples: ["dx @$osed().fmt.offset(0x41414141, 40)"]
+    },
+    {
+      name: "rop.scan",
+      description: "Loads pasted RP++ output into the semantic ROP corpus.",
+      usage: "dx @$osed().rop.scan(text, options?)",
+      examples: ['dx @$osed().rop.scan("0x1000: pop eax ; ret ;")']
+    },
+    {
+      name: "rop.query",
+      description: "Filters the loaded semantic ROP corpus.",
+      usage: "dx @$osed().rop.query(query)",
+      examples: ['dx @$osed().rop.query({ transforms: [{ register: "esi", base: "esi", offset: 4 }] })']
+    },
+    {
+      name: "rop.capabilities",
+      description: "Summarizes capabilities in the loaded semantic ROP corpus.",
+      usage: "dx @$osed().rop.capabilities()",
+      examples: ["dx @$osed().rop.capabilities()"]
+    },
+    {
+      name: "sc.iat",
+      description: "Enumerates imported addresses for a module, optionally filtered by DLL or symbol substring.",
+      usage: "dx @$osed().sc.iat(module?, filter?)",
+      examples: ["dx @$osed().sc.iat()", 'dx @$osed().sc.iat("app.exe", "Virtual")']
+    },
+    {
+      name: "sc.iat_find",
+      description: "Searches all loaded modules for matching IAT entries.",
+      usage: "dx @$osed().sc.iat_find(symbol)",
+      examples: ['dx @$osed().sc.iat_find("VirtualAlloc")']
+    },
+    {
+      name: "sc.iat_ptr",
+      description: "Resolves one imported symbol to its IAT slot and current target pointer.",
+      usage: "dx @$osed().sc.iat_ptr(module, symbol)",
+      examples: ['dx @$osed().sc.iat_ptr("app.exe", "VirtualProtect")']
+    },
+    {
+      name: "sc.exportdir",
+      description: "Shows PE export directory addresses and table metadata.",
+      usage: "dx @$osed().sc.exportdir(module)",
+      examples: ['dx @$osed().sc.exportdir("kernel32")']
+    },
+    {
+      name: "sc.export",
+      description: "Resolves an export by name and reports ordinal, RVA, VA, and forwarder data.",
+      usage: "dx @$osed().sc.export(module, symbol)",
+      examples: ['dx @$osed().sc.export("kernel32", "GetProcAddress")']
+    },
+    {
+      name: "sc.exportwalk",
+      description: "Walks PE export resolution checkpoints.",
+      usage: "dx @$osed().sc.exportwalk(module, symbol?, verbose?)",
+      examples: ['dx @$osed().sc.exportwalk("kernel32", "GetProcAddress")']
+    },
+    {
+      name: "sc.exportat",
+      description: "Resolves an export by ordinal index.",
+      usage: "dx @$osed().sc.exportat(module, ordinalIndex)",
+      examples: ['dx @$osed().sc.exportat("kernel32", 842)']
+    },
+    {
+      name: "sc.hashresolve",
+      description: "Resolves an API hash against module exports.",
+      usage: "dx @$osed().sc.hashresolve(module, hashValue, algorithm?)",
+      examples: ['dx @$osed().sc.hashresolve("kernel32", 0x7c0dfcaa, "ROR13")']
+    },
+    {
+      name: "sc.exports",
+      description: "Enumerates exported symbols, optionally filtered by substring.",
+      usage: "dx @$osed().sc.exports(module, filter?)",
+      examples: ['dx @$osed().sc.exports("kernel32", "Virtual")']
+    },
+    {
+      name: "sc.resolve",
+      description: "Resolves one export to an address.",
+      usage: "dx @$osed().sc.resolve(module, symbol)",
+      examples: ['dx @$osed().sc.resolve("kernel32", "WinExec")']
+    },
+    {
+      name: "sc.hashes",
+      description: "Hashes named exports with the selected shellforge-compatible algorithm.",
+      usage: "dx @$osed().sc.hashes(module, algorithm?)",
+      examples: ['dx @$osed().sc.hashes("kernel32", "crc32")']
+    },
+    {
+      name: "sc.hash",
+      description: "Hashes one API name.",
+      usage: "dx @$osed().sc.hash(name, algorithm?)",
+      examples: ['dx @$osed().sc.hash("WinExec", "ROR13")']
+    },
+    {
+      name: "sc.algorithms",
+      description: "Lists supported API hash algorithms.",
+      usage: "dx @$osed().sc.algorithms()",
+      examples: ["dx @$osed().sc.algorithms()"]
+    },
+    {
+      name: "sc.pe",
+      description: "Prints PE header fields for a module.",
+      usage: "dx @$osed().sc.pe(module)",
+      examples: ['dx @$osed().sc.pe("kernel32")']
+    },
+    {
+      name: "sc.base",
+      description: "Resolves a module base address.",
+      usage: "dx @$osed().sc.base(module)",
+      examples: ['dx @$osed().sc.base("kernel32")']
+    },
+    {
+      name: "sc.modules",
+      description: "Lists loaded modules.",
+      usage: "dx @$osed().sc.modules()",
+      examples: ["dx @$osed().sc.modules()"]
+    },
+    {
+      name: "sc.peb",
+      description: "Dumps current PEB-oriented module evidence.",
+      usage: "dx @$osed().sc.peb()",
+      examples: ["dx @$osed().sc.peb()"]
+    },
+    {
+      name: "sc.module_pages",
+      description: "Reports module size and estimated page count.",
+      usage: "dx @$osed().sc.module_pages(module)",
+      examples: ['dx @$osed().sc.module_pages("kernel32")']
+    },
+    {
+      name: "sc.page_summary",
+      description: "Buckets module pages by protection value.",
+      usage: "dx @$osed().sc.page_summary(module)",
+      examples: ['dx @$osed().sc.page_summary("kernel32")']
+    }
+  ];
+  function findHelpEntry(name) {
+    const normalized = name.trim().toLowerCase();
+    return NAMESPACE_HELP_ENTRIES.find((entry) => entry.name.toLowerCase() === normalized);
+  }
+  function helpRows(entry) {
+    return [
+      {
+        Helper: entry.name,
+        Usage: entry.usage,
+        Description: entry.description
+      },
+      ...entry.examples.map((example) => ({
+        Helper: "example",
+        Usage: example,
+        Description: ""
+      }))
+    ];
+  }
+
   // src/commands/help.ts
   function createHelpCommand(registry2) {
     return {
       name: "help",
       description: "List commands or show detailed command help.",
-      usage: "dx @$osed.help({ command: 'badchars' })",
-      examples: ["dx @$osed.help({})", "dx @$osed.help({ command: 'badchars' })"],
+      usage: "dx @$osed().help(command?)",
+      examples: ["dx @$osed().help()", 'dx @$osed().help("badchars")', 'dx @$osed().help("sc.iat")'],
       schema: {
         command: { type: "string" }
       },
       execute(options) {
+        var _a;
         const commandName = options.command;
         if (!commandName) {
           const commands = registry2.getAll();
@@ -3733,18 +3918,38 @@ var osed_bundle = (() => {
             ],
             commands.map((command2) => ({ name: command2.name, description: command2.description }))
           );
+          const groups = /* @__PURE__ */ new Map();
+          for (const entry of NAMESPACE_HELP_ENTRIES) {
+            const group = entry.name.includes(".") ? entry.name.split(".")[0] : "other";
+            groups.set(group, [...(_a = groups.get(group)) != null ? _a : [], entry]);
+          }
+          for (const [group, entries] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+            section(`${group} Namespace Helpers`);
+            table(
+              [
+                { key: "name", header: "Helper", width: 22 },
+                { key: "description", header: "Description", width: 56 }
+              ],
+              entries.map((entry) => ({ name: entry.name, description: entry.description }))
+            );
+          }
+          info('Use help("name") for details, e.g. dx @$osed().help("sc.iat").');
+          info('Most helpers also accept "help" as the first argument, e.g. dx @$osed().sc.iat("help").');
           whyItMatters("Fast command discovery lowers debugger friction during exploit iteration.");
           return {
             command: "help",
             args: options,
             success: true,
-            findings: commands.map((command2) => ({
-              name: command2.name,
-              description: command2.description,
-              usage: command2.usage,
-              examples: command2.examples,
-              schema: command2.schema
-            })),
+            findings: [
+              ...commands.map((command2) => ({
+                name: command2.name,
+                description: command2.description,
+                usage: command2.usage,
+                examples: command2.examples,
+                schema: command2.schema
+              })),
+              ...NAMESPACE_HELP_ENTRIES
+            ],
             warnings: [],
             errors: [],
             schema: {
@@ -3753,6 +3958,34 @@ var osed_bundle = (() => {
           };
         }
         const command = registry2.get(commandName);
+        const helper = findHelpEntry(commandName);
+        if (!command && !helper) {
+          return {
+            command: "help",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: [`Unknown command '${commandName}'.`]
+          };
+        }
+        if (helper) {
+          section(`Help: ${helper.name}`);
+          info(helper.description);
+          info(`Usage: ${helper.usage}`);
+          for (const example of helper.examples) {
+            print(`  ${example}`);
+          }
+          whyItMatters("Inline helper documentation keeps namespace workflows discoverable at the debugger prompt.");
+          return {
+            command: "help",
+            args: options,
+            success: true,
+            findings: helpRows(helper),
+            warnings: [],
+            errors: []
+          };
+        }
         if (!command) {
           return {
             command: "help",
@@ -3796,8 +4029,8 @@ var osed_bundle = (() => {
     return {
       name: "reload",
       description: "Clear and re-register command registry.",
-      usage: "dx @$osed.reload({})",
-      examples: ["dx @$osed.reload({})", "dx @$osed.reload({})"],
+      usage: "dx @$osed().reload({})",
+      examples: ["dx @$osed().reload({})", "dx @$osed().reload({})"],
       schema: {},
       execute(options) {
         var _a, _b;
@@ -4011,11 +4244,11 @@ var osed_bundle = (() => {
     return {
       name: "exploit",
       description: "Emit deterministic exploit-development command workflows.",
-      usage: "dx @$osed.exploit({ mode: 'egghunter', tag: 'W00T', offset: 260 })",
+      usage: "dx @$osed().exploit({ mode: 'egghunter', tag: 'W00T', offset: 260 })",
       examples: [
-        "dx @$osed.exploit({ mode: 'egghunter', tag: 'W00T', offset: 260 })",
-        "dx @$osed.exploit({ mode: 'offset' })",
-        "dx @$osed.exploit({ mode: 'badchars', address: 0x00B8F900 })"
+        "dx @$osed().exploit({ mode: 'egghunter', tag: 'W00T', offset: 260 })",
+        "dx @$osed().exploit({ mode: 'offset' })",
+        "dx @$osed().exploit({ mode: 'badchars', address: 0x00B8F900 })"
       ],
       schema: {
         mode: { type: "string", enum: ["egghunter", "offset", "badchars"], required: true },
@@ -4881,10 +5114,10 @@ var osed_bundle = (() => {
     return {
       name: "encode",
       description: "XOR-encode shellcode to eliminate bad characters.",
-      usage: `dx @$osed.encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0, 10, 13] })`,
+      usage: `dx @$osed().encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0, 10, 13] })`,
       examples: [
-        `dx @$osed.encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0x00, 0x0a, 0x0d] })`,
-        `dx @$osed.encode({ shellcode: "fc e8...", exclude: [0, 10, 13], key: 0x41 })`
+        `dx @$osed().encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0x00, 0x0a, 0x0d] })`,
+        `dx @$osed().encode({ shellcode: "fc e8...", exclude: [0, 10, 13], key: 0x41 })`
       ],
       schema: {
         shellcode: { type: "string", required: true },
@@ -4969,11 +5202,11 @@ var osed_bundle = (() => {
     return {
       name: "nop",
       description: "Generate a NOP sled of N bytes.",
-      usage: "dx @$osed.nop(16)",
+      usage: "dx @$osed().nop(16)",
       examples: [
-        "dx @$osed.nop(16)",
-        "dx @$osed.nop({ length: 32 })",
-        "dx @$osed.nop({ length: 16, byte: 0x90 })"
+        "dx @$osed().nop(16)",
+        "dx @$osed().nop({ length: 32 })",
+        "dx @$osed().nop({ length: 16, byte: 0x90 })"
       ],
       schema: {
         length: { type: "number", min: 1, max: 4096, required: true },
@@ -5124,10 +5357,10 @@ var osed_bundle = (() => {
     return {
       name: "rop_template",
       description: "Print a commented VirtualProtect or WriteProcessMemory ROP chain skeleton.",
-      usage: "dx @$osed.rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
+      usage: "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
       examples: [
-        "dx @$osed.rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
-        "dx @$osed.rop_template({ api: 'WriteProcessMemory', module: 'essfunc' })"
+        "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
+        "dx @$osed().rop_template({ api: 'WriteProcessMemory', module: 'essfunc' })"
       ],
       schema: {
         api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory"], default: "VirtualProtect" },
@@ -6848,26 +7081,31 @@ var osed_bundle = (() => {
   }
   function createShellcodeNamespace() {
     const helper = new ShellcodeHelper();
+    const helperHelp = (name) => {
+      const entry = findHelpEntry(name);
+      return toDxRows(entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
+    };
+    const wantsHelp = (value) => value === "help";
     return {
-      peb: () => toDxRows(helper.peb()),
-      modules: () => toDxRows(helper.modules()),
-      module_pages: (name) => toDxRows(helper.modulePages(name)),
-      page_summary: (name) => toDxRows(helper.pageSummary(name)),
-      base: (name) => toDxRows(helper.base(name)),
-      pe: (name) => toDxRows(helper.pe(name)),
-      exports: (name, filter) => toDxRows(helper.exports(name, filter)),
-      resolve: (module, symbol) => toDxRows(helper.resolve(module, symbol)),
-      hashes: (module, algorithm) => toDxRows(helper.hashes(module, algorithm)),
-      hash: (name, algorithm) => toDxRows(helper.hash(name, algorithm)),
-      hashresolve: (module, hashValue, algorithm) => toDxRows(helper.hashresolve(module, hashValue, algorithm)),
-      algorithms: () => toDxRows(helper.algorithms()),
-      exportdir: (module) => toDxRows(helper.exportdir(module)),
-      export: (module, symbol) => toDxRows(helper.export(module, symbol)),
-      exportat: (module, ordinalIndex) => toDxRows(helper.exportat(module, ordinalIndex)),
-      exportwalk: (module, symbol, verbose) => toDxRows(helper.exportwalk(module, symbol, verbose)),
-      iat: (module, filter) => toDxRows(helper.iat(module, filter)),
-      iat_find: (symbol) => toDxRows(helper.iat_find(symbol)),
-      iat_ptr: (module, symbol) => toDxRows(helper.iat_ptr(module, symbol))
+      peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : toDxRows(helper.peb()),
+      modules: (help) => wantsHelp(help) ? helperHelp("sc.modules") : toDxRows(helper.modules()),
+      module_pages: (name) => wantsHelp(name) ? helperHelp("sc.module_pages") : toDxRows(helper.modulePages(name)),
+      page_summary: (name) => wantsHelp(name) ? helperHelp("sc.page_summary") : toDxRows(helper.pageSummary(name)),
+      base: (name) => wantsHelp(name) ? helperHelp("sc.base") : toDxRows(helper.base(name)),
+      pe: (name) => wantsHelp(name) ? helperHelp("sc.pe") : toDxRows(helper.pe(name)),
+      exports: (name, filter) => wantsHelp(name) ? helperHelp("sc.exports") : toDxRows(helper.exports(name, filter)),
+      resolve: (module, symbol) => wantsHelp(module) ? helperHelp("sc.resolve") : toDxRows(helper.resolve(module, symbol)),
+      hashes: (module, algorithm) => wantsHelp(module) ? helperHelp("sc.hashes") : toDxRows(helper.hashes(module, algorithm)),
+      hash: (name, algorithm) => wantsHelp(name) ? helperHelp("sc.hash") : toDxRows(helper.hash(name, algorithm)),
+      hashresolve: (module, hashValue, algorithm) => wantsHelp(module) ? helperHelp("sc.hashresolve") : toDxRows(helper.hashresolve(module, hashValue, algorithm)),
+      algorithms: (help) => wantsHelp(help) ? helperHelp("sc.algorithms") : toDxRows(helper.algorithms()),
+      exportdir: (module) => wantsHelp(module) ? helperHelp("sc.exportdir") : toDxRows(helper.exportdir(module)),
+      export: (module, symbol) => wantsHelp(module) ? helperHelp("sc.export") : toDxRows(helper.export(module, symbol)),
+      exportat: (module, ordinalIndex) => wantsHelp(module) ? helperHelp("sc.exportat") : toDxRows(helper.exportat(module, ordinalIndex)),
+      exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : toDxRows(helper.exportwalk(module, symbol, verbose)),
+      iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : toDxRows(helper.iat(module, filter)),
+      iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : toDxRows(helper.iat_find(symbol)),
+      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : toDxRows(helper.iat_ptr(module, symbol))
     };
   }
   var DxRow = class {
@@ -7127,6 +7365,11 @@ var osed_bundle = (() => {
   function bindApi() {
     const api = {};
     const invoke = (commandName, args) => {
+      if (args.length === 1 && args[0] === "help") {
+        const result4 = registry.execute("help", { command: commandName });
+        lastResult = result4;
+        return result4.success;
+      }
       const result3 = registry.execute(commandName, normalizeInvocation(commandName, args));
       lastResult = result3;
       return result3.success;
@@ -7180,6 +7423,19 @@ var osed_bundle = (() => {
       }
       return summarizeCapabilities(currentRopCorpus);
     };
+    const helperHelp = (name) => {
+      const entry = findHelpEntry(name);
+      const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
+      setResult({
+        command: "help",
+        args: { command: name },
+        success: entry !== void 0,
+        findings: rows,
+        warnings: [],
+        errors: entry ? [] : [`Unknown helper '${name}'.`]
+      });
+      return rows;
+    };
     const scanCorpus = (text, options = {}) => {
       currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
       const rows = summarizeCapabilities(currentRopCorpus);
@@ -7201,6 +7457,9 @@ var osed_bundle = (() => {
     };
     const executeRopScan = (...args) => {
       var _a, _b, _c;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.scan");
+      }
       if (args.length === 0) {
         const rows = [{ Error: "rop.scan requires RP++ text input." }];
         setResult({
@@ -7237,6 +7496,9 @@ var osed_bundle = (() => {
       });
     };
     const executeRopQuery = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.query");
+      }
       const query = isPlainObject(args[0]) ? args[0] : void 0;
       if (!query) {
         const rows2 = [{ Error: "rop.query requires a query object." }];
@@ -7274,7 +7536,10 @@ var osed_bundle = (() => {
       });
       return rows;
     };
-    const executeRopCapabilities = () => {
+    const executeRopCapabilities = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.capabilities");
+      }
       const rows = capabilityRows();
       setResult({
         command: "rop.capabilities",

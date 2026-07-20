@@ -1,5 +1,6 @@
 import { getPointerSize, readMemory, readUint16LE, readUint32LE, readPointer } from "../core/memory";
 import { formatAddress } from "../core/output";
+import { findHelpEntry, helpRows } from "../core/help_catalog";
 
 type ModuleInfo = {
   name: string;
@@ -1599,27 +1600,33 @@ export function createShellcodeNamespace(): {
   iat_ptr: (module: string, symbol: string) => unknown[];
 } {
   const helper = new ShellcodeHelper();
+  const helperHelp = (name: string): unknown[] => {
+    const entry = findHelpEntry(name);
+    return toDxRows(entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
+  };
+  const wantsHelp = (value: unknown): boolean => value === "help";
+
   return {
-    peb: () => toDxRows(helper.peb()),
-    modules: () => toDxRows(helper.modules()),
-    module_pages: (name: string) => toDxRows(helper.modulePages(name)),
-    page_summary: (name: string) => toDxRows(helper.pageSummary(name)),
-    base: (name: string) => toDxRows(helper.base(name)),
-    pe: (name: string) => toDxRows(helper.pe(name)),
-    exports: (name: string, filter?: string) => toDxRows(helper.exports(name, filter)),
-    resolve: (module: string, symbol: string) => toDxRows(helper.resolve(module, symbol)),
-    hashes: (module: string, algorithm?: string) => toDxRows(helper.hashes(module, algorithm)),
-    hash: (name: string, algorithm?: string) => toDxRows(helper.hash(name, algorithm)),
+    peb: (help?: string) => wantsHelp(help) ? helperHelp("sc.peb") : toDxRows(helper.peb()),
+    modules: (help?: string) => wantsHelp(help) ? helperHelp("sc.modules") : toDxRows(helper.modules()),
+    module_pages: (name: string) => wantsHelp(name) ? helperHelp("sc.module_pages") : toDxRows(helper.modulePages(name)),
+    page_summary: (name: string) => wantsHelp(name) ? helperHelp("sc.page_summary") : toDxRows(helper.pageSummary(name)),
+    base: (name: string) => wantsHelp(name) ? helperHelp("sc.base") : toDxRows(helper.base(name)),
+    pe: (name: string) => wantsHelp(name) ? helperHelp("sc.pe") : toDxRows(helper.pe(name)),
+    exports: (name: string, filter?: string) => wantsHelp(name) ? helperHelp("sc.exports") : toDxRows(helper.exports(name, filter)),
+    resolve: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.resolve") : toDxRows(helper.resolve(module, symbol)),
+    hashes: (module: string, algorithm?: string) => wantsHelp(module) ? helperHelp("sc.hashes") : toDxRows(helper.hashes(module, algorithm)),
+    hash: (name: string, algorithm?: string) => wantsHelp(name) ? helperHelp("sc.hash") : toDxRows(helper.hash(name, algorithm)),
     hashresolve: (module: string, hashValue: string | number | bigint, algorithm?: string) =>
-      toDxRows(helper.hashresolve(module, hashValue, algorithm)),
-    algorithms: () => toDxRows(helper.algorithms()),
-    exportdir: (module: string) => toDxRows(helper.exportdir(module)),
-    export: (module: string, symbol: string) => toDxRows(helper.export(module, symbol)),
-    exportat: (module: string, ordinalIndex: number) => toDxRows(helper.exportat(module, ordinalIndex)),
-    exportwalk: (module: string, symbol?: string, verbose?: boolean) => toDxRows(helper.exportwalk(module, symbol, verbose)),
-    iat: (module?: string, filter?: string) => toDxRows(helper.iat(module, filter)),
-    iat_find: (symbol: string) => toDxRows(helper.iat_find(symbol)),
-    iat_ptr: (module: string, symbol: string) => toDxRows(helper.iat_ptr(module, symbol)),
+      wantsHelp(module) ? helperHelp("sc.hashresolve") : toDxRows(helper.hashresolve(module, hashValue, algorithm)),
+    algorithms: (help?: string) => wantsHelp(help) ? helperHelp("sc.algorithms") : toDxRows(helper.algorithms()),
+    exportdir: (module: string) => wantsHelp(module) ? helperHelp("sc.exportdir") : toDxRows(helper.exportdir(module)),
+    export: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.export") : toDxRows(helper.export(module, symbol)),
+    exportat: (module: string, ordinalIndex: number) => wantsHelp(module) ? helperHelp("sc.exportat") : toDxRows(helper.exportat(module, ordinalIndex)),
+    exportwalk: (module: string, symbol?: string, verbose?: boolean) => wantsHelp(module) ? helperHelp("sc.exportwalk") : toDxRows(helper.exportwalk(module, symbol, verbose)),
+    iat: (module?: string, filter?: string) => wantsHelp(module) ? helperHelp("sc.iat") : toDxRows(helper.iat(module, filter)),
+    iat_find: (symbol: string) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : toDxRows(helper.iat_find(symbol)),
+    iat_ptr: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : toDxRows(helper.iat_ptr(module, symbol)),
   };
 }
 

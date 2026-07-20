@@ -282,8 +282,8 @@ export function createRopCommands(): Command[] {
   const rop: Command = {
     name: "rop",
     description: "ROP helper entrypoint and module triage.",
-    usage: "dx @$osed.rop({ module: 'essfunc', maxResults: 50 })",
-    examples: ["dx @$osed.rop({})", "dx @$osed.rop({ module: 'essfunc' })"],
+    usage: "dx @$osed().rop({ module: 'essfunc', maxResults: 50 })",
+    examples: ["dx @$osed().rop({})", "dx @$osed().rop({ module: 'essfunc' })"],
     schema: {
       module: { type: "string" },
       executableOnly: { type: "boolean", default: true },
@@ -322,10 +322,10 @@ export function createRopCommands(): Command[] {
   const findBytes: Command = {
     name: "find_bytes",
     description: "Find byte sequence hits in executable sections.",
-    usage: "dx @$osed.find_bytes({ module: 'essfunc', bytes: [0xFF,0xE4] })",
+    usage: "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0xFF,0xE4] })",
     examples: [
-      "dx @$osed.find_bytes({ module: 'essfunc', bytes: [0xFF, 0xE4] })",
-      "dx @$osed.find_bytes({ module: 'essfunc', bytes: [0x58, 0xC3], maxResults: 25 })",
+      "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0xFF, 0xE4] })",
+      "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0x58, 0xC3], maxResults: 25 })",
     ],
     schema: {
       module: { type: "string", required: true },
@@ -382,11 +382,11 @@ export function createRopCommands(): Command[] {
   const ropSuggest: Command = {
     name: "rop_suggest",
     description: "Suggest common exploit-friendly gadget patterns.",
-    usage: "dx @$osed.rop_suggest({ module: 'essfunc', engine: 'semantic' })",
+    usage: "dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })",
     examples: [
-      "dx @$osed.rop_suggest({ module: 'essfunc' })",
-      "dx @$osed.rop_suggest({ module: 'essfunc', engine: 'semantic' })",
-      "dx @$osed.rop_suggest({ mode: 'thorough', engine: 'legacy' })",
+      "dx @$osed().rop_suggest({ module: 'essfunc' })",
+      "dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })",
+      "dx @$osed().rop_suggest({ mode: 'thorough', engine: 'legacy' })",
     ],
     schema: {
       module: { type: "string" },
@@ -411,10 +411,10 @@ export function createRopCommands(): Command[] {
   const retnGadgets: Command = {
     name: "retn",
     description: "Scan for retn N gadgets that pop N bytes before returning.",
-    usage: "dx @$osed.retn({ module: 'essfunc', maxResults: 50 })",
+    usage: "dx @$osed().retn({ module: 'essfunc', maxResults: 50 })",
     examples: [
-      "dx @$osed.retn({ module: 'essfunc' })",
-      "dx @$osed.retn({ module: 'essfunc', maxResults: 100 })",
+      "dx @$osed().retn({ module: 'essfunc' })",
+      "dx @$osed().retn({ module: 'essfunc', maxResults: 100 })",
     ],
     schema: {
       module: { type: "string" },
@@ -499,10 +499,10 @@ export function createRopCommands(): Command[] {
   const addEsp: Command = {
     name: "add_esp",
     description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
-    usage: "dx @$osed.add_esp({ module: 'essfunc', maxResults: 50 })",
+    usage: "dx @$osed().add_esp({ module: 'essfunc', maxResults: 50 })",
     examples: [
-      "dx @$osed.add_esp({ module: 'essfunc' })",
-      "dx @$osed.add_esp({ module: 'essfunc', maxResults: 100 })",
+      "dx @$osed().add_esp({ module: 'essfunc' })",
+      "dx @$osed().add_esp({ module: 'essfunc', maxResults: 100 })",
     ],
     schema: {
       module: { type: "string" },
