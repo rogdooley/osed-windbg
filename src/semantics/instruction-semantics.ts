@@ -161,11 +161,15 @@ function parseImmediateValue(text: string): number | undefined {
     const negative = raw.startsWith("-");
     const hex = negative ? raw.slice(3) : raw.slice(2);
     const parsed = Number.parseInt(hex, 16);
-    return Number.isFinite(parsed) ? (negative ? -parsed : parsed) : undefined;
+    if (!Number.isFinite(parsed)) {
+      return undefined;
+    }
+    const value = negative ? -parsed : parsed;
+    return value | 0;
   }
   if (/^-?\d+$/.test(raw)) {
     const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return Number.isFinite(parsed) ? parsed | 0 : undefined;
   }
   return undefined;
 }
@@ -209,6 +213,10 @@ function memoryAddressExpression(text: string): RegisterExpr | undefined {
   }
   const offset = match[2] === "-" ? -rawOffset : rawOffset;
   return registerExpr(register, offset);
+}
+
+function stackDeltaForRegisterImmediate(register: Register, delta: number | undefined): RuleResult["stackDelta"] {
+  return register === "esp" && delta !== undefined ? { exact: [delta] } : undefined;
 }
 
 function stackReadEvidence(text: string): string {
@@ -403,7 +411,7 @@ const RULES: Rule[] = [
       return {
         reads: [left.register],
         writes: [left.register],
-        stackDelta: left.register === "esp" ? { conservative: [Number.parseInt(right.text.replace(/^0x/, ""), 16) || 0] } : undefined,
+        stackDelta: stackDeltaForRegisterImmediate(left.register, imm),
         registerEffects: { [left.register]: imm === undefined ? unknownExpr() : selfPlus(imm) },
         evidence: [`ADD ${left.register}, ${right.text}`],
       };
@@ -439,6 +447,7 @@ const RULES: Rule[] = [
       return {
         reads: [left.register],
         writes: [left.register],
+        stackDelta: stackDeltaForRegisterImmediate(left.register, imm === undefined ? undefined : -imm),
         registerEffects: { [left.register]: imm === undefined ? unknownExpr() : selfPlus(-imm) },
         evidence: [`SUB ${left.register}, ${right.text}`],
       };

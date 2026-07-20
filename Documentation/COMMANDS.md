@@ -148,6 +148,17 @@ The `rop` runtime namespace is a semantic query surface layered on top of RP++ o
 | `rop.query` | `dx @$osed().rop.query(query)` | `dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
 
+`rop.query` supports net register-transform predicates:
+
+```js
+dx @$osed().rop.query({ preserves: ["eax"] })
+dx @$osed().rop.query({ preservesThroughout: ["eax"] })
+dx @$osed().rop.query({ transforms: [{ register: "esi", base: "esi", offset: 4 }] })
+dx @$osed().rop.query({ transforms: [{ register: "esi", fromMemory: true }] })
+```
+
+`preserves` means the register is unchanged at gadget exit. `preservesThroughout` means no instruction writes the register. Transform queries match derived facts such as `esi = esi + 4`, `esi = eax`, fixed constants, and memory-loaded values; unknown net transforms do not satisfy positive predicates.
+
 ## Command Shortcuts
 
 These are aliases backed by top-level commands.

@@ -233,7 +233,7 @@ function readAvailablePrefix(address: bigint, requestedBytes: number): Uint8Arra
 
   let low = 0;
   let high = requestedBytes - 1;
-  let available = new Uint8Array();
+  let available: Uint8Array = new Uint8Array();
   while (low <= high) {
     const length = Math.floor((low + high) / 2);
     if (length === 0) {

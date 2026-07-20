@@ -2266,11 +2266,15 @@ var osed_bundle = (() => {
       const negative = raw.startsWith("-");
       const hex = negative ? raw.slice(3) : raw.slice(2);
       const parsed = Number.parseInt(hex, 16);
-      return Number.isFinite(parsed) ? negative ? -parsed : parsed : void 0;
+      if (!Number.isFinite(parsed)) {
+        return void 0;
+      }
+      const value = negative ? -parsed : parsed;
+      return value | 0;
     }
     if (/^-?\d+$/.test(raw)) {
       const parsed = Number.parseInt(raw, 10);
-      return Number.isFinite(parsed) ? parsed : void 0;
+      return Number.isFinite(parsed) ? parsed | 0 : void 0;
     }
     return void 0;
   }
@@ -2307,6 +2311,9 @@ var osed_bundle = (() => {
     }
     const offset = match[2] === "-" ? -rawOffset : rawOffset;
     return registerExpr(register, offset);
+  }
+  function stackDeltaForRegisterImmediate(register, delta) {
+    return register === "esp" && delta !== void 0 ? { exact: [delta] } : void 0;
   }
   function unsupported(instruction) {
     const text = canonicalizeInstruction(instruction);
@@ -2487,7 +2494,7 @@ var osed_bundle = (() => {
         return {
           reads: [left.register],
           writes: [left.register],
-          stackDelta: left.register === "esp" ? { conservative: [Number.parseInt(right.text.replace(/^0x/, ""), 16) || 0] } : void 0,
+          stackDelta: stackDeltaForRegisterImmediate(left.register, imm),
           registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(imm) },
           evidence: [`ADD ${left.register}, ${right.text}`]
         };
@@ -2523,6 +2530,7 @@ var osed_bundle = (() => {
         return {
           reads: [left.register],
           writes: [left.register],
+          stackDelta: stackDeltaForRegisterImmediate(left.register, imm === void 0 ? void 0 : -imm),
           registerEffects: { [left.register]: imm === void 0 ? unknownExpr() : selfPlus(-imm) },
           evidence: [`SUB ${left.register}, ${right.text}`]
         };
@@ -6673,7 +6681,10 @@ var osed_bundle = (() => {
       if (lookup.kind === "ambiguous") {
         return this.moduleCandidatesRows(lookup.candidates);
       }
-      return this.errorRows(`No module matches "${lookup.name}".`);
+      if (lookup.kind === "not_found") {
+        return this.errorRows(`No module matches "${lookup.name}".`);
+      }
+      return this.errorRows(`Unexpected successful module lookup for "${lookup.module.name}".`);
     }
     errorRows(message) {
       return [{ Error: message }];

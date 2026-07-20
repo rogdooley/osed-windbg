@@ -95,7 +95,7 @@ class HashResolver {
   private readonly defaultAlias = "ror13";
 
   public constructor(providers?: HashProvider[]) {
-    const configured = providers ?? [
+    const configured: HashProvider[] = providers ?? [
       new MetasploitRor13Provider(),
       new Crc32Provider(),
       new Rol7AddProvider(),
@@ -1385,7 +1385,10 @@ class ShellcodeHelper {
     if (lookup.kind === "ambiguous") {
       return this.moduleCandidatesRows(lookup.candidates);
     }
-    return this.errorRows(`No module matches "${lookup.name}".`);
+    if (lookup.kind === "not_found") {
+      return this.errorRows(`No module matches "${lookup.name}".`);
+    }
+    return this.errorRows(`Unexpected successful module lookup for "${lookup.module.name}".`);
   }
 
   private errorRows(message: string): Array<Record<string, string>> {

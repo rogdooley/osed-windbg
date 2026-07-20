@@ -109,6 +109,25 @@ describe("semantic pipeline", () => {
     expect(semantic.summary.stackDelta.values.exact.has(20)).toBe(true);
   });
 
+  test("esp arithmetic stack delta matches net esp transform", async () => {
+    const cases = [
+      { text: "0x1000: add esp, 16 ; ret ;", delta: 20 },
+      { text: "0x1000: add esp, -4 ; ret ;", delta: 0 },
+      { text: "0x1000: sub esp, 4 ; ret ;", delta: 0 },
+    ];
+
+    for (const item of cases) {
+      const [sequence] = await loadAll(new RPPlusProvider(item.text));
+      const semantic = composeSemanticSequence(sequence);
+      expect(semantic.summary.stackDelta.values.exact.has(item.delta)).toBe(true);
+      expect(semantic.summary.registerTransforms.esp).toEqual({
+        kind: "affine",
+        base: "esp",
+        offset: { kind: "constant", value: item.delta },
+      });
+    }
+  });
+
   test("xchg eax, esp is classified as STACK_PIVOT", async () => {
     const provider = new RPPlusProvider("0x1000: xchg eax, esp ; ret ;");
     const [sequence] = await loadAll(provider);

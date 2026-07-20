@@ -50,6 +50,8 @@ import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand } from "./commands/landing";
 import { createMathCommand } from "./commands/math";
 
+declare const self: Record<string, unknown> | undefined;
+
 type OsedApi = {
   [name: string]: unknown;
 };
