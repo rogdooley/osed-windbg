@@ -119,12 +119,13 @@ describe("help command", () => {
         { key: "Name", header: "Name" },
       ],
       [
-        { VA: '<link cmd="u 0x75537060">0x75537060</link>', Name: "first" },
-        { VA: "0x1", Name: "second" },
+        { VA: "0x75537060", Name: "first" },
+        { VA: '<link cmd="u 0x1">0x1</link>', Name: "second" },
       ],
     );
 
     const rendered = logs.join("");
+    expect(rendered).toContain('<link cmd="u 0x1">0x1       </link>');
     expect(stripDml(rendered)).toContain("0x75537060  first");
     expect(stripDml(rendered)).toContain("0x1         second");
   });

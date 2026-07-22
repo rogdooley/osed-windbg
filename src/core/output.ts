@@ -10,11 +10,22 @@ function write(line = ""): void {
 
 function pad(value: string, width: number): string {
   const visible = visibleLength(value);
-  return visible >= width ? value : `${value}${" ".repeat(width - visible)}`;
+  const suffix = visible >= width ? "" : " ".repeat(width - visible);
+  return appendVisiblePadding(value, suffix);
 }
 
 export function stripDml(value: string): string {
   return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+}
+
+function appendVisiblePadding(value: string, suffix: string): string {
+  if (suffix.length === 0) {
+    return value;
+  }
+  const padded = value.replace(/(<link\b[^>]*>)(.*?)(<\/link>)/gi, (_match, open: string, text: string, close: string) => {
+    return `${open}${text}${suffix}${close}`;
+  });
+  return padded === value ? `${value}${suffix}` : padded;
 }
 
 function visibleLength(value: string): number {

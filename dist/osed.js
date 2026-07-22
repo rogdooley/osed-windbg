@@ -48,10 +48,20 @@ var osed_bundle = (() => {
   }
   function pad(value, width) {
     const visible = visibleLength(value);
-    return visible >= width ? value : `${value}${" ".repeat(width - visible)}`;
+    const suffix = visible >= width ? "" : " ".repeat(width - visible);
+    return appendVisiblePadding(value, suffix);
   }
   function stripDml(value) {
     return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+  }
+  function appendVisiblePadding(value, suffix) {
+    if (suffix.length === 0) {
+      return value;
+    }
+    const padded = value.replace(/(<link\b[^>]*>)(.*?)(<\/link>)/gi, (_match, open, text, close) => {
+      return `${open}${text}${suffix}${close}`;
+    });
+    return padded === value ? `${value}${suffix}` : padded;
   }
   function visibleLength(value) {
     return stripDml(value).length;
@@ -7497,8 +7507,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "0.1.0",
-      buildTime: "2026-07-22T03:10:45.924Z",
-      gitCommit: "51cfd702a8f0",
+      buildTime: "2026-07-22T03:14:40.371Z",
+      gitCommit: "b8253392c869",
       gitDirty: true
     };
   }
