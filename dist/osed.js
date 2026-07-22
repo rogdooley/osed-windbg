@@ -7492,6 +7492,54 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/core/version.ts
+  function getVersionInfo() {
+    return {
+      name: "osed-windbg",
+      version: "0.1.0",
+      buildTime: "2026-07-22T03:10:45.924Z",
+      gitCommit: "51cfd702a8f0",
+      gitDirty: true
+    };
+  }
+
+  // src/commands/version.ts
+  function createVersionCommand() {
+    return {
+      name: "version",
+      description: "Show the loaded osed-windbg build identity.",
+      usage: "dx @$osed().version()",
+      examples: ["dx @$osed().version()", 'dx @$osed().help("version")'],
+      schema: {},
+      execute(options) {
+        const info2 = getVersionInfo();
+        const rows = [
+          { Field: "Name", Value: info2.name },
+          { Field: "Version", Value: info2.version },
+          { Field: "BuildTime", Value: info2.buildTime },
+          { Field: "GitCommit", Value: info2.gitCommit },
+          { Field: "GitDirty", Value: info2.gitDirty ? "yes" : "no" }
+        ];
+        section("OSED Version");
+        table(
+          [
+            { key: "Field", header: "Field" },
+            { key: "Value", header: "Value" }
+          ],
+          rows
+        );
+        return {
+          command: "version",
+          args: options,
+          success: true,
+          findings: [info2],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -7526,6 +7574,7 @@ var osed_bundle = (() => {
       createMemoryCommand(),
       createLandingCommand(),
       createMathCommand(),
+      createVersionCommand(),
       createEncodeCommand(),
       createNopCommand(),
       createRopTemplateCommand(),
@@ -7769,6 +7818,13 @@ var osed_bundle = (() => {
       offset: (...args) => invoke("fmt_offset", args)
     };
     api.last_result = () => lastResult;
+    api.version = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return invoke("version", args);
+      }
+      invoke("version", []);
+      return getVersionInfo();
+    };
     api.last_summary = () => {
       if (!lastResult) {
         return {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { createHelpCommand } from "../src/commands/help";
+import { createVersionCommand } from "../src/commands/version";
 import { toDxResult } from "../src/core/dx_result";
 import { findHelpEntry } from "../src/core/help_catalog";
 import { stripDml, table } from "../src/core/output";
@@ -23,11 +24,13 @@ describe("help command", () => {
     };
 
     const registry = new CommandRegistry();
+    registry.register(createVersionCommand());
     const help = createHelpCommand(registry);
 
     const list = help.execute({});
     expect(list.success).toBe(true);
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "sc.iat" })]));
+    expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "version" })]));
     const rendered = logs.join("");
     expect(rendered).toContain("sc Namespace Helpers");
     expect(rendered).toContain("Example");
@@ -36,6 +39,10 @@ describe("help command", () => {
     const detail = help.execute({ command: "sc.iat" });
     expect(detail.success).toBe(true);
     expect(detail.findings).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
+
+    const versionDetail = help.execute({ command: "version" });
+    expect(versionDetail.success).toBe(true);
+    expect(versionDetail.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "version" })]));
   });
 
   test("shellcode helpers accept help without reading debugger state", () => {

@@ -52,6 +52,8 @@ import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand } from "./commands/landing";
 import { createMathCommand } from "./commands/math";
+import { createVersionCommand } from "./commands/version";
+import { getVersionInfo } from "./core/version";
 
 declare const self: Record<string, unknown> | undefined;
 
@@ -95,6 +97,7 @@ function registerAll(): void {
     createMemoryCommand(),
     createLandingCommand(),
     createMathCommand(),
+    createVersionCommand(),
     createEncodeCommand(),
     createNopCommand(),
     createRopTemplateCommand(),
@@ -358,6 +361,13 @@ function bindApi(): OsedApi {
   };
 
   api.last_result = () => lastResult;
+  api.version = (...args: unknown[]) => {
+    if (args.length === 1 && args[0] === "help") {
+      return invoke("version", args);
+    }
+    invoke("version", []);
+    return getVersionInfo();
+  };
   api.last_summary = () => {
     if (!lastResult) {
       return {
