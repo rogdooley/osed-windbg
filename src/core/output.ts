@@ -9,7 +9,16 @@ function write(line = ""): void {
 }
 
 function pad(value: string, width: number): string {
-  return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
+  const visible = visibleLength(value);
+  return visible >= width ? value : `${value}${" ".repeat(width - visible)}`;
+}
+
+export function stripDml(value: string): string {
+  return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+}
+
+function visibleLength(value: string): number {
+  return stripDml(value).length;
 }
 
 export function print(message: string): void {
@@ -62,7 +71,7 @@ export function table(columns: TableColumn[], rows: Array<Record<string, string>
   const widths = columns.map((column) => {
     const maxValueWidth = rows.reduce((max, row) => {
       const value = row[column.key] ?? "";
-      return Math.max(max, value.length);
+      return Math.max(max, visibleLength(value));
     }, 0);
 
     return Math.max(column.width ?? 0, column.header.length, maxValueWidth);

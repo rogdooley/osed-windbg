@@ -47,7 +47,14 @@ var osed_bundle = (() => {
 `);
   }
   function pad(value, width) {
-    return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
+    const visible = visibleLength(value);
+    return visible >= width ? value : `${value}${" ".repeat(width - visible)}`;
+  }
+  function stripDml(value) {
+    return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+  }
+  function visibleLength(value) {
+    return stripDml(value).length;
   }
   function print(message) {
     write(message);
@@ -91,7 +98,7 @@ var osed_bundle = (() => {
       const maxValueWidth = rows.reduce((max, row) => {
         var _a2;
         const value = (_a2 = row[column.key]) != null ? _a2 : "";
-        return Math.max(max, value.length);
+        return Math.max(max, visibleLength(value));
       }, 0);
       return Math.max((_a = column.width) != null ? _a : 0, column.header.length, maxValueWidth);
     });
@@ -5829,13 +5836,56 @@ var osed_bundle = (() => {
     }
     toString() {
       const pairs = Object.entries(this).filter(([, value]) => typeof value === "string");
-      return pairs.map(([key2, value]) => `${key2}: ${value}`).join(" | ");
+      return pairs.map(([key2, value]) => `${key2}: ${stripDml(value)}`).join(" | ");
+    }
+  };
+  var DxRows = class {
+    constructor(title, values) {
+      Object.defineProperty(this, "title", {
+        value: title,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      Object.defineProperty(this, "values", {
+        value: values,
+        enumerable: false,
+        configurable: false,
+        writable: false
+      });
+      this.length = values.length;
+      values.forEach((row, index) => {
+        Object.defineProperty(this, index, {
+          value: row,
+          enumerable: false,
+          configurable: false,
+          writable: false
+        });
+      });
+    }
+    [Symbol.iterator]() {
+      return this.values[Symbol.iterator]();
+    }
+    map(callback) {
+      return this.values.map(callback);
+    }
+    forEach(callback) {
+      this.values.forEach(callback);
+    }
+    slice(start, end) {
+      return this.values.slice(start, end);
+    }
+    toArray() {
+      return [...this.values];
+    }
+    toString() {
+      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}; expand rows[N] for details`;
     }
   };
   var DxResult = class {
     constructor(title, rows) {
       this.title = title;
-      this.rows = rows.map((row) => new DxRow(row));
+      this.rows = new DxRows(title, rows.map((row) => new DxRow(row)));
       this.length = this.rows.length;
     }
     toString() {
@@ -6218,16 +6268,17 @@ var osed_bundle = (() => {
           if (intValue === BigInt(0) && iatValue === BigInt(0)) {
             break;
           }
-          const imported = this.parseImportedName(owner, intValue);
           const target = iatValue;
           const actualModule = this.findContainingModule(modules, target);
           const trampoline = this.resolveTrampoline(target);
           const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, trampoline.target) : void 0;
+          const imported = this.parseImportedName(owner, intValue);
           rows.push({
             ownerModule: owner.name,
             importDll: dllName,
-            symbol: imported.name,
+            symbol: this.displayImportedSymbol(imported, nearest),
             ordinal: imported.ordinal,
+            nameWarning: imported.warning,
             slot: iatPtr,
             target: trampoline.target,
             expectedModule,
@@ -6350,6 +6401,18 @@ var osed_bundle = (() => {
         return lower === needle || lowerNoExt === noExt;
       });
     }
+    displayImportedSymbol(imported, nearest) {
+      if (!imported.name.startsWith("<")) {
+        return imported.name;
+      }
+      if (nearest && nearest.offset === BigInt(0)) {
+        return nearest.name;
+      }
+      if (nearest) {
+        return `${nearest.name}+0x${nearest.offset.toString(16).toUpperCase()}`;
+      }
+      return imported.name;
+    }
     parseImportedName(owner, intValue) {
       if (intValue === BigInt(0)) {
         return { name: "<null>" };
@@ -6358,8 +6421,21 @@ var osed_bundle = (() => {
       if ((intValue & ordinalFlag) !== BigInt(0)) {
         return { name: "<ordinal>", ordinal: Number(intValue & BigInt(65535)) };
       }
+      if (intValue < BigInt(0) || intValue >= owner.size) {
+        return {
+          name: "<resolved-address>",
+          warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`
+        };
+      }
       const byName = owner.base + intValue + BigInt(2);
-      return { name: readAsciiString(byName, 512) };
+      try {
+        return { name: readAsciiString(byName, 512) };
+      } catch (error2) {
+        return {
+          name: "<unreadable-name>",
+          warning: formatError(error2)
+        };
+      }
     }
     readThunk(address) {
       return this.pointerSize === 8 ? readPointer(address, 8) : BigInt(readUint32LE(address));
@@ -6757,7 +6833,7 @@ var osed_bundle = (() => {
           if (!needle) return true;
           return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
         }).map((entry) => {
-          var _a, _b;
+          var _a, _b, _c;
           return {
             Owner: entry.ownerModule,
             DLL: entry.importDll,
@@ -6767,7 +6843,8 @@ var osed_bundle = (() => {
             Target: toDmlAddress(entry.target, "u"),
             Module: (_b = (_a = entry.actualModule) == null ? void 0 : _a.name) != null ? _b : "unknown",
             "Symbol+Offset": entry.nearest ? `${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}` : "",
-            Status: entry.status
+            Status: entry.status,
+            Note: (_c = entry.nameWarning) != null ? _c : ""
           };
         });
         if (rows.length === 0) {
@@ -6779,7 +6856,7 @@ var osed_bundle = (() => {
       }
     }
     iat_find(symbol) {
-      var _a, _b;
+      var _a, _b, _c;
       const needle = symbol.trim().toLowerCase();
       if (!needle) {
         return this.errorRows("Symbol substring is required.");
@@ -6797,7 +6874,8 @@ var osed_bundle = (() => {
                 Slot: toDmlAddress(entry.slot, "dps"),
                 Target: toDmlAddress(entry.target, "u"),
                 Module: (_b = (_a = entry.actualModule) == null ? void 0 : _a.name) != null ? _b : "unknown",
-                Status: entry.status
+                Status: entry.status,
+                Note: (_c = entry.nameWarning) != null ? _c : ""
               });
             }
           }
@@ -6810,7 +6888,7 @@ var osed_bundle = (() => {
       return rows;
     }
     iat_ptr(moduleName, symbol) {
-      var _a, _b;
+      var _a, _b, _c;
       const lookup = this.findModule(moduleName);
       if (lookup.kind !== "ok") {
         return this.lookupFailureRows(lookup);
@@ -6830,7 +6908,8 @@ var osed_bundle = (() => {
             target: formatAddress(match.target, this.pointerSize),
             module: (_b = (_a = match.actualModule) == null ? void 0 : _a.name) != null ? _b : "unknown",
             symbol: match.symbol,
-            status: match.status
+            status: match.status,
+            note: (_c = match.nameWarning) != null ? _c : ""
           }
         ];
       } catch (error2) {
@@ -7167,8 +7246,13 @@ var osed_bundle = (() => {
         error(rows[0].Error);
         return toDxResult(title, rows);
       }
-      const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(rows.flatMap((row) => Object.keys(row)))];
-      table(keys.map((key2) => ({ key: key2, header: key2 })), rows);
+      const maxPrintedRows = title === "sc.exports" || title === "sc.hashes" ? 100 : 200;
+      const printedRows = rows.length > maxPrintedRows ? rows.slice(0, maxPrintedRows) : rows;
+      const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(printedRows.flatMap((row) => Object.keys(row)))];
+      table(keys.map((key2) => ({ key: key2, header: key2 })), printedRows);
+      if (printedRows.length < rows.length) {
+        info(`Showing first ${printedRows.length} of ${rows.length} rows. Use a filter argument to narrow output; full rows remain available under .rows.`);
+      }
       return toDxResult(title, rows);
     };
     return {

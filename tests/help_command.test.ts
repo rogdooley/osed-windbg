@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { createHelpCommand } from "../src/commands/help";
+import { toDxResult } from "../src/core/dx_result";
 import { findHelpEntry } from "../src/core/help_catalog";
+import { stripDml, table } from "../src/core/output";
 import { CommandRegistry } from "../src/core/registry";
 import { createShellcodeNamespace } from "../src/shellcode";
 
@@ -40,7 +42,7 @@ describe("help command", () => {
     const sc = createShellcodeNamespace();
     const result = sc.iat("help");
     expect(result.toString()).toBe("Help: sc.iat: 3 rows");
-    expect(result.rows).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
+    expect(result.rows.toArray()).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
   });
 
   test("shellcode modules use short names while preserving paths", () => {
@@ -82,5 +84,41 @@ describe("help command", () => {
     expect(result.rows[0]).toMatchObject({
       Error: "Symbol is required. Use sc.exports(\"bass.dll\") to list exported functions.",
     });
+  });
+
+  test("Dx result rows stringify without raw DML markup", () => {
+    const result = toDxResult("sc.exports", [
+      {
+        Ordinal: "1540",
+        VA: '<link cmd="u 0x75537060">0x75537060</link>',
+        Name: "WerpNotifyLoadStringResource",
+      },
+    ]);
+
+    expect(result.rows[0].toString()).toContain("VA: 0x75537060");
+    expect(result.rows[0].toString()).not.toContain("<link");
+    expect(result.rows.toString()).toBe("sc.exports: 1 row; expand rows[N] for details");
+  });
+
+  test("table width calculation ignores DML markup", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+    };
+
+    table(
+      [
+        { key: "VA", header: "VA" },
+        { key: "Name", header: "Name" },
+      ],
+      [
+        { VA: '<link cmd="u 0x75537060">0x75537060</link>', Name: "first" },
+        { VA: "0x1", Name: "second" },
+      ],
+    );
+
+    const rendered = logs.join("");
+    expect(stripDml(rendered)).toContain("0x75537060  first");
+    expect(stripDml(rendered)).toContain("0x1         second");
   });
 });

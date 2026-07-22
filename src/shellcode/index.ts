@@ -57,6 +57,7 @@ type IatEntry = {
   importDll: string;
   symbol: string;
   ordinal?: number;
+  nameWarning?: string;
   slot: bigint;
   target: bigint;
   expectedModule?: ModuleInfo;
@@ -516,17 +517,18 @@ class IATResolver {
           break;
         }
 
-        const imported = this.parseImportedName(owner, intValue);
         const target = iatValue;
         const actualModule = this.findContainingModule(modules, target);
         const trampoline = this.resolveTrampoline(target);
         const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, trampoline.target) : undefined;
+        const imported = this.parseImportedName(owner, intValue);
 
         rows.push({
           ownerModule: owner.name,
           importDll: dllName,
-          symbol: imported.name,
+          symbol: this.displayImportedSymbol(imported, nearest),
           ordinal: imported.ordinal,
+          nameWarning: imported.warning,
           slot: iatPtr,
           target: trampoline.target,
           expectedModule,
@@ -662,7 +664,20 @@ class IATResolver {
     });
   }
 
-  private parseImportedName(owner: ModuleInfo, intValue: bigint): { name: string; ordinal?: number } {
+  private displayImportedSymbol(imported: { name: string; ordinal?: number; warning?: string }, nearest?: { name: string; offset: bigint }): string {
+    if (!imported.name.startsWith("<")) {
+      return imported.name;
+    }
+    if (nearest && nearest.offset === BigInt(0)) {
+      return nearest.name;
+    }
+    if (nearest) {
+      return `${nearest.name}+0x${nearest.offset.toString(16).toUpperCase()}`;
+    }
+    return imported.name;
+  }
+
+  private parseImportedName(owner: ModuleInfo, intValue: bigint): { name: string; ordinal?: number; warning?: string } {
     if (intValue === BigInt(0)) {
       return { name: "<null>" };
     }
@@ -670,8 +685,21 @@ class IATResolver {
     if ((intValue & ordinalFlag) !== BigInt(0)) {
       return { name: "<ordinal>", ordinal: Number(intValue & BigInt(0xffff)) };
     }
+    if (intValue < BigInt(0) || intValue >= owner.size) {
+      return {
+        name: "<resolved-address>",
+        warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`,
+      };
+    }
     const byName = owner.base + intValue + BigInt(2);
-    return { name: readAsciiString(byName, 512) };
+    try {
+      return { name: readAsciiString(byName, 512) };
+    } catch (error) {
+      return {
+        name: "<unreadable-name>",
+        warning: formatError(error),
+      };
+    }
   }
 
   private readThunk(address: bigint): bigint {
@@ -1123,6 +1151,7 @@ class ShellcodeHelper {
           Module: entry.actualModule?.name ?? "unknown",
           "Symbol+Offset": entry.nearest ? `${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}` : "",
           Status: entry.status,
+          Note: entry.nameWarning ?? "",
         }));
       if (rows.length === 0) {
         return this.errorRows(filter ? `No IAT entries in ${lookup.module.name} matched "${filter}".` : `No IAT entries found for ${lookup.module.name}.`);
@@ -1153,6 +1182,7 @@ class ShellcodeHelper {
               Target: toDmlAddress(entry.target, "u"),
               Module: entry.actualModule?.name ?? "unknown",
               Status: entry.status,
+              Note: entry.nameWarning ?? "",
             });
           }
         }
@@ -1191,6 +1221,7 @@ class ShellcodeHelper {
           module: match.actualModule?.name ?? "unknown",
           symbol: match.symbol,
           status: match.status,
+          note: match.nameWarning ?? "",
         },
       ];
     } catch (error) {
@@ -1637,10 +1668,15 @@ export function createShellcodeNamespace(): {
       out.error(rows[0].Error);
       return toDxResult(title, rows);
     }
+    const maxPrintedRows = title === "sc.exports" || title === "sc.hashes" ? 100 : 200;
+    const printedRows = rows.length > maxPrintedRows ? rows.slice(0, maxPrintedRows) : rows;
     const keys = title === "sc.modules"
       ? ["Base", "End", "Size", "Name"]
-      : [...new Set(rows.flatMap((row) => Object.keys(row)))];
-    out.table(keys.map((key) => ({ key, header: key })), rows);
+      : [...new Set(printedRows.flatMap((row) => Object.keys(row)))];
+    out.table(keys.map((key) => ({ key, header: key })), printedRows);
+    if (printedRows.length < rows.length) {
+      out.info(`Showing first ${printedRows.length} of ${rows.length} rows. Use a filter argument to narrow output; full rows remain available under .rows.`);
+    }
     return toDxResult(title, rows);
   };
 
