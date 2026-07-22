@@ -66,6 +66,13 @@ type IatEntry = {
   status: string;
 };
 
+type ImportDescriptor = {
+  originalFirstThunk: number;
+  nameRva: number;
+  firstThunk: number;
+  descriptorAddress: bigint;
+};
+
 interface HashProvider {
   readonly algorithm: string;
   readonly aliases?: string[];
@@ -488,18 +495,19 @@ class IATResolver {
 
     const modules = this.modulesProvider();
     const rows: IatEntry[] = [];
-    let descriptorAddress = owner.base + BigInt(importDirRva);
-    const maxDescriptors = 4096;
+    const descriptors = this.readImportDescriptors(owner, importDirRva);
+    const firstThunkBounds = descriptors
+      .map((descriptor) => descriptor.firstThunk)
+      .filter((rva) => rva > 0)
+      .sort((left, right) => left - right);
 
-    for (let index = 0; index < maxDescriptors; index += 1) {
-      const originalFirstThunk = readUint32LE(descriptorAddress);
-      const _timeDateStamp = readUint32LE(descriptorAddress + BigInt(0x4));
-      const _forwarderChain = readUint32LE(descriptorAddress + BigInt(0x8));
-      const nameRva = readUint32LE(descriptorAddress + BigInt(0xc));
-      const firstThunk = readUint32LE(descriptorAddress + BigInt(0x10));
+    for (const descriptor of descriptors) {
+      const { originalFirstThunk, nameRva, firstThunk } = descriptor;
+      const nextFirstThunk = firstThunkBounds.find((rva) => rva > firstThunk);
+      const iatEnd = nextFirstThunk ? owner.base + BigInt(nextFirstThunk) : undefined;
 
-      if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
-        break;
+      if (firstThunk === 0) {
+        continue;
       }
 
       const dllName = nameRva === 0 ? "<unknown>" : readAsciiString(owner.base + BigInt(nameRva), 260);
@@ -511,6 +519,9 @@ class IATResolver {
       const maxThunks = 16384;
 
       for (let thunkIndex = 0; thunkIndex < maxThunks; thunkIndex += 1) {
+        if (iatEnd !== undefined && iatPtr >= iatEnd) {
+          break;
+        }
         const intValue = this.readThunk(intPtr);
         const iatValue = this.readThunk(iatPtr);
         if (intValue === BigInt(0) && iatValue === BigInt(0)) {
@@ -526,7 +537,7 @@ class IATResolver {
         rows.push({
           ownerModule: owner.name,
           importDll: dllName,
-          symbol: this.displayImportedSymbol(imported, nearest),
+          symbol: this.displayImportedSymbol(imported, nearest, expectedModule, actualModule),
           ordinal: imported.ordinal,
           nameWarning: imported.warning,
           slot: iatPtr,
@@ -540,11 +551,33 @@ class IATResolver {
         intPtr += BigInt(this.pointerSize);
         iatPtr += BigInt(this.pointerSize);
       }
+    }
+
+    return rows;
+  }
+
+  private readImportDescriptors(owner: ModuleInfo, importDirRva: number): ImportDescriptor[] {
+    const descriptors: ImportDescriptor[] = [];
+    let descriptorAddress = owner.base + BigInt(importDirRva);
+    const maxDescriptors = 4096;
+
+    for (let index = 0; index < maxDescriptors; index += 1) {
+      const originalFirstThunk = readUint32LE(descriptorAddress);
+      const _timeDateStamp = readUint32LE(descriptorAddress + BigInt(0x4));
+      const _forwarderChain = readUint32LE(descriptorAddress + BigInt(0x8));
+      const nameRva = readUint32LE(descriptorAddress + BigInt(0xc));
+      const firstThunk = readUint32LE(descriptorAddress + BigInt(0x10));
+
+      if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
+        break;
+      }
+
+      descriptors.push({ originalFirstThunk, nameRva, firstThunk, descriptorAddress });
 
       descriptorAddress += BigInt(0x14);
     }
 
-    return rows;
+    return descriptors;
   }
 
   private classifyStatus(target: bigint, resolvedTarget: bigint, expected?: ModuleInfo, actual?: ModuleInfo): string {
@@ -664,8 +697,16 @@ class IATResolver {
     });
   }
 
-  private displayImportedSymbol(imported: { name: string; ordinal?: number; warning?: string }, nearest?: { name: string; offset: bigint }): string {
+  private displayImportedSymbol(
+    imported: { name: string; ordinal?: number; warning?: string },
+    nearest?: { name: string; offset: bigint },
+    expected?: ModuleInfo,
+    actual?: ModuleInfo,
+  ): string {
     if (!imported.name.startsWith("<")) {
+      return imported.name;
+    }
+    if (expected && actual && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
       return imported.name;
     }
     if (nearest && nearest.offset === BigInt(0)) {
@@ -685,9 +726,9 @@ class IATResolver {
     if ((intValue & ordinalFlag) !== BigInt(0)) {
       return { name: "<ordinal>", ordinal: Number(intValue & BigInt(0xffff)) };
     }
-    if (intValue < BigInt(0) || intValue >= owner.size) {
+    if (intValue < BigInt(0x100) || intValue >= owner.size) {
       return {
-        name: "<resolved-address>",
+        name: "<invalid-name-rva>",
         warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`,
       };
     }

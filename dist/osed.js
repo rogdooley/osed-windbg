@@ -6245,16 +6245,14 @@ var osed_bundle = (() => {
       }
       const modules = this.modulesProvider();
       const rows = [];
-      let descriptorAddress = owner.base + BigInt(importDirRva);
-      const maxDescriptors = 4096;
-      for (let index = 0; index < maxDescriptors; index += 1) {
-        const originalFirstThunk = readUint32LE(descriptorAddress);
-        const _timeDateStamp = readUint32LE(descriptorAddress + BigInt(4));
-        const _forwarderChain = readUint32LE(descriptorAddress + BigInt(8));
-        const nameRva = readUint32LE(descriptorAddress + BigInt(12));
-        const firstThunk = readUint32LE(descriptorAddress + BigInt(16));
-        if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
-          break;
+      const descriptors = this.readImportDescriptors(owner, importDirRva);
+      const firstThunkBounds = descriptors.map((descriptor) => descriptor.firstThunk).filter((rva) => rva > 0).sort((left, right) => left - right);
+      for (const descriptor of descriptors) {
+        const { originalFirstThunk, nameRva, firstThunk } = descriptor;
+        const nextFirstThunk = firstThunkBounds.find((rva) => rva > firstThunk);
+        const iatEnd = nextFirstThunk ? owner.base + BigInt(nextFirstThunk) : void 0;
+        if (firstThunk === 0) {
+          continue;
         }
         const dllName = nameRva === 0 ? "<unknown>" : readAsciiString(owner.base + BigInt(nameRva), 260);
         const expectedModule = this.findByDllName(modules, dllName);
@@ -6263,6 +6261,9 @@ var osed_bundle = (() => {
         let iatPtr = owner.base + BigInt(firstThunk);
         const maxThunks = 16384;
         for (let thunkIndex = 0; thunkIndex < maxThunks; thunkIndex += 1) {
+          if (iatEnd !== void 0 && iatPtr >= iatEnd) {
+            break;
+          }
           const intValue = this.readThunk(intPtr);
           const iatValue = this.readThunk(iatPtr);
           if (intValue === BigInt(0) && iatValue === BigInt(0)) {
@@ -6276,7 +6277,7 @@ var osed_bundle = (() => {
           rows.push({
             ownerModule: owner.name,
             importDll: dllName,
-            symbol: this.displayImportedSymbol(imported, nearest),
+            symbol: this.displayImportedSymbol(imported, nearest, expectedModule, actualModule),
             ordinal: imported.ordinal,
             nameWarning: imported.warning,
             slot: iatPtr,
@@ -6289,9 +6290,26 @@ var osed_bundle = (() => {
           intPtr += BigInt(this.pointerSize);
           iatPtr += BigInt(this.pointerSize);
         }
-        descriptorAddress += BigInt(20);
       }
       return rows;
+    }
+    readImportDescriptors(owner, importDirRva) {
+      const descriptors = [];
+      let descriptorAddress = owner.base + BigInt(importDirRva);
+      const maxDescriptors = 4096;
+      for (let index = 0; index < maxDescriptors; index += 1) {
+        const originalFirstThunk = readUint32LE(descriptorAddress);
+        const _timeDateStamp = readUint32LE(descriptorAddress + BigInt(4));
+        const _forwarderChain = readUint32LE(descriptorAddress + BigInt(8));
+        const nameRva = readUint32LE(descriptorAddress + BigInt(12));
+        const firstThunk = readUint32LE(descriptorAddress + BigInt(16));
+        if (originalFirstThunk === 0 && nameRva === 0 && firstThunk === 0) {
+          break;
+        }
+        descriptors.push({ originalFirstThunk, nameRva, firstThunk, descriptorAddress });
+        descriptorAddress += BigInt(20);
+      }
+      return descriptors;
     }
     classifyStatus(target, resolvedTarget, expected, actual) {
       if (target === BigInt(0)) {
@@ -6401,8 +6419,11 @@ var osed_bundle = (() => {
         return lower === needle || lowerNoExt === noExt;
       });
     }
-    displayImportedSymbol(imported, nearest) {
+    displayImportedSymbol(imported, nearest, expected, actual) {
       if (!imported.name.startsWith("<")) {
+        return imported.name;
+      }
+      if (expected && actual && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
         return imported.name;
       }
       if (nearest && nearest.offset === BigInt(0)) {
@@ -6421,9 +6442,9 @@ var osed_bundle = (() => {
       if ((intValue & ordinalFlag) !== BigInt(0)) {
         return { name: "<ordinal>", ordinal: Number(intValue & BigInt(65535)) };
       }
-      if (intValue < BigInt(0) || intValue >= owner.size) {
+      if (intValue < BigInt(256) || intValue >= owner.size) {
         return {
-          name: "<resolved-address>",
+          name: "<invalid-name-rva>",
           warning: `Thunk value 0x${intValue.toString(16).toUpperCase()} is not an import-name RVA.`
         };
       }
