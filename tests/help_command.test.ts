@@ -38,7 +38,9 @@ describe("help command", () => {
 
   test("shellcode helpers accept help without reading debugger state", () => {
     const sc = createShellcodeNamespace();
-    expect(sc.iat("help")).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
+    const result = sc.iat("help");
+    expect(result.toString()).toBe("Help: sc.iat: 3 rows");
+    expect(result.rows).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
   });
 
   test("shellcode modules use short names while preserving paths", () => {
@@ -56,8 +58,29 @@ describe("help command", () => {
       },
     };
 
-    const [row] = createShellcodeNamespace().modules() as Array<Record<string, string>>;
+    const [row] = createShellcodeNamespace().modules().rows as Array<Record<string, string>>;
     expect(row.Name).toBe("service.exe");
     expect(row.Path).toBe("C:\\labs\\service.exe");
+  });
+
+  test("shellcode export without symbol returns actionable guidance", () => {
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: () => undefined },
+      currentProcess: {
+        Modules: [
+          {
+            Name: "bass.dll",
+            Path: "C:\\Program Files\\VUPlayer\\BASS.dll",
+            BaseAddress: BigInt(0x10000000),
+            EndAddress: BigInt(0x10041000),
+          },
+        ],
+      },
+    };
+
+    const result = createShellcodeNamespace().export("bass.dll");
+    expect(result.rows[0]).toMatchObject({
+      Error: "Symbol is required. Use sc.exports(\"bass.dll\") to list exported functions.",
+    });
   });
 });

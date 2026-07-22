@@ -46,6 +46,7 @@ import { buildCapabilityIndexFromRpPlusText, summarizeCapabilities, type Capabil
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
 import * as out from "./core/output";
+import { DxResult, toDxResult } from "./core/dx_result";
 import { getPointerSize } from "./core/memory";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
@@ -185,7 +186,7 @@ function bindApi(): OsedApi {
     return summarizeCapabilities(currentRopCorpus);
   };
 
-  const helperHelp = (name: string): Array<Record<string, string>> => {
+  const helperHelp = (name: string): DxResult => {
     const entry = findHelpEntry(name);
     const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
     renderRows(`Help: ${name}`, rows);
@@ -197,10 +198,10 @@ function bindApi(): OsedApi {
       warnings: [],
       errors: entry ? [] : [`Unknown helper '${name}'.`],
     });
-    return rows;
+    return toDxResult(`Help: ${name}`, rows);
   };
 
-  const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): Array<Record<string, string>> => {
+  const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): DxResult => {
     currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
     const rows = summarizeCapabilities(currentRopCorpus);
     out.section("ROP Corpus Loaded");
@@ -214,16 +215,12 @@ function bindApi(): OsedApi {
       warnings: [],
       errors: [],
     });
-    return [
-      {
-        Corpus: "loaded",
-        Gadgets: currentRopCorpus.gadgets.length.toString(),
-        Capabilities: rows.length.toString(),
-      },
-    ];
+    return toDxResult("ROP Corpus Loaded", [
+      { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() },
+    ]);
   };
 
-  const executeRopScan = (...args: unknown[]): Array<Record<string, string>> => {
+  const executeRopScan = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.scan");
     }
@@ -237,7 +234,7 @@ function bindApi(): OsedApi {
         warnings: [],
         errors: ["RP++ text input is required."],
       });
-      return rows;
+      return toDxResult("ROP Scan", rows);
     }
 
     if (args.length === 1 && typeof args[0] === "string") {
@@ -256,7 +253,7 @@ function bindApi(): OsedApi {
         warnings: [],
         errors: ["RP++ text input is required."],
       });
-      return rows;
+      return toDxResult("ROP Scan", rows);
     }
 
     return scanCorpus(text, {
@@ -266,7 +263,7 @@ function bindApi(): OsedApi {
     });
   };
 
-  const executeRopQuery = (...args: unknown[]): Array<Record<string, string>> => {
+  const executeRopQuery = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.query");
     }
@@ -282,7 +279,7 @@ function bindApi(): OsedApi {
         warnings: [],
         errors: ["Query object is required."],
       });
-      return rows;
+      return toDxResult("ROP Query", rows);
     }
     if (!currentRopCorpus) {
       const rows = [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
@@ -295,7 +292,7 @@ function bindApi(): OsedApi {
         warnings: [],
         errors: ["No RP++ corpus loaded."],
       });
-      return rows;
+      return toDxResult("ROP Query", rows);
     }
 
     const gadgets = currentRopCorpus.query(query);
@@ -309,10 +306,10 @@ function bindApi(): OsedApi {
       warnings: [],
       errors: [],
     });
-    return rows;
+    return toDxResult("ROP Query", rows);
   };
 
-  const executeRopCapabilities = (...args: unknown[]): Array<Record<string, string>> => {
+  const executeRopCapabilities = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.capabilities");
     }
@@ -326,7 +323,7 @@ function bindApi(): OsedApi {
       warnings: [],
       errors: currentRopCorpus ? [] : ["No RP++ corpus loaded."],
     });
-    return rows;
+    return toDxResult("ROP Capabilities", rows);
   };
 
   for (const command of registry.getAll()) {

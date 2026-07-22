@@ -5820,6 +5820,32 @@ var osed_bundle = (() => {
     return [createFmtBuildCommand(), createFmtOffsetCommand()];
   }
 
+  // src/core/dx_result.ts
+  var DxRow = class {
+    constructor(values) {
+      for (const [key2, value] of Object.entries(values)) {
+        this[key2] = value;
+      }
+    }
+    toString() {
+      const pairs = Object.entries(this).filter(([, value]) => typeof value === "string");
+      return pairs.map(([key2, value]) => `${key2}: ${value}`).join(" | ");
+    }
+  };
+  var DxResult = class {
+    constructor(title, rows) {
+      this.title = title;
+      this.rows = rows.map((row) => new DxRow(row));
+      this.length = this.rows.length;
+    }
+    toString() {
+      return `${this.title}: ${this.length} row${this.length === 1 ? "" : "s"}`;
+    }
+  };
+  function toDxResult(title, rows) {
+    return new DxResult(title, rows);
+  }
+
   // src/shellcode/index.ts
   var MetasploitRor13Provider = class {
     constructor() {
@@ -6573,10 +6599,14 @@ var osed_bundle = (() => {
       if (lookup.kind !== "ok") {
         return this.lookupFailureRows(lookup);
       }
+      const requested = symbol == null ? void 0 : symbol.trim();
+      if (!requested) {
+        return this.errorRows(`Symbol is required. Use sc.exports("${lookup.module.name}") to list exported functions.`);
+      }
       try {
-        const entry = this.exportResolver.resolve(lookup.module, symbol);
+        const entry = this.exportResolver.resolve(lookup.module, requested);
         if (!entry) {
-          return this.errorRows(`Symbol "${symbol}" was not found in ${lookup.module.name}.`);
+          return this.errorRows(`Symbol "${requested}" was not found in ${lookup.module.name}.`);
         }
         const exportDir = this.exportResolver.getExportDirectory(lookup.module);
         if (!exportDir) {
@@ -7052,14 +7082,24 @@ var osed_bundle = (() => {
     return void 0;
   }
   function readAsciiString(address, maxLength) {
-    const bytes = readMemory(address, maxLength);
     const chars = [];
-    for (let i = 0; i < bytes.length; i += 1) {
-      const ch = bytes[i];
-      if (ch === 0) {
-        break;
+    const chunkSize = 64;
+    for (let offset = 0; offset < maxLength; offset += chunkSize) {
+      const length = Math.min(chunkSize, maxLength - offset);
+      const bytes = tryReadMemory(address + BigInt(offset), length);
+      if (!bytes || bytes.length === 0) {
+        if (chars.length > 0) {
+          break;
+        }
+        throw new Error(`Unable to read ASCII string at 0x${address.toString(16).toUpperCase()}.`);
       }
-      chars.push(String.fromCharCode(ch));
+      for (let i = 0; i < bytes.length; i += 1) {
+        const ch = bytes[i];
+        if (ch === 0) {
+          return chars.join("");
+        }
+        chars.push(String.fromCharCode(ch));
+      }
     }
     return chars.join("");
   }
@@ -7125,11 +7165,11 @@ var osed_bundle = (() => {
       section(title);
       if (rows.length > 0 && "Error" in rows[0]) {
         error(rows[0].Error);
-        return toDxRows(rows);
+        return toDxResult(title, rows);
       }
       const keys = title === "sc.modules" ? ["Base", "End", "Size", "Name"] : [...new Set(rows.flatMap((row) => Object.keys(row)))];
       table(keys.map((key2) => ({ key: key2, header: key2 })), rows);
-      return toDxRows(rows);
+      return toDxResult(title, rows);
     };
     return {
       peb: (help) => wantsHelp(help) ? helperHelp("sc.peb") : renderAndReturn("sc.peb", helper.peb()),
@@ -7152,20 +7192,6 @@ var osed_bundle = (() => {
       iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
       iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol))
     };
-  }
-  var DxRow = class {
-    constructor(values) {
-      for (const [key2, value] of Object.entries(values)) {
-        this[key2] = value;
-      }
-    }
-    toString() {
-      const pairs = Object.entries(this).filter(([, v]) => typeof v === "string");
-      return pairs.map(([k, v]) => `${k}: ${v}`).join(" | ");
-    }
-  };
-  function toDxRows(rows) {
-    return rows.map((row) => new DxRow(row));
   }
 
   // src/commands/memory.ts
@@ -7489,7 +7515,7 @@ var osed_bundle = (() => {
         warnings: [],
         errors: entry ? [] : [`Unknown helper '${name}'.`]
       });
-      return rows;
+      return toDxResult(`Help: ${name}`, rows);
     };
     const scanCorpus = (text, options = {}) => {
       currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
@@ -7505,13 +7531,9 @@ var osed_bundle = (() => {
         warnings: [],
         errors: []
       });
-      return [
-        {
-          Corpus: "loaded",
-          Gadgets: currentRopCorpus.gadgets.length.toString(),
-          Capabilities: rows.length.toString()
-        }
-      ];
+      return toDxResult("ROP Corpus Loaded", [
+        { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() }
+      ]);
     };
     const executeRopScan = (...args) => {
       var _a, _b, _c;
@@ -7528,7 +7550,7 @@ var osed_bundle = (() => {
           warnings: [],
           errors: ["RP++ text input is required."]
         });
-        return rows;
+        return toDxResult("ROP Scan", rows);
       }
       if (args.length === 1 && typeof args[0] === "string") {
         return scanCorpus(args[0]);
@@ -7545,7 +7567,7 @@ var osed_bundle = (() => {
           warnings: [],
           errors: ["RP++ text input is required."]
         });
-        return rows;
+        return toDxResult("ROP Scan", rows);
       }
       return scanCorpus(text, {
         source: options.source,
@@ -7569,7 +7591,7 @@ var osed_bundle = (() => {
           warnings: [],
           errors: ["Query object is required."]
         });
-        return rows2;
+        return toDxResult("ROP Query", rows2);
       }
       if (!currentRopCorpus) {
         const rows2 = [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
@@ -7582,7 +7604,7 @@ var osed_bundle = (() => {
           warnings: [],
           errors: ["No RP++ corpus loaded."]
         });
-        return rows2;
+        return toDxResult("ROP Query", rows2);
       }
       const gadgets = currentRopCorpus.query(query);
       const rows = queryRows(query);
@@ -7595,7 +7617,7 @@ var osed_bundle = (() => {
         warnings: [],
         errors: []
       });
-      return rows;
+      return toDxResult("ROP Query", rows);
     };
     const executeRopCapabilities = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -7611,7 +7633,7 @@ var osed_bundle = (() => {
         warnings: [],
         errors: currentRopCorpus ? [] : ["No RP++ corpus loaded."]
       });
-      return rows;
+      return toDxResult("ROP Capabilities", rows);
     };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {

@@ -1,6 +1,7 @@
-import { getPointerSize, readMemory, readUint16LE, readUint32LE, readPointer } from "../core/memory";
+import { getPointerSize, readMemory, readUint16LE, readUint32LE, readPointer, tryReadMemory } from "../core/memory";
 import { formatAddress } from "../core/output";
 import * as out from "../core/output";
+import { DxResult, toDxResult } from "../core/dx_result";
 import { findHelpEntry, helpRows } from "../core/help_catalog";
 
 type ModuleInfo = {
@@ -940,15 +941,19 @@ class ShellcodeHelper {
     }
   }
 
-  public export(moduleName: string, symbol: string): Array<Record<string, string>> {
+  public export(moduleName: string, symbol?: string): Array<Record<string, string>> {
     const lookup = this.findModule(moduleName);
     if (lookup.kind !== "ok") {
       return this.lookupFailureRows(lookup);
     }
+    const requested = symbol?.trim();
+    if (!requested) {
+      return this.errorRows(`Symbol is required. Use sc.exports("${lookup.module.name}") to list exported functions.`);
+    }
     try {
-      const entry = this.exportResolver.resolve(lookup.module, symbol);
+      const entry = this.exportResolver.resolve(lookup.module, requested);
       if (!entry) {
-        return this.errorRows(`Symbol "${symbol}" was not found in ${lookup.module.name}.`);
+        return this.errorRows(`Symbol "${requested}" was not found in ${lookup.module.name}.`);
       }
       const exportDir = this.exportResolver.getExportDirectory(lookup.module);
       if (!exportDir) {
@@ -1520,14 +1525,24 @@ function tryToBigInt(value: unknown): bigint | undefined {
 }
 
 function readAsciiString(address: bigint, maxLength: number): string {
-  const bytes = readMemory(address, maxLength);
   const chars: string[] = [];
-  for (let i = 0; i < bytes.length; i += 1) {
-    const ch = bytes[i];
-    if (ch === 0) {
-      break;
+  const chunkSize = 64;
+  for (let offset = 0; offset < maxLength; offset += chunkSize) {
+    const length = Math.min(chunkSize, maxLength - offset);
+    const bytes = tryReadMemory(address + BigInt(offset), length);
+    if (!bytes || bytes.length === 0) {
+      if (chars.length > 0) {
+        break;
+      }
+      throw new Error(`Unable to read ASCII string at 0x${address.toString(16).toUpperCase()}.`);
     }
-    chars.push(String.fromCharCode(ch));
+    for (let i = 0; i < bytes.length; i += 1) {
+      const ch = bytes[i];
+      if (ch === 0) {
+        return chars.join("");
+      }
+      chars.push(String.fromCharCode(ch));
+    }
   }
   return chars.join("");
 }
@@ -1590,43 +1605,43 @@ function moduleBasename(value: string): string {
 }
 
 export function createShellcodeNamespace(): {
-  peb: () => unknown[];
-  modules: () => unknown[];
-  module_pages: (name: string) => unknown[];
-  page_summary: (name: string) => unknown[];
-  base: (name: string) => unknown[];
-  pe: (name: string) => unknown[];
-  exports: (name: string, filter?: string) => unknown[];
-  resolve: (module: string, symbol: string) => unknown[];
-  hashes: (module: string, algorithm?: string) => unknown[];
-  hash: (name: string, algorithm?: string) => unknown[];
-  hashresolve: (module: string, hashValue: string | number | bigint, algorithm?: string) => unknown[];
-  algorithms: () => unknown[];
-  exportdir: (module: string) => unknown[];
-  export: (module: string, symbol: string) => unknown[];
-  exportat: (module: string, ordinalIndex: number) => unknown[];
-  exportwalk: (module: string, symbol?: string, verbose?: boolean) => unknown[];
-  iat: (module?: string, filter?: string) => unknown[];
-  iat_find: (symbol: string) => unknown[];
-  iat_ptr: (module: string, symbol: string) => unknown[];
+  peb: () => DxResult;
+  modules: () => DxResult;
+  module_pages: (name: string) => DxResult;
+  page_summary: (name: string) => DxResult;
+  base: (name: string) => DxResult;
+  pe: (name: string) => DxResult;
+  exports: (name: string, filter?: string) => DxResult;
+  resolve: (module: string, symbol: string) => DxResult;
+  hashes: (module: string, algorithm?: string) => DxResult;
+  hash: (name: string, algorithm?: string) => DxResult;
+  hashresolve: (module: string, hashValue: string | number | bigint, algorithm?: string) => DxResult;
+  algorithms: () => DxResult;
+  exportdir: (module: string) => DxResult;
+  export: (module: string, symbol?: string) => DxResult;
+  exportat: (module: string, ordinalIndex: number) => DxResult;
+  exportwalk: (module: string, symbol?: string, verbose?: boolean) => DxResult;
+  iat: (module?: string, filter?: string) => DxResult;
+  iat_find: (symbol: string) => DxResult;
+  iat_ptr: (module: string, symbol: string) => DxResult;
 } {
   const helper = new ShellcodeHelper();
-  const helperHelp = (name: string): unknown[] => {
+  const helperHelp = (name: string): DxResult => {
     const entry = findHelpEntry(name);
     return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
   };
   const wantsHelp = (value: unknown): boolean => value === "help";
-  const renderAndReturn = (title: string, rows: Array<Record<string, string>>): unknown[] => {
+  const renderAndReturn = (title: string, rows: Array<Record<string, string>>): DxResult => {
     out.section(title);
     if (rows.length > 0 && "Error" in rows[0]) {
       out.error(rows[0].Error);
-      return toDxRows(rows);
+      return toDxResult(title, rows);
     }
     const keys = title === "sc.modules"
       ? ["Base", "End", "Size", "Name"]
       : [...new Set(rows.flatMap((row) => Object.keys(row)))];
     out.table(keys.map((key) => ({ key, header: key })), rows);
-    return toDxRows(rows);
+    return toDxResult(title, rows);
   };
 
   return {
@@ -1644,28 +1659,11 @@ export function createShellcodeNamespace(): {
       wantsHelp(module) ? helperHelp("sc.hashresolve") : renderAndReturn("sc.hashresolve", helper.hashresolve(module, hashValue, algorithm)),
     algorithms: (help?: string) => wantsHelp(help) ? helperHelp("sc.algorithms") : renderAndReturn("sc.algorithms", helper.algorithms()),
     exportdir: (module: string) => wantsHelp(module) ? helperHelp("sc.exportdir") : renderAndReturn("sc.exportdir", helper.exportdir(module)),
-    export: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.export") : renderAndReturn("sc.export", helper.export(module, symbol)),
+    export: (module: string, symbol?: string) => wantsHelp(module) ? helperHelp("sc.export") : renderAndReturn("sc.export", helper.export(module, symbol)),
     exportat: (module: string, ordinalIndex: number) => wantsHelp(module) ? helperHelp("sc.exportat") : renderAndReturn("sc.exportat", helper.exportat(module, ordinalIndex)),
     exportwalk: (module: string, symbol?: string, verbose?: boolean) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
     iat: (module?: string, filter?: string) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
     iat_find: (symbol: string) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
     iat_ptr: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
   };
-}
-
-class DxRow {
-  public constructor(values: Record<string, string>) {
-    for (const [key, value] of Object.entries(values)) {
-      (this as unknown as Record<string, string>)[key] = value;
-    }
-  }
-
-  public toString(): string {
-    const pairs = Object.entries(this as unknown as Record<string, string>).filter(([, v]) => typeof v === "string");
-    return pairs.map(([k, v]) => `${k}: ${v}`).join(" | ");
-  }
-}
-
-function toDxRows(rows: Array<Record<string, string>>): unknown[] {
-  return rows.map((row) => new DxRow(row));
 }
