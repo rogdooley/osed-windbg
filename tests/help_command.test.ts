@@ -125,8 +125,8 @@ describe("help command", () => {
     );
 
     const rendered = logs.join("");
-    expect(rendered).toContain('<link cmd="u 0x1">0x1       </link>');
-    expect(stripDml(rendered)).toContain("0x75537060  first");
-    expect(stripDml(rendered)).toContain("0x1         second");
+    expect(rendered).not.toContain("<link");
+    expect(rendered).toContain("0x75537060  first");
+    expect(rendered).toContain("0x1         second");
   });
 });
