@@ -44,7 +44,7 @@ import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualProtect, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type RopQuery, type VirtualProtectParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualProtect, planWriteProcessMemory, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type RopQuery, type VirtualAllocParams, type VirtualProtectParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
@@ -489,6 +489,114 @@ function bindApi(): OsedApi {
     return toDxResult("ROP VirtualProtect Chain", rows);
   };
 
+  const executeRopChainWpm = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.chain_wpm");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP WriteProcessMemory Chain", rows);
+      setResult({ command: "rop.chain_wpm", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP WriteProcessMemory Chain", rows);
+    }
+
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const params: WriteProcessMemoryParams = {
+      writeProcessMemory: options.writeProcessMemory !== undefined ? Number(options.writeProcessMemory) : undefined,
+      returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
+      lpBuffer: options.lpBuffer !== undefined ? Number(options.lpBuffer) : undefined,
+      nSize: options.nSize !== undefined ? Number(options.nSize) : undefined,
+      writable: options.writable !== undefined ? Number(options.writable) : undefined,
+    };
+
+    const plan = planWriteProcessMemory(currentRopCorpus, params);
+    const python = formatChainPython(plan);
+
+    out.section("ROP Chain — WriteProcessMemory (PUSHAD)");
+    out.info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    if (plan.placeholders.length > 0) {
+      out.info(`Define before use: ${plan.placeholders.join(", ")}`);
+    }
+    for (const line of python) {
+      out.print(line);
+    }
+    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    for (const warning of warnings) {
+      out.warn(warning);
+    }
+
+    const rows = plan.steps.map((step) => ({
+      Word: step.kind === "gadget"
+        ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}`
+        : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Meaning: step.comment,
+    }));
+    renderRows("ROP WriteProcessMemory Chain", rows);
+    setResult({
+      command: "rop.chain_wpm",
+      args: options,
+      success: plan.unsatisfied.length === 0,
+      findings: [{ ...plan, python }],
+      warnings,
+      errors: [],
+    });
+    return toDxResult("ROP WriteProcessMemory Chain", rows);
+  };
+
+  const executeRopChainVa = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.chain_va");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP VirtualAlloc Chain", rows);
+      setResult({ command: "rop.chain_va", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP VirtualAlloc Chain", rows);
+    }
+
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const params: VirtualAllocParams = {
+      virtualAlloc: options.virtualAlloc !== undefined ? Number(options.virtualAlloc) : undefined,
+      returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
+      lpAddress: options.lpAddress !== undefined ? Number(options.lpAddress) : undefined,
+      flAllocationType: options.flAllocationType !== undefined ? Number(options.flAllocationType) : undefined,
+      flProtect: options.flProtect !== undefined ? Number(options.flProtect) : undefined,
+    };
+
+    const plan = planVirtualAlloc(currentRopCorpus, params);
+    const python = formatChainPython(plan);
+
+    out.section("ROP Chain — VirtualAlloc (PUSHAD)");
+    out.info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    if (plan.placeholders.length > 0) {
+      out.info(`Define before use: ${plan.placeholders.join(", ")}`);
+    }
+    for (const line of python) {
+      out.print(line);
+    }
+    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    for (const warning of warnings) {
+      out.warn(warning);
+    }
+
+    const rows = plan.steps.map((step) => ({
+      Word: step.kind === "gadget"
+        ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}`
+        : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Meaning: step.comment,
+    }));
+    renderRows("ROP VirtualAlloc Chain", rows);
+    setResult({
+      command: "rop.chain_va",
+      args: options,
+      success: plan.unsatisfied.length === 0,
+      findings: [{ ...plan, python }],
+      warnings,
+      errors: [],
+    });
+    return toDxResult("ROP VirtualAlloc Chain", rows);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -508,6 +616,8 @@ function bindApi(): OsedApi {
     capabilities: executeRopCapabilities,
     chain: executeRopChain,
     chain_vp: executeRopChainVp,
+    chain_wpm: executeRopChainWpm,
+    chain_va: executeRopChainVa,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 

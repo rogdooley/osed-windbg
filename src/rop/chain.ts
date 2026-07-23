@@ -212,22 +212,22 @@ export function formatChainPython(plan: { steps: ChainStep[] }): string[] {
   return lines;
 }
 
-// ---- VirtualProtect goal template (PUSHAD technique) ----------------------
+// ---- PUSHAD goal templates (DEP bypass techniques) -------------------------
 //
-// Expands the classic DEP-bypass into concrete register-setup targets, resolves
-// every pop and the pushad;ret gadget from the (live) corpus at real addresses,
-// and leaves named placeholders only for genuinely runtime-dependent values. It
-// emits a chain as evidence — it never writes target memory.
+// Each template expands a classic DEP-bypass into concrete register-setup
+// targets, resolves every pop and the pushad;ret gadget from the (live) corpus
+// at real addresses, and leaves named placeholders only for genuinely
+// runtime-dependent values. They emit chains as evidence — never write target
+// memory.
+//
+// After `pushad ; ret`, the stack (low → high) is:
+//   [EDI] [ESI] [EBP] [ESP] [EBX] [EDX] [ECX] [EAX]
+// `ret` pops EDI into EIP, so EDI = the API to call. The remaining 7 words
+// form [return_addr(ESI)][param1(EBP)][param2(ESP)][param3(EBX)][param4(EDX)]
+// [param5(ECX)][unused(EAX)]. ESP is the saved stack pointer — not directly
+// settable, but often "good enough" as a size or address argument.
 
-export interface VirtualProtectParams {
-  virtualProtect?: number;
-  returnAddress?: number;
-  lpAddress?: number;
-  writable?: number;
-  flNewProtect?: number;
-}
-
-export interface VirtualProtectPlan {
+export interface PushadPlan {
   steps: ChainStep[];
   satisfied: string[];
   unsatisfied: Array<{ register: string; reason: string }>;
@@ -236,7 +236,7 @@ export interface VirtualProtectPlan {
   stackBytes: number;
 }
 
-interface VpRegisterSpec {
+interface RegisterSpec {
   register: string;
   value?: number;
   placeholder?: string;
@@ -257,32 +257,17 @@ function findPushadRet(index: CapabilityIndex): RopGadget | undefined {
     .sort((a, b) => b.score - a.score)[0];
 }
 
-// Register map consumed by `pushad ; ret` for VirtualProtect(lpAddress, dwSize,
-// flNewProtect, lpflOldProtect): RET dispatches to EDI, then VirtualProtect's
-// stdcall frame is [ESI][EBP][ESP][EBX][EDX]. ESP is the saved stack pointer
-// used as dwSize, so it is not set here. ECX/EAX are unused by the call.
-function virtualProtectSpecs(params: VirtualProtectParams): VpRegisterSpec[] {
-  const flNewProtect = (params.flNewProtect ?? 0x40) >>> 0;
-  const named = (value: number | undefined, placeholder: string): Pick<VpRegisterSpec, "value" | "placeholder"> =>
-    value === undefined ? { placeholder } : { value: value >>> 0 };
-  return [
-    { register: "edi", ...named(params.virtualProtect, "VIRTUALPROTECT"), meaning: "VirtualProtect (RET dispatches here)" },
-    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after VirtualProtect (e.g. jmp esp)" },
-    { register: "ebp", ...named(params.lpAddress, "LP_ADDRESS"), meaning: "lpAddress (shellcode start)" },
-    { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
-    { register: "edx", ...named(params.writable, "WRITABLE"), meaning: "lpflOldProtect (writable dummy)" },
-    { register: "ecx", ...named(params.writable, "WRITABLE"), meaning: "unused by VirtualProtect (writable)" },
-    { register: "eax", value: 0x90909090, meaning: "unused by VirtualProtect (junk)" },
-  ];
+function named(value: number | undefined, placeholder: string): Pick<RegisterSpec, "value" | "placeholder"> {
+  return value === undefined ? { placeholder } : { value: value >>> 0 };
 }
 
-export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}): VirtualProtectPlan {
+function planPushadChain(index: CapabilityIndex, specs: RegisterSpec[], label: string): PushadPlan {
   const steps: ChainStep[] = [];
   const satisfied: string[] = [];
   const unsatisfied: Array<{ register: string; reason: string }> = [];
   const placeholders = new Set<string>();
 
-  for (const spec of virtualProtectSpecs(params)) {
+  for (const spec of specs) {
     const gadget = selectPopGadget(index, spec.register);
     if (!gadget) {
       const reason = index.loadRegister(spec.register).length > 0
@@ -303,7 +288,7 @@ export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtec
 
   const pushad = findPushadRet(index);
   if (pushad) {
-    steps.push({ kind: "gadget", address: firstKnownAddress(pushad)!, comment: "pushad ; ret (builds the VirtualProtect call frame and dispatches)" });
+    steps.push({ kind: "gadget", address: firstKnownAddress(pushad)!, comment: `pushad ; ret (builds the ${label} call frame and dispatches)` });
   } else {
     unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
   }
@@ -316,4 +301,95 @@ export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtec
     hasPushad: pushad !== undefined,
     stackBytes: steps.length * 4,
   };
+}
+
+// -- VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect) ----------
+
+export interface VirtualProtectParams {
+  virtualProtect?: number;
+  returnAddress?: number;
+  lpAddress?: number;
+  writable?: number;
+  flNewProtect?: number;
+}
+
+export type VirtualProtectPlan = PushadPlan;
+
+function virtualProtectSpecs(params: VirtualProtectParams): RegisterSpec[] {
+  const flNewProtect = (params.flNewProtect ?? 0x40) >>> 0;
+  return [
+    { register: "edi", ...named(params.virtualProtect, "VIRTUALPROTECT"), meaning: "VirtualProtect (RET dispatches here)" },
+    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after VirtualProtect (e.g. jmp esp)" },
+    { register: "ebp", ...named(params.lpAddress, "LP_ADDRESS"), meaning: "lpAddress (shellcode start)" },
+    { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+    { register: "edx", ...named(params.writable, "WRITABLE"), meaning: "lpflOldProtect (writable dummy)" },
+    { register: "ecx", ...named(params.writable, "WRITABLE"), meaning: "unused by VirtualProtect (writable)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by VirtualProtect (junk)" },
+  ];
+}
+
+export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}): VirtualProtectPlan {
+  return planPushadChain(index, virtualProtectSpecs(params), "VirtualProtect");
+}
+
+// -- WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNBW) ------
+// 5 params: ESI=ret, EBP=hProcess, ESP=lpBaseAddress(saved), EBX=lpBuffer,
+// EDX=nSize, ECX=lpNumberOfBytesWritten. EAX is unused.
+
+export interface WriteProcessMemoryParams {
+  writeProcessMemory?: number;
+  returnAddress?: number;
+  lpBuffer?: number;
+  nSize?: number;
+  writable?: number;
+}
+
+export type WriteProcessMemoryPlan = PushadPlan;
+
+function writeProcessMemorySpecs(params: WriteProcessMemoryParams): RegisterSpec[] {
+  return [
+    { register: "edi", ...named(params.writeProcessMemory, "WRITEPROCESSMEMORY"), meaning: "WriteProcessMemory (RET dispatches here)" },
+    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after WPM (e.g. shellcode or jmp esp)" },
+    { register: "ebp", value: 0xFFFFFFFF, meaning: "hProcess = GetCurrentProcess() pseudo-handle" },
+    { register: "ebx", ...named(params.lpBuffer, "LP_BUFFER"), meaning: "lpBuffer (source — shellcode on stack)" },
+    { register: "edx", ...named(params.nSize, "NSIZE"), meaning: "nSize (shellcode byte count)" },
+    { register: "ecx", ...named(params.writable, "WRITABLE"), meaning: "lpNumberOfBytesWritten (writable dummy)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by WPM (nop sled)" },
+  ];
+}
+
+export function planWriteProcessMemory(index: CapabilityIndex, params: WriteProcessMemoryParams = {}): WriteProcessMemoryPlan {
+  return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory");
+}
+
+// -- VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) -------------
+// 4 params: ESI=ret, EBP=lpAddress, ESP=dwSize(saved), EBX=flAllocationType,
+// EDX=flProtect. ECX/EAX are unused.
+
+export interface VirtualAllocParams {
+  virtualAlloc?: number;
+  returnAddress?: number;
+  lpAddress?: number;
+  flAllocationType?: number;
+  flProtect?: number;
+}
+
+export type VirtualAllocPlan = PushadPlan;
+
+function virtualAllocSpecs(params: VirtualAllocParams): RegisterSpec[] {
+  const flAllocationType = (params.flAllocationType ?? 0x1000) >>> 0;
+  const flProtect = (params.flProtect ?? 0x40) >>> 0;
+  return [
+    { register: "edi", ...named(params.virtualAlloc, "VIRTUALALLOC"), meaning: "VirtualAlloc (RET dispatches here)" },
+    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after VirtualAlloc (e.g. push eax ; ret)" },
+    { register: "ebp", ...named(params.lpAddress, "LP_ADDRESS"), meaning: "lpAddress (NULL = OS chooses, or specific address)" },
+    { register: "ebx", value: flAllocationType, meaning: `flAllocationType = ${hex32(flAllocationType)} (MEM_COMMIT)` },
+    { register: "edx", value: flProtect, meaning: `flProtect = ${hex32(flProtect)} (PAGE_EXECUTE_READWRITE)` },
+    { register: "ecx", value: 0x90909090, meaning: "unused by VirtualAlloc (junk)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by VirtualAlloc (junk)" },
+  ];
+}
+
+export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocParams = {}): VirtualAllocPlan {
+  return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc");
 }

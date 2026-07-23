@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sequencesFromLiveHits } from "../src/semantics/live-provider";
-import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualProtect } from "../src/rop";
+import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualProtect, planWriteProcessMemory } from "../src/rop";
 
 // Chain construction over an index built from (synthetic) live gadget hits, so it
 // exercises the full live -> index -> plan path.
@@ -162,5 +162,100 @@ describe("VirtualProtect goal template (PUSHAD technique)", () => {
     expect(plan.unsatisfied.some((entry) => entry.register === "pushad")).toBe(true);
     expect(plan.unsatisfied.some((entry) => entry.register === "esi")).toBe(true);
     expect(plan.satisfied).toEqual(["edi"]);
+  });
+});
+
+// Reuse the same full-gadget corpus for WPM and VA tests.
+const fullCorpusHits = [
+  { mnemonic: "pop edi ; ret", address: BigInt(0x00401000), module: "vuln" },
+  { mnemonic: "pop esi ; ret", address: BigInt(0x00401010), module: "vuln" },
+  { mnemonic: "pop ebp ; ret", address: BigInt(0x00401020), module: "vuln" },
+  { mnemonic: "pop ebx ; ret", address: BigInt(0x00401030), module: "vuln" },
+  { mnemonic: "pop edx ; ret", address: BigInt(0x00401040), module: "vuln" },
+  { mnemonic: "pop ecx ; ret", address: BigInt(0x00401050), module: "vuln" },
+  { mnemonic: "pop eax ; ret", address: BigInt(0x00401060), module: "vuln" },
+  { mnemonic: "pushad ; ret", address: BigInt(0x00401070), module: "vuln" },
+];
+const fullIndex = buildCapabilityIndexFromSequences(sequencesFromLiveHits(fullCorpusHits));
+
+describe("WriteProcessMemory goal template (PUSHAD technique)", () => {
+  test("resolves all gadgets with hProcess = 0xFFFFFFFF hard-coded", () => {
+    const plan = planWriteProcessMemory(fullIndex, {
+      writeProcessMemory: 0x7c802213,
+      returnAddress: 0x080414d3,
+      lpBuffer: 0x00110000,
+      nSize: 0x200,
+      writable: 0x0040a000,
+    });
+    expect(plan.satisfied).toEqual(["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]);
+    expect(plan.unsatisfied).toEqual([]);
+    expect(plan.hasPushad).toBe(true);
+    // EBP is always 0xFFFFFFFF (GetCurrentProcess pseudo-handle).
+    const ebpValue = plan.steps.find((s) => s.comment.includes("hProcess"));
+    expect(ebpValue?.value).toBe(0xFFFFFFFF >>> 0);
+  });
+
+  test("emits placeholders for runtime-dependent WPM values", () => {
+    const plan = planWriteProcessMemory(fullIndex, {});
+    expect(plan.placeholders).toContain("WRITEPROCESSMEMORY");
+    expect(plan.placeholders).toContain("LP_BUFFER");
+    expect(plan.placeholders).toContain("NSIZE");
+    expect(plan.placeholders).toContain("WRITABLE");
+    // EBP is always concrete (0xFFFFFFFF), so no placeholder for hProcess.
+    expect(plan.placeholders).not.toContain("HPROCESS");
+    const python = formatChainPython(plan);
+    expect(python.some((line) => line.includes("WRITEPROCESSMEMORY"))).toBe(true);
+    expect(python.some((line) => line.includes("0xFFFFFFFF"))).toBe(true);
+  });
+
+  test("pushad comment names WriteProcessMemory", () => {
+    const plan = planWriteProcessMemory(fullIndex, {});
+    const last = plan.steps[plan.steps.length - 1];
+    expect(last.comment).toContain("WriteProcessMemory");
+  });
+});
+
+describe("VirtualAlloc goal template (PUSHAD technique)", () => {
+  test("resolves all gadgets with default MEM_COMMIT and PAGE_EXECUTE_READWRITE", () => {
+    const plan = planVirtualAlloc(fullIndex, {
+      virtualAlloc: 0x7c809ae1,
+      returnAddress: 0x080414d3,
+      lpAddress: 0,
+    });
+    expect(plan.satisfied).toEqual(["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]);
+    expect(plan.unsatisfied).toEqual([]);
+    expect(plan.hasPushad).toBe(true);
+    // EBX = MEM_COMMIT (0x1000), EDX = PAGE_EXECUTE_READWRITE (0x40).
+    const ebxValue = plan.steps.find((s) => s.comment.includes("flAllocationType"));
+    expect(ebxValue?.value).toBe(0x1000);
+    const edxValue = plan.steps.find((s) => s.comment.includes("flProtect"));
+    expect(edxValue?.value).toBe(0x40);
+  });
+
+  test("allows overriding flAllocationType and flProtect", () => {
+    const plan = planVirtualAlloc(fullIndex, {
+      virtualAlloc: 0x7c809ae1,
+      flAllocationType: 0x3000,
+      flProtect: 0x04,
+    });
+    const ebxValue = plan.steps.find((s) => s.comment.includes("flAllocationType"));
+    expect(ebxValue?.value).toBe(0x3000);
+    const edxValue = plan.steps.find((s) => s.comment.includes("flProtect"));
+    expect(edxValue?.value).toBe(0x04);
+  });
+
+  test("emits placeholders for VirtualAlloc runtime values", () => {
+    const plan = planVirtualAlloc(fullIndex, {});
+    expect(plan.placeholders).toContain("VIRTUALALLOC");
+    expect(plan.placeholders).toContain("RETURN_ADDR");
+    expect(plan.placeholders).toContain("LP_ADDRESS");
+    // flAllocationType and flProtect have defaults — no placeholders.
+    expect(plan.placeholders).not.toContain("FL_ALLOCATION_TYPE");
+  });
+
+  test("pushad comment names VirtualAlloc", () => {
+    const plan = planVirtualAlloc(fullIndex, {});
+    const last = plan.steps[plan.steps.length - 1];
+    expect(last.comment).toContain("VirtualAlloc");
   });
 });

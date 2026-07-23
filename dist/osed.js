@@ -3084,26 +3084,15 @@ var osed_bundle = (() => {
   function findPushadRet(index) {
     return index.gadgets.filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
   }
-  function virtualProtectSpecs(params) {
-    var _a;
-    const flNewProtect = ((_a = params.flNewProtect) != null ? _a : 64) >>> 0;
-    const named = (value, placeholder) => value === void 0 ? { placeholder } : { value: value >>> 0 };
-    return [
-      __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (RET dispatches here)" }),
-      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
-      __spreadProps(__spreadValues({ register: "ebp" }, named(params.lpAddress, "LP_ADDRESS")), { meaning: "lpAddress (shellcode start)" }),
-      { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
-      __spreadProps(__spreadValues({ register: "edx" }, named(params.writable, "WRITABLE")), { meaning: "lpflOldProtect (writable dummy)" }),
-      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "unused by VirtualProtect (writable)" }),
-      { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
-    ];
+  function named(value, placeholder) {
+    return value === void 0 ? { placeholder } : { value: value >>> 0 };
   }
-  function planVirtualProtect(index, params = {}) {
+  function planPushadChain(index, specs, label) {
     const steps = [];
     const satisfied = [];
     const unsatisfied = [];
     const placeholders = /* @__PURE__ */ new Set();
-    for (const spec of virtualProtectSpecs(params)) {
+    for (const spec of specs) {
       const gadget = selectPopGadget(index, spec.register);
       if (!gadget) {
         const reason = index.loadRegister(spec.register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
@@ -3121,7 +3110,7 @@ var osed_bundle = (() => {
     }
     const pushad = findPushadRet(index);
     if (pushad) {
-      steps.push({ kind: "gadget", address: firstKnownAddress(pushad), comment: "pushad ; ret (builds the VirtualProtect call frame and dispatches)" });
+      steps.push({ kind: "gadget", address: firstKnownAddress(pushad), comment: `pushad ; ret (builds the ${label} call frame and dispatches)` });
     } else {
       unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
     }
@@ -3133,6 +3122,53 @@ var osed_bundle = (() => {
       hasPushad: pushad !== void 0,
       stackBytes: steps.length * 4
     };
+  }
+  function virtualProtectSpecs(params) {
+    var _a;
+    const flNewProtect = ((_a = params.flNewProtect) != null ? _a : 64) >>> 0;
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.lpAddress, "LP_ADDRESS")), { meaning: "lpAddress (shellcode start)" }),
+      { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      __spreadProps(__spreadValues({ register: "edx" }, named(params.writable, "WRITABLE")), { meaning: "lpflOldProtect (writable dummy)" }),
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "unused by VirtualProtect (writable)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
+    ];
+  }
+  function planVirtualProtect(index, params = {}) {
+    return planPushadChain(index, virtualProtectSpecs(params), "VirtualProtect");
+  }
+  function writeProcessMemorySpecs(params) {
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.writeProcessMemory, "WRITEPROCESSMEMORY")), { meaning: "WriteProcessMemory (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after WPM (e.g. shellcode or jmp esp)" }),
+      { register: "ebp", value: 4294967295, meaning: "hProcess = GetCurrentProcess() pseudo-handle" },
+      __spreadProps(__spreadValues({ register: "ebx" }, named(params.lpBuffer, "LP_BUFFER")), { meaning: "lpBuffer (source \u2014 shellcode on stack)" }),
+      __spreadProps(__spreadValues({ register: "edx" }, named(params.nSize, "NSIZE")), { meaning: "nSize (shellcode byte count)" }),
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "lpNumberOfBytesWritten (writable dummy)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by WPM (nop sled)" }
+    ];
+  }
+  function planWriteProcessMemory(index, params = {}) {
+    return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory");
+  }
+  function virtualAllocSpecs(params) {
+    var _a, _b;
+    const flAllocationType = ((_a = params.flAllocationType) != null ? _a : 4096) >>> 0;
+    const flProtect = ((_b = params.flProtect) != null ? _b : 64) >>> 0;
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualAlloc, "VIRTUALALLOC")), { meaning: "VirtualAlloc (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualAlloc (e.g. push eax ; ret)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.lpAddress, "LP_ADDRESS")), { meaning: "lpAddress (NULL = OS chooses, or specific address)" }),
+      { register: "ebx", value: flAllocationType, meaning: `flAllocationType = ${hex32(flAllocationType)} (MEM_COMMIT)` },
+      { register: "edx", value: flProtect, meaning: `flProtect = ${hex32(flProtect)} (PAGE_EXECUTE_READWRITE)` },
+      { register: "ecx", value: 2425393296, meaning: "unused by VirtualAlloc (junk)" },
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualAlloc (junk)" }
+    ];
+  }
+  function planVirtualAlloc(index, params = {}) {
+    return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc");
   }
 
   // src/semantics/types.ts
@@ -8258,8 +8294,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.2",
-      buildTime: "2026-07-23T03:05:32.078Z",
-      gitCommit: "578b8c31101c",
+      buildTime: "2026-07-23T03:17:23.184Z",
+      gitCommit: "f5573aa2e608",
       gitDirty: true
     };
   }
@@ -8695,6 +8731,106 @@ var osed_bundle = (() => {
       });
       return toDxResult("ROP VirtualProtect Chain", rows);
     };
+    const executeRopChainWpm = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain_wpm");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP WriteProcessMemory Chain", rows2);
+        setResult({ command: "rop.chain_wpm", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP WriteProcessMemory Chain", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const params = {
+        writeProcessMemory: options.writeProcessMemory !== void 0 ? Number(options.writeProcessMemory) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpBuffer: options.lpBuffer !== void 0 ? Number(options.lpBuffer) : void 0,
+        nSize: options.nSize !== void 0 ? Number(options.nSize) : void 0,
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0
+      };
+      const plan = planWriteProcessMemory(currentRopCorpus, params);
+      const python = formatChainPython(plan);
+      section("ROP Chain \u2014 WriteProcessMemory (PUSHAD)");
+      info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) {
+        info(`Define before use: ${plan.placeholders.join(", ")}`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows("ROP WriteProcessMemory Chain", rows);
+      setResult({
+        command: "rop.chain_wpm",
+        args: options,
+        success: plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult("ROP WriteProcessMemory Chain", rows);
+    };
+    const executeRopChainVa = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain_va");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP VirtualAlloc Chain", rows2);
+        setResult({ command: "rop.chain_va", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP VirtualAlloc Chain", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const params = {
+        virtualAlloc: options.virtualAlloc !== void 0 ? Number(options.virtualAlloc) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        flAllocationType: options.flAllocationType !== void 0 ? Number(options.flAllocationType) : void 0,
+        flProtect: options.flProtect !== void 0 ? Number(options.flProtect) : void 0
+      };
+      const plan = planVirtualAlloc(currentRopCorpus, params);
+      const python = formatChainPython(plan);
+      section("ROP Chain \u2014 VirtualAlloc (PUSHAD)");
+      info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) {
+        info(`Define before use: ${plan.placeholders.join(", ")}`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows("ROP VirtualAlloc Chain", rows);
+      setResult({
+        command: "rop.chain_va",
+        args: options,
+        success: plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult("ROP VirtualAlloc Chain", rows);
+    };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {
         return invoke(command.name, args);
@@ -8712,7 +8848,9 @@ var osed_bundle = (() => {
       query: executeRopQuery,
       capabilities: executeRopCapabilities,
       chain: executeRopChain,
-      chain_vp: executeRopChainVp
+      chain_vp: executeRopChainVp,
+      chain_wpm: executeRopChainWpm,
+      chain_va: executeRopChainVa
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.pattern = {
