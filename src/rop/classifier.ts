@@ -6,31 +6,59 @@ function hasExactFlow(semantic: SemanticSequence, kind: "CALL" | "JUMP" | "RETUR
   return semantic.summary.flowEffects.values.exact.has(kind);
 }
 
-function isExactZeroRegister(semantic: SemanticSequence): string | undefined {
-  for (const step of semantic.instructionSemantics) {
-    const ins = step.instruction;
-    if (ins.mnemonic === "xor" && ins.operands.length === 2 && ins.operands[0].toLowerCase() === ins.operands[1].toLowerCase()) {
-      return ins.operands[0].trim().toLowerCase();
+const ARITHMETIC_MNEMONICS = new Set(["add", "sub", "inc", "dec", "neg"]);
+
+// A register is zeroed when its aggregated net transform is exactly the constant
+// 0. More precise than matching `xor reg, reg` text: it also rejects a later
+// write that un-zeros the register (e.g. `xor eax, eax ; inc eax` nets to 1).
+function zeroedRegisters(semantic: SemanticSequence): string[] {
+  const zeroed: string[] = [];
+  for (const [register, expr] of Object.entries(semantic.summary.registerTransforms)) {
+    if (expr.kind === "constant" && expr.value === 0) {
+      zeroed.push(register);
     }
   }
-  return undefined;
+  return zeroed;
+}
+
+// ESP ends up based on a register other than ESP: `xchg esp, r` / `mov esp, r` /
+// `lea esp, [r+k]` / `leave` (esp := ebp+4). Driven by the net transform, so a
+// round trip like `xchg esp, eax ; xchg esp, eax` (net identity) is not a pivot.
+function pivotsStack(semantic: SemanticSequence): boolean {
+  const esp = semantic.summary.registerTransforms.esp;
+  return esp.kind === "affine" && esp.base !== "esp" && esp.base !== "none";
 }
 
 function isLoadRegister(step: InstructionSemantic): string | undefined {
   if (!step.supported) {
     return undefined;
   }
+  // Writing ESP is a pivot/adjust, not a general register load, so exclude it.
   if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
-    return step.instruction.operands[0].trim().toLowerCase();
+    const register = step.instruction.operands[0].trim().toLowerCase();
+    return register === "esp" ? undefined : register;
   }
   if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
     const left = step.instruction.operands[0].trim().toLowerCase();
     const right = step.instruction.operands[1].trim().toLowerCase();
-    if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right) {
+    if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right && left !== "esp") {
       return left;
     }
   }
   return undefined;
+}
+
+// STACK_ADJUST is a deliberate, fixed-amount ESP move that stays ESP-relative
+// (`add/sub esp, imm` or `ret imm`). Kept instruction-keyed because ret mechanics
+// also move ESP ESP-relatively, so the net delta alone cannot distinguish it.
+// `leave` makes ESP EBP-relative and is classified as a pivot instead.
+function adjustsStackExplicitly(step: InstructionSemantic): boolean {
+  const ins = step.instruction;
+  const destination = ins.operands[0]?.trim().toLowerCase();
+  if ((ins.mnemonic === "add" || ins.mnemonic === "sub") && destination === "esp") {
+    return true;
+  }
+  return ins.mnemonic === "ret" && ins.operands.length >= 1;
 }
 
 function addCategory(categories: Set<RopCategory>, reasonList: AnalysisReason[], category: RopCategory, rule: string, message: string, evidence: string[]): void {
@@ -54,34 +82,22 @@ export function classifySemanticSequence(semantic: SemanticSequence): { categori
     addCategory(categories, reasons, "FLOW_TRANSFER", "flow-transfer", "gadget transfers control flow", evidence);
   }
 
-  const zeroReg = isExactZeroRegister(semantic);
-  if (zeroReg) {
-    addCategory(categories, reasons, "ZERO_REGISTER", "xor-self", `zeroes ${zeroReg} via xor ${zeroReg}, ${zeroReg}`, evidence);
+  for (const zeroReg of zeroedRegisters(semantic)) {
+    addCategory(categories, reasons, "ZERO_REGISTER", "zero-register", `net-zeroes ${zeroReg}`, evidence);
   }
 
   for (const step of semantic.instructionSemantics) {
     const text = canonicalizeInstruction(step.instruction);
-    const lower = text.toLowerCase();
     const loadRegister = isLoadRegister(step);
     if (loadRegister) {
       if (semantic.instructionSemantics.length === 1 || semantic.instructionSemantics.every((item) => item.supported)) {
         addCategory(categories, reasons, "LOAD_REGISTER", "load-register", `loads ${loadRegister}`, [text]);
       }
     }
-    if (lower.startsWith("mov ") && lower.includes("[") && lower.includes("]")) {
-      if (lower.indexOf("[") < lower.indexOf(",")) {
-        addCategory(categories, reasons, "MEMORY_WRITE", "memory-write", "writes to memory", [text]);
-      } else {
-        addCategory(categories, reasons, "MEMORY_READ", "memory-read", "reads from memory", [text]);
-      }
+    if (adjustsStackExplicitly(step)) {
+      addCategory(categories, reasons, "STACK_ADJUST", "stack-adjust", "adjusts the stack pointer by a fixed amount", [text]);
     }
-    if (lower.startsWith("xchg ") && lower.includes("esp")) {
-      addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "writes esp via exchange", [text]);
-    }
-    if (lower === "leave" || lower.startsWith("ret ")) {
-      addCategory(categories, reasons, "STACK_ADJUST", "stack-adjust", "adjusts the stack", [text]);
-    }
-    if (lower.startsWith("add ") || lower.startsWith("sub ") || lower.startsWith("inc ") || lower.startsWith("dec ") || lower.startsWith("neg ")) {
+    if (ARITHMETIC_MNEMONICS.has(step.instruction.mnemonic)) {
       addCategory(categories, reasons, "ARITHMETIC", "arithmetic", "performs arithmetic transformation", [text]);
     }
     if (step.instruction.mnemonic === "pop" && step.instruction.operands.length > 1) {
@@ -92,8 +108,9 @@ export function classifySemanticSequence(semantic: SemanticSequence): { categori
     }
   }
 
-  if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "xchg" && step.instruction.operands.some((operand) => operand.trim().toLowerCase() === "esp"))) {
-    addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "exchange touches esp", evidence);
+  // Pivot classification is driven by the net ESP transform (see pivotsStack).
+  if (pivotsStack(semantic)) {
+    addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "esp becomes based on another register", evidence);
   }
 
   if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2 && step.instruction.operands[0].includes("[") && !step.instruction.operands[1].includes("["))) {

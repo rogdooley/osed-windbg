@@ -128,6 +128,15 @@ describe("semantic pipeline", () => {
     }
   });
 
+  test("pop esp keeps stack delta unknown to match its esp transform", async () => {
+    const provider = new RPPlusProvider("0x1000: pop esp ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const semantic = composeSemanticSequence(sequence);
+    // POP ESP loads an arbitrary value; neither the delta nor the transform is knowable.
+    expect(semantic.summary.stackDelta.values.unknown).toBe(true);
+    expect(semantic.summary.registerTransforms.esp).toEqual({ kind: "unknown" });
+  });
+
   test("xchg eax, esp is classified as STACK_PIVOT", async () => {
     const provider = new RPPlusProvider("0x1000: xchg eax, esp ; ret ;");
     const [sequence] = await loadAll(provider);
@@ -141,6 +150,54 @@ describe("semantic pipeline", () => {
     const [sequence] = await loadAll(provider);
     const gadget = buildRopGadgetFromSequence(sequence);
     expect(gadget.categories).toContain("LOAD_REGISTER");
+  });
+
+  test("pop esp ; ret is not a register load", async () => {
+    const provider = new RPPlusProvider("0x1000: pop esp ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const gadget = buildRopGadgetFromSequence(sequence);
+    expect(gadget.categories).not.toContain("LOAD_REGISTER");
+  });
+
+  test("add/sub esp, imm is classified as STACK_ADJUST", async () => {
+    for (const text of ["0x1000: add esp, 0x10 ; ret ;", "0x1000: sub esp, 4 ; ret ;"]) {
+      const [sequence] = await loadAll(new RPPlusProvider(text));
+      const gadget = buildRopGadgetFromSequence(sequence);
+      expect(gadget.categories).toContain("STACK_ADJUST");
+    }
+  });
+
+  test("leave ; ret is a STACK_PIVOT (esp becomes ebp-relative)", async () => {
+    const provider = new RPPlusProvider("0x1000: leave ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const gadget = buildRopGadgetFromSequence(sequence);
+    // leave sets esp := ebp + 4, so its net effect is a pivot, not a fixed adjust.
+    expect(gadget.categories).toContain("STACK_PIVOT");
+    expect(gadget.categories).not.toContain("STACK_ADJUST");
+  });
+
+  test("mov esp, eax ; ret is a transform-driven STACK_PIVOT", async () => {
+    const provider = new RPPlusProvider("0x1000: mov esp, eax ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const gadget = buildRopGadgetFromSequence(sequence);
+    expect(gadget.categories).toContain("STACK_PIVOT");
+    expect(gadget.categories).not.toContain("LOAD_REGISTER");
+  });
+
+  test("a round-trip xchg with esp is not a STACK_PIVOT (net identity)", async () => {
+    const provider = new RPPlusProvider("0x1000: xchg esp, eax ; xchg esp, eax ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const gadget = buildRopGadgetFromSequence(sequence);
+    // Net esp transform is identity, so the text-level "xchg touches esp" false
+    // positive is gone.
+    expect(gadget.categories).not.toContain("STACK_PIVOT");
+  });
+
+  test("xor eax, eax ; inc eax ; ret is not ZERO_REGISTER (nets to 1)", async () => {
+    const provider = new RPPlusProvider("0x1000: xor eax, eax ; inc eax ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const gadget = buildRopGadgetFromSequence(sequence);
+    expect(gadget.categories).not.toContain("ZERO_REGISTER");
   });
 
   test("xor eax, eax ; ret is classified as ZERO_REGISTER", async () => {

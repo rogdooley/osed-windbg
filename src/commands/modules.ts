@@ -96,7 +96,9 @@ function parseSafeSeh(base: bigint, pe: bigint, optionalHeaderMagic: number): Tr
     const loadConfigSize = readUint32LE(dataDirectoryOffset + BigInt(8 * 10 + 4));
 
     if (loadConfigRva === 0 || loadConfigSize === 0) {
-      return "unknown";
+      // SafeSEH is opt-in metadata. A valid PE32 image without a load-config
+      // directory cannot provide an approved exception-handler table.
+      return "disabled";
     }
 
     const loadConfig = base + BigInt(loadConfigRva);

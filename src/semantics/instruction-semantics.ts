@@ -257,13 +257,16 @@ const RULES: Rule[] = [
       if (!isRegisterOperand(operand)) {
         return {};
       }
+      // POP into ESP loads an arbitrary dword into ESP, so the net stack delta
+      // is unknown — not +4. Keep stackDelta consistent with the ESP transform.
+      const popsEsp = operand.register === "esp";
       return {
         reads: ["esp"],
         writes: [operand.register],
-        stackDelta: { exact: [4] },
+        stackDelta: popsEsp ? { unknown: true } : { exact: [4] },
         memoryReads: ["[esp]"],
         flowEffects: [],
-        registerEffects: operand.register === "esp"
+        registerEffects: popsEsp
           ? { esp: unknownExpr() }
           : {
               [operand.register]: memoryExpr(registerExpr("esp")),

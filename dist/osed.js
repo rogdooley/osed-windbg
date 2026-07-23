@@ -860,7 +860,7 @@ var osed_bundle = (() => {
       const loadConfigRva = readUint32LE(dataDirectoryOffset + BigInt(8 * 10));
       const loadConfigSize = readUint32LE(dataDirectoryOffset + BigInt(8 * 10 + 4));
       if (loadConfigRva === 0 || loadConfigSize === 0) {
-        return "unknown";
+        return "disabled";
       }
       const loadConfig = base + BigInt(loadConfigRva);
       const sehTable = readUint32LE(loadConfig + BigInt(64));
@@ -1557,30 +1557,45 @@ var osed_bundle = (() => {
   function hasExactFlow(semantic, kind) {
     return semantic.summary.flowEffects.values.exact.has(kind);
   }
-  function isExactZeroRegister(semantic) {
-    for (const step of semantic.instructionSemantics) {
-      const ins = step.instruction;
-      if (ins.mnemonic === "xor" && ins.operands.length === 2 && ins.operands[0].toLowerCase() === ins.operands[1].toLowerCase()) {
-        return ins.operands[0].trim().toLowerCase();
+  var ARITHMETIC_MNEMONICS = /* @__PURE__ */ new Set(["add", "sub", "inc", "dec", "neg"]);
+  function zeroedRegisters(semantic) {
+    const zeroed = [];
+    for (const [register, expr] of Object.entries(semantic.summary.registerTransforms)) {
+      if (expr.kind === "constant" && expr.value === 0) {
+        zeroed.push(register);
       }
     }
-    return void 0;
+    return zeroed;
+  }
+  function pivotsStack(semantic) {
+    const esp = semantic.summary.registerTransforms.esp;
+    return esp.kind === "affine" && esp.base !== "esp" && esp.base !== "none";
   }
   function isLoadRegister(step) {
     if (!step.supported) {
       return void 0;
     }
     if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
-      return step.instruction.operands[0].trim().toLowerCase();
+      const register = step.instruction.operands[0].trim().toLowerCase();
+      return register === "esp" ? void 0 : register;
     }
     if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
       const left = step.instruction.operands[0].trim().toLowerCase();
       const right = step.instruction.operands[1].trim().toLowerCase();
-      if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right) {
+      if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right && left !== "esp") {
         return left;
       }
     }
     return void 0;
+  }
+  function adjustsStackExplicitly(step) {
+    var _a;
+    const ins = step.instruction;
+    const destination = (_a = ins.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+    if ((ins.mnemonic === "add" || ins.mnemonic === "sub") && destination === "esp") {
+      return true;
+    }
+    return ins.mnemonic === "ret" && ins.operands.length >= 1;
   }
   function addCategory(categories, reasonList, category, rule, message, evidence) {
     categories.add(category);
@@ -1599,33 +1614,21 @@ var osed_bundle = (() => {
     if (hasExactFlow(semantic, "CALL") || hasExactFlow(semantic, "JUMP")) {
       addCategory(categories, reasons, "FLOW_TRANSFER", "flow-transfer", "gadget transfers control flow", evidence);
     }
-    const zeroReg = isExactZeroRegister(semantic);
-    if (zeroReg) {
-      addCategory(categories, reasons, "ZERO_REGISTER", "xor-self", `zeroes ${zeroReg} via xor ${zeroReg}, ${zeroReg}`, evidence);
+    for (const zeroReg of zeroedRegisters(semantic)) {
+      addCategory(categories, reasons, "ZERO_REGISTER", "zero-register", `net-zeroes ${zeroReg}`, evidence);
     }
     for (const step of semantic.instructionSemantics) {
       const text = canonicalizeInstruction(step.instruction);
-      const lower = text.toLowerCase();
       const loadRegister = isLoadRegister(step);
       if (loadRegister) {
         if (semantic.instructionSemantics.length === 1 || semantic.instructionSemantics.every((item) => item.supported)) {
           addCategory(categories, reasons, "LOAD_REGISTER", "load-register", `loads ${loadRegister}`, [text]);
         }
       }
-      if (lower.startsWith("mov ") && lower.includes("[") && lower.includes("]")) {
-        if (lower.indexOf("[") < lower.indexOf(",")) {
-          addCategory(categories, reasons, "MEMORY_WRITE", "memory-write", "writes to memory", [text]);
-        } else {
-          addCategory(categories, reasons, "MEMORY_READ", "memory-read", "reads from memory", [text]);
-        }
+      if (adjustsStackExplicitly(step)) {
+        addCategory(categories, reasons, "STACK_ADJUST", "stack-adjust", "adjusts the stack pointer by a fixed amount", [text]);
       }
-      if (lower.startsWith("xchg ") && lower.includes("esp")) {
-        addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "writes esp via exchange", [text]);
-      }
-      if (lower === "leave" || lower.startsWith("ret ")) {
-        addCategory(categories, reasons, "STACK_ADJUST", "stack-adjust", "adjusts the stack", [text]);
-      }
-      if (lower.startsWith("add ") || lower.startsWith("sub ") || lower.startsWith("inc ") || lower.startsWith("dec ") || lower.startsWith("neg ")) {
+      if (ARITHMETIC_MNEMONICS.has(step.instruction.mnemonic)) {
         addCategory(categories, reasons, "ARITHMETIC", "arithmetic", "performs arithmetic transformation", [text]);
       }
       if (step.instruction.mnemonic === "pop" && step.instruction.operands.length > 1) {
@@ -1635,8 +1638,8 @@ var osed_bundle = (() => {
         addCategory(categories, reasons, "FLOW_TRANSFER", "explicit-flow", "explicit control-flow transfer", [text]);
       }
     }
-    if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "xchg" && step.instruction.operands.some((operand) => operand.trim().toLowerCase() === "esp"))) {
-      addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "exchange touches esp", evidence);
+    if (pivotsStack(semantic)) {
+      addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "esp becomes based on another register", evidence);
     }
     if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2 && step.instruction.operands[0].includes("[") && !step.instruction.operands[1].includes("["))) {
       addCategory(categories, reasons, "MEMORY_WRITE", "memory-write", "contains a memory write", evidence);
@@ -2241,13 +2244,14 @@ var osed_bundle = (() => {
         if (!isRegisterOperand(operand)) {
           return {};
         }
+        const popsEsp = operand.register === "esp";
         return {
           reads: ["esp"],
           writes: [operand.register],
-          stackDelta: { exact: [4] },
+          stackDelta: popsEsp ? { unknown: true } : { exact: [4] },
           memoryReads: ["[esp]"],
           flowEffects: [],
-          registerEffects: operand.register === "esp" ? { esp: unknownExpr() } : {
+          registerEffects: popsEsp ? { esp: unknownExpr() } : {
             [operand.register]: memoryExpr(registerExpr("esp")),
             esp: selfPlus(4)
           },
@@ -7387,9 +7391,9 @@ var osed_bundle = (() => {
   function getVersionInfo() {
     return {
       name: "osed-windbg",
-      version: "0.1.0",
-      buildTime: "2026-07-23T00:54:58.630Z",
-      gitCommit: "61a0257ce68a",
+      version: "1.0.1",
+      buildTime: "2026-07-23T01:32:49.000Z",
+      gitCommit: "21070692d283",
       gitDirty: true
     };
   }

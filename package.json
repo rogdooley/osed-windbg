@@ -1,6 +1,6 @@
 {
   "name": "osed-windbg",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "WinDbg Preview data-model exploit helper toolkit for OSED labs",
   "type": "commonjs",
