@@ -164,14 +164,16 @@ If a target address contains a badchar (e.g. a null in `0x00402118`), pass `excl
 
 ## Semantic ROP Namespace
 
-The `rop` runtime namespace is a semantic query surface layered on top of RP++ output. Load a corpus first with `rop.scan(...)`, then query it with `rop.query(...)` or inspect the derived capability catalog with `rop.capabilities()`.
+The `rop` runtime namespace is a semantic query surface. Load a corpus first with `rop.scan(...)` (pasted RP++ output) or `rop.scan_live(...)` (live target memory), then query it with `rop.query(...)` or inspect the derived capability catalog with `rop.capabilities()`.
 
 | Helper | Syntax | Example | Notes |
 | --- | --- | --- | --- |
 | `rop.find` | `dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop.find("essfunc")` | Runs the legacy ROP helper/module triage from the ROP namespace. |
 | `rop.scan` | `dx @$osed().rop.scan(text, options?)` | `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")` | Builds a capability index from pasted RP++ output. |
+| `rop.scan_live` | `dx @$osed().rop.scan_live({ module?, badchars?, maxPerPattern? })` | `dx @$osed().rop.scan_live({ module: "essfunc", badchars: [0, 10, 13] })` | Discovers gadgets directly from live target memory (bad-char-filtered addresses), feeds them through the semantic pipeline, and loads the same queryable corpus — no RP++ text, reads only. |
 | `rop.query` | `dx @$osed().rop.query(query)` | `dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
+| `rop.chain` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })` | Constructs a register-setup chain from the loaded corpus using clobber-free `pop reg ; ret` gadgets at their real addresses. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
 
 `rop.query` supports net register-transform predicates:
 

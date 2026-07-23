@@ -2945,6 +2945,54 @@ var osed_bundle = (() => {
     return capabilities;
   }
 
+  // src/rop/chain.ts
+  function firstKnownAddress(gadget) {
+    const location = gadget.locations.find((entry) => entry.virtualAddress !== void 0);
+    return (location == null ? void 0 : location.virtualAddress) !== void 0 ? BigInt(location.virtualAddress) : void 0;
+  }
+  function isSinglePopRet(gadget, register) {
+    if (gadget.instructions.length !== 2) {
+      return false;
+    }
+    const [pop, ret] = gadget.instructions;
+    return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register && ret.mnemonic === "ret" && ret.operands.length === 0;
+  }
+  function selectPopGadget(index, register) {
+    return index.loadRegister(register).filter((gadget) => isSinglePopRet(gadget, register) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+  }
+  function planRegisterSetup(index, targets) {
+    const steps = [];
+    const satisfied = [];
+    const unsatisfied = [];
+    for (const target of targets) {
+      const register = target.register.trim().toLowerCase();
+      const gadget = selectPopGadget(index, register);
+      if (!gadget) {
+        const reason = index.loadRegister(register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
+        unsatisfied.push({ register, reason });
+        continue;
+      }
+      const address = firstKnownAddress(gadget);
+      const value = target.value >>> 0;
+      steps.push({ kind: "gadget", address, comment: `pop ${register} ; ret` });
+      steps.push({ kind: "value", value, comment: `${register} = 0x${value.toString(16).toUpperCase().padStart(8, "0")}` });
+      satisfied.push(register);
+    }
+    return { steps, satisfied, unsatisfied, stackBytes: steps.length * 4 };
+  }
+  function hex32(value) {
+    const asBig = typeof value === "bigint" ? value : BigInt(value >>> 0);
+    return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function formatChainPython(plan) {
+    const lines = ["from struct import pack", 'rop = b""'];
+    for (const step of plan.steps) {
+      const word = step.kind === "gadget" ? step.address : step.value;
+      lines.push(`rop += pack("<I", ${hex32(word)})  # ${step.comment}`);
+    }
+    return lines;
+  }
+
   // src/semantics/types.ts
   var SEMANTIC_SCHEMA_VERSION = "v1";
 
@@ -3826,6 +3874,9 @@ var osed_bundle = (() => {
   }
   function buildCapabilityIndex(index) {
     return buildCapabilities(index.gadgets);
+  }
+  function buildCapabilityIndexFromSequences(sequences) {
+    return buildCapabilities(buildRopIndexFromSequences(sequences).gadgets);
   }
 
   // src/commands/rop.ts
@@ -7800,6 +7851,73 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/analysis/live_gadgets.ts
+  function discoverLiveGadgets(options = {}) {
+    var _a, _b, _c;
+    const pointerSize = getPointerSize();
+    const patterns = knownPatternsForPointerSize(pointerSize);
+    const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
+    const maxPerPattern = (_b = options.maxPerPattern) != null ? _b : 5;
+    const hits = [];
+    const warningSet = /* @__PURE__ */ new Set();
+    let scanned = 0;
+    let rejected = 0;
+    for (const pattern of patterns) {
+      const scan = scanPattern(
+        {
+          module: options.module,
+          executableOnly: true,
+          maxResults: Math.min(maxPerPattern * 4, 200),
+          chunkSize: 16384
+        },
+        Uint8Array.from(pattern.bytes)
+      );
+      scanned += scan.hits.length;
+      for (const warning of scan.warnings) {
+        warningSet.add(`${warning.region}: ${warning.message}`);
+      }
+      const outcome = applyFilters(scan.hits, [filter]);
+      rejected += outcome.rejected.length;
+      for (const address of outcome.kept.slice(0, maxPerPattern)) {
+        hits.push({ mnemonic: pattern.mnemonic, address, module: (_c = findModuleByAddress(address)) == null ? void 0 : _c.name });
+      }
+    }
+    return {
+      hits,
+      warnings: [...warningSet],
+      stats: { patterns: patterns.length, scanned, rejected, discovered: hits.length }
+    };
+  }
+
+  // src/semantics/live-provider.ts
+  function sequenceFromLiveHit(hit) {
+    const parts = hit.mnemonic.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
+    const instructions = parts.map((part) => parseInstruction(part));
+    const canonical = canonicalizeTextSequence(parts.join(" ; "));
+    const addressNumber = Number(hit.address);
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `live:${hit.address.toString(16)}:${canonical}`,
+      source: { kind: "source-adapter", name: "live", format: "windbg-memory", version: "v1" },
+      originalText: `0x${hit.address.toString(16)}: ${parts.join(" ; ")} ;`,
+      instructions,
+      provenance: {
+        module: hit.module,
+        // The full address survives in id/originalText; the numeric field is exact
+        // for realistic user-space addresses (< 2^53).
+        virtualAddress: Number.isSafeInteger(addressNumber) ? addressNumber : void 0,
+        // Discovered by scanning executable sections, so executability is proven.
+        executable: "EXACT",
+        writable: "UNKNOWN",
+        aslr: "UNKNOWN",
+        rebaseable: "UNKNOWN"
+      }
+    };
+  }
+  function sequencesFromLiveHits(hits) {
+    return [...hits].map(sequenceFromLiveHit);
+  }
+
   // src/commands/memory.ts
   function flag(value) {
     return value === null ? "unknown" : value ? "yes" : "no";
@@ -7998,8 +8116,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.1",
-      buildTime: "2026-07-23T02:33:08.537Z",
-      gitCommit: "dee783bdaa06",
+      buildTime: "2026-07-23T02:46:08.423Z",
+      gitCommit: "7a6990f2a1c3",
       gitDirty: true
     };
   }
@@ -8194,6 +8312,39 @@ var osed_bundle = (() => {
         { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() }
       ]);
     };
+    const scanLiveCorpus = (options) => {
+      const discovery = discoverLiveGadgets(options);
+      currentRopCorpus = buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits));
+      const rows = summarizeCapabilities(currentRopCorpus);
+      section("Live ROP Corpus Loaded");
+      info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${discovery.stats.discovered} live hits)`);
+      info(`Capabilities: ${rows.length}`);
+      if (discovery.stats.rejected > 0) {
+        info(`Rejected by bad chars: ${discovery.stats.rejected}`);
+      }
+      setResult({
+        command: "rop.scan_live",
+        args: options,
+        success: true,
+        findings: [__spreadValues({ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length }, discovery.stats)],
+        warnings: discovery.warnings,
+        errors: []
+      });
+      return toDxResult("Live ROP Corpus Loaded", [
+        { Corpus: "live", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() }
+      ]);
+    };
+    const executeRopScanLive = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.scan_live");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      return scanLiveCorpus({
+        module: options.module,
+        badchars: options.badchars,
+        maxPerPattern: options.maxPerPattern
+      });
+    };
     const executeRopScan = (...args) => {
       var _a, _b, _c;
       if (args.length === 1 && args[0] === "help") {
@@ -8294,6 +8445,63 @@ var osed_bundle = (() => {
       });
       return toDxResult("ROP Capabilities", rows);
     };
+    const parseChainTargets = (spec) => {
+      if (Array.isArray(spec)) {
+        return spec.filter((entry) => isPlainObject(entry)).map((entry) => {
+          var _a, _b;
+          return { register: String((_a = entry.register) != null ? _a : ""), value: Number((_b = entry.value) != null ? _b : 0) };
+        }).filter((target) => target.register.length > 0);
+      }
+      if (isPlainObject(spec)) {
+        return Object.entries(spec).map(([register, value]) => ({ register, value: Number(value) }));
+      }
+      return [];
+    };
+    const executeRopChain = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: "No corpus loaded. Run rop.scan(...) or rop.scan_live(...) first." }];
+        renderRows("ROP Chain", rows2);
+        setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: ["No corpus loaded."] });
+        return toDxResult("ROP Chain", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const targets = parseChainTargets((_b = (_a = options.set) != null ? _a : options.targets) != null ? _b : options);
+      if (targets.length === 0) {
+        const rows2 = [{ Error: "rop.chain requires a register->value map, e.g. { set: { eax: 0xDEADBEEF } }." }];
+        renderRows("ROP Chain", rows2);
+        setResult({ command: "rop.chain", args: options, success: false, findings: [], warnings: [], errors: ["No chain targets provided."] });
+        return toDxResult("ROP Chain", rows2);
+      }
+      const plan = planRegisterSetup(currentRopCorpus, targets);
+      const python = formatChainPython(plan);
+      section("ROP Chain (register setup)");
+      info(`Satisfied: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => ({
+        Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+        Meaning: step.comment
+      }));
+      renderRows("ROP Chain", rows);
+      setResult({
+        command: "rop.chain",
+        args: options,
+        success: plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult("ROP Chain", rows);
+    };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {
         return invoke(command.name, args);
@@ -8307,8 +8515,10 @@ var osed_bundle = (() => {
         return invoke("rop", args);
       },
       scan: executeRopScan,
+      scan_live: executeRopScanLive,
       query: executeRopQuery,
-      capabilities: executeRopCapabilities
+      capabilities: executeRopCapabilities,
+      chain: executeRopChain
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.pattern = {

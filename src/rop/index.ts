@@ -3,6 +3,7 @@ export * from "./classifier";
 export * from "./scoring";
 export * from "./capabilities";
 export * from "./query";
+export * from "./chain";
 
 import { canonicalizeSequenceForPolicy, composeSemanticSequence } from "../semantics/compose";
 import { InstructionSequence, InstructionSequenceSource } from "../semantics/types";
@@ -86,4 +87,8 @@ export function buildCapabilityIndexFromRpPlusText(text: string, options: RPPlus
 
 export function buildCapabilityIndex(index: RopIndex) {
   return buildCapabilities(index.gadgets);
+}
+
+export function buildCapabilityIndexFromSequences(sequences: Iterable<InstructionSequence>) {
+  return buildCapabilities(buildRopIndexFromSequences(sequences).gadgets);
 }

@@ -44,7 +44,9 @@ import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, summarizeCapabilities, type CapabilityIndex, type RopQuery } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type RopQuery } from "./rop";
+import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
+import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
 import * as out from "./core/output";
@@ -229,6 +231,41 @@ function bindApi(): OsedApi {
     ]);
   };
 
+  const scanLiveCorpus = (options: LiveDiscoveryOptions): DxResult => {
+    const discovery = discoverLiveGadgets(options);
+    currentRopCorpus = buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits));
+    const rows = summarizeCapabilities(currentRopCorpus);
+    out.section("Live ROP Corpus Loaded");
+    out.info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${discovery.stats.discovered} live hits)`);
+    out.info(`Capabilities: ${rows.length}`);
+    if (discovery.stats.rejected > 0) {
+      out.info(`Rejected by bad chars: ${discovery.stats.rejected}`);
+    }
+    setResult({
+      command: "rop.scan_live",
+      args: options as Record<string, unknown>,
+      success: true,
+      findings: [{ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length, ...discovery.stats }],
+      warnings: discovery.warnings,
+      errors: [],
+    });
+    return toDxResult("Live ROP Corpus Loaded", [
+      { Corpus: "live", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() },
+    ]);
+  };
+
+  const executeRopScanLive = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.scan_live");
+    }
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    return scanLiveCorpus({
+      module: options.module as string | undefined,
+      badchars: options.badchars as number[] | undefined,
+      maxPerPattern: options.maxPerPattern as number | undefined,
+    });
+  };
+
   const executeRopScan = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.scan");
@@ -335,6 +372,68 @@ function bindApi(): OsedApi {
     return toDxResult("ROP Capabilities", rows);
   };
 
+  const parseChainTargets = (spec: unknown): ChainTarget[] => {
+    if (Array.isArray(spec)) {
+      return spec
+        .filter((entry) => isPlainObject(entry))
+        .map((entry) => ({ register: String((entry as Record<string, unknown>).register ?? ""), value: Number((entry as Record<string, unknown>).value ?? 0) }))
+        .filter((target) => target.register.length > 0);
+    }
+    if (isPlainObject(spec)) {
+      return Object.entries(spec).map(([register, value]) => ({ register, value: Number(value) }));
+    }
+    return [];
+  };
+
+  const executeRopChain = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.chain");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: "No corpus loaded. Run rop.scan(...) or rop.scan_live(...) first." }];
+      renderRows("ROP Chain", rows);
+      setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: ["No corpus loaded."] });
+      return toDxResult("ROP Chain", rows);
+    }
+
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const targets = parseChainTargets(options.set ?? options.targets ?? options);
+    if (targets.length === 0) {
+      const rows = [{ Error: "rop.chain requires a register->value map, e.g. { set: { eax: 0xDEADBEEF } }." }];
+      renderRows("ROP Chain", rows);
+      setResult({ command: "rop.chain", args: options, success: false, findings: [], warnings: [], errors: ["No chain targets provided."] });
+      return toDxResult("ROP Chain", rows);
+    }
+
+    const plan = planRegisterSetup(currentRopCorpus, targets);
+    const python = formatChainPython(plan);
+
+    out.section("ROP Chain (register setup)");
+    out.info(`Satisfied: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    for (const line of python) {
+      out.print(line);
+    }
+    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    for (const warning of warnings) {
+      out.warn(warning);
+    }
+
+    const rows = plan.steps.map((step) => ({
+      Word: step.kind === "gadget" ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}` : `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Meaning: step.comment,
+    }));
+    renderRows("ROP Chain", rows);
+    setResult({
+      command: "rop.chain",
+      args: options,
+      success: plan.unsatisfied.length === 0,
+      findings: [{ ...plan, python }],
+      warnings,
+      errors: [],
+    });
+    return toDxResult("ROP Chain", rows);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -349,8 +448,10 @@ function bindApi(): OsedApi {
       return invoke("rop", args);
     },
     scan: executeRopScan,
+    scan_live: executeRopScanLive,
     query: executeRopQuery,
     capabilities: executeRopCapabilities,
+    chain: executeRopChain,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
