@@ -174,6 +174,7 @@ The `rop` runtime namespace is a semantic query surface. Load a corpus first wit
 | `rop.query` | `dx @$osed().rop.query(query)` | `dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
 | `rop.chain` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })` | Constructs a register-setup chain from the loaded corpus using real-address gadgets. It can zero value-0 targets with `xor reg, reg ; ret`, co-satisfy compatible registers with pure multi-pop gadgets, and fall back to single `pop reg ; ret`. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
+| `rop.chain_vp` | `dx @$osed().rop.chain_vp({ virtualProtect?, returnAddress?, lpAddress?, writable? })` | `dx @$osed().rop.chain_vp({ virtualProtect: 0x7C801AD0 })` | VirtualProtect DEP-bypass chain (PUSHAD technique) built from the loaded corpus: resolves every `pop reg ; ret` and the `pushad ; ret` gadget at real addresses, sets `flNewProtect = 0x40`, and leaves named Python placeholders (`VIRTUALPROTECT`, `RETURN_ADDR`, `LP_ADDRESS`, `WRITABLE`) for runtime-dependent values you don't supply. Reports any missing gadget. Read-only. |
 
 `rop.query` supports net register-transform predicates:
 

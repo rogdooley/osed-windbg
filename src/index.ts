@@ -44,7 +44,7 @@ import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type RopQuery } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualProtect, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type RopQuery, type VirtualProtectParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
@@ -435,6 +435,60 @@ function bindApi(): OsedApi {
     return toDxResult("ROP Chain", rows);
   };
 
+  const executeRopChainVp = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.chain_vp");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP VirtualProtect Chain", rows);
+      setResult({ command: "rop.chain_vp", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP VirtualProtect Chain", rows);
+    }
+
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const params: VirtualProtectParams = {
+      virtualProtect: options.virtualProtect !== undefined ? Number(options.virtualProtect) : undefined,
+      returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
+      lpAddress: options.lpAddress !== undefined ? Number(options.lpAddress) : undefined,
+      writable: options.writable !== undefined ? Number(options.writable) : undefined,
+      flNewProtect: options.flNewProtect !== undefined ? Number(options.flNewProtect) : undefined,
+    };
+
+    const plan = planVirtualProtect(currentRopCorpus, params);
+    const python = formatChainPython(plan);
+
+    out.section("ROP Chain — VirtualProtect (PUSHAD)");
+    out.info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    if (plan.placeholders.length > 0) {
+      out.info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
+    }
+    for (const line of python) {
+      out.print(line);
+    }
+    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    for (const warning of warnings) {
+      out.warn(warning);
+    }
+
+    const rows = plan.steps.map((step) => ({
+      Word: step.kind === "gadget"
+        ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}`
+        : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Meaning: step.comment,
+    }));
+    renderRows("ROP VirtualProtect Chain", rows);
+    setResult({
+      command: "rop.chain_vp",
+      args: options,
+      success: plan.unsatisfied.length === 0,
+      findings: [{ ...plan, python }],
+      warnings,
+      errors: [],
+    });
+    return toDxResult("ROP VirtualProtect Chain", rows);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -453,6 +507,7 @@ function bindApi(): OsedApi {
     query: executeRopQuery,
     capabilities: executeRopCapabilities,
     chain: executeRopChain,
+    chain_vp: executeRopChainVp,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 

@@ -3066,12 +3066,73 @@ var osed_bundle = (() => {
     return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
   }
   function formatChainPython(plan) {
+    var _a;
     const lines = ["from struct import pack", 'rop = b""'];
     for (const step of plan.steps) {
-      const word = step.kind === "gadget" ? step.address : step.value;
-      lines.push(`rop += pack("<I", ${hex32(word)})  # ${step.comment}`);
+      const word = step.kind === "gadget" ? hex32(step.address) : (_a = step.placeholder) != null ? _a : hex32(step.value);
+      lines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
     }
     return lines;
+  }
+  function isPushadRet(gadget) {
+    if (gadget.instructions.length !== 2) {
+      return false;
+    }
+    const [pushad, ret] = gadget.instructions;
+    return pushad.mnemonic === "pushad" && ret.mnemonic === "ret" && ret.operands.length === 0;
+  }
+  function findPushadRet(index) {
+    return index.gadgets.filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+  }
+  function virtualProtectSpecs(params) {
+    var _a;
+    const flNewProtect = ((_a = params.flNewProtect) != null ? _a : 64) >>> 0;
+    const named = (value, placeholder) => value === void 0 ? { placeholder } : { value: value >>> 0 };
+    return [
+      __spreadProps(__spreadValues({ register: "edi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (RET dispatches here)" }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.lpAddress, "LP_ADDRESS")), { meaning: "lpAddress (shellcode start)" }),
+      { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      __spreadProps(__spreadValues({ register: "edx" }, named(params.writable, "WRITABLE")), { meaning: "lpflOldProtect (writable dummy)" }),
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "unused by VirtualProtect (writable)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
+    ];
+  }
+  function planVirtualProtect(index, params = {}) {
+    const steps = [];
+    const satisfied = [];
+    const unsatisfied = [];
+    const placeholders = /* @__PURE__ */ new Set();
+    for (const spec of virtualProtectSpecs(params)) {
+      const gadget = selectPopGadget(index, spec.register);
+      if (!gadget) {
+        const reason = index.loadRegister(spec.register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
+        unsatisfied.push({ register: spec.register, reason });
+        continue;
+      }
+      steps.push({ kind: "gadget", address: firstKnownAddress(gadget), comment: `pop ${spec.register} ; ret` });
+      if (spec.placeholder) {
+        placeholders.add(spec.placeholder);
+        steps.push({ kind: "value", placeholder: spec.placeholder, comment: `${spec.register} = ${spec.placeholder} (${spec.meaning})` });
+      } else {
+        steps.push({ kind: "value", value: spec.value >>> 0, comment: `${spec.register} = ${hex32(spec.value)} (${spec.meaning})` });
+      }
+      satisfied.push(spec.register);
+    }
+    const pushad = findPushadRet(index);
+    if (pushad) {
+      steps.push({ kind: "gadget", address: firstKnownAddress(pushad), comment: "pushad ; ret (builds the VirtualProtect call frame and dispatches)" });
+    } else {
+      unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
+    }
+    return {
+      steps,
+      satisfied,
+      unsatisfied,
+      placeholders: [...placeholders],
+      hasPushad: pushad !== void 0,
+      stackBytes: steps.length * 4
+    };
   }
 
   // src/semantics/types.ts
@@ -8197,8 +8258,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.2",
-      buildTime: "2026-07-23T02:54:50.191Z",
-      gitCommit: "db48f26348d4",
+      buildTime: "2026-07-23T03:05:32.078Z",
+      gitCommit: "578b8c31101c",
       gitDirty: true
     };
   }
@@ -8584,6 +8645,56 @@ var osed_bundle = (() => {
       });
       return toDxResult("ROP Chain", rows);
     };
+    const executeRopChainVp = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.chain_vp");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP VirtualProtect Chain", rows2);
+        setResult({ command: "rop.chain_vp", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP VirtualProtect Chain", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const params = {
+        virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
+        returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
+        lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0,
+        flNewProtect: options.flNewProtect !== void 0 ? Number(options.flNewProtect) : void 0
+      };
+      const plan = planVirtualProtect(currentRopCorpus, params);
+      const python = formatChainPython(plan);
+      section("ROP Chain \u2014 VirtualProtect (PUSHAD)");
+      info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) {
+        info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
+      }
+      for (const line of python) {
+        print(line);
+      }
+      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      for (const warning of warnings) {
+        warn(warning);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Word: step.kind === "gadget" ? `0x${step.address.toString(16).toUpperCase().padStart(8, "0")}` : (_a = step.placeholder) != null ? _a : `0x${(step.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          Meaning: step.comment
+        };
+      });
+      renderRows("ROP VirtualProtect Chain", rows);
+      setResult({
+        command: "rop.chain_vp",
+        args: options,
+        success: plan.unsatisfied.length === 0,
+        findings: [__spreadProps(__spreadValues({}, plan), { python })],
+        warnings,
+        errors: []
+      });
+      return toDxResult("ROP VirtualProtect Chain", rows);
+    };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {
         return invoke(command.name, args);
@@ -8600,7 +8711,8 @@ var osed_bundle = (() => {
       scan_live: executeRopScanLive,
       query: executeRopQuery,
       capabilities: executeRopCapabilities,
-      chain: executeRopChain
+      chain: executeRopChain,
+      chain_vp: executeRopChainVp
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.pattern = {

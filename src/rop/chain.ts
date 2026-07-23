@@ -17,6 +17,9 @@ export interface ChainStep {
   kind: "gadget" | "value";
   address?: bigint;
   value?: number;
+  // When set, this stack word is an operator-supplied placeholder (e.g. a
+  // runtime-dependent address) rather than a resolved constant.
+  placeholder?: string;
   comment: string;
 }
 
@@ -198,11 +201,119 @@ function hex32(value: bigint | number): string {
   return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
-export function formatChainPython(plan: ChainPlan): string[] {
+export function formatChainPython(plan: { steps: ChainStep[] }): string[] {
   const lines = ["from struct import pack", 'rop = b""'];
   for (const step of plan.steps) {
-    const word = step.kind === "gadget" ? step.address! : step.value!;
-    lines.push(`rop += pack("<I", ${hex32(word)})  # ${step.comment}`);
+    const word = step.kind === "gadget"
+      ? hex32(step.address!)
+      : step.placeholder ?? hex32(step.value!);
+    lines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
   }
   return lines;
+}
+
+// ---- VirtualProtect goal template (PUSHAD technique) ----------------------
+//
+// Expands the classic DEP-bypass into concrete register-setup targets, resolves
+// every pop and the pushad;ret gadget from the (live) corpus at real addresses,
+// and leaves named placeholders only for genuinely runtime-dependent values. It
+// emits a chain as evidence — it never writes target memory.
+
+export interface VirtualProtectParams {
+  virtualProtect?: number;
+  returnAddress?: number;
+  lpAddress?: number;
+  writable?: number;
+  flNewProtect?: number;
+}
+
+export interface VirtualProtectPlan {
+  steps: ChainStep[];
+  satisfied: string[];
+  unsatisfied: Array<{ register: string; reason: string }>;
+  placeholders: string[];
+  hasPushad: boolean;
+  stackBytes: number;
+}
+
+interface VpRegisterSpec {
+  register: string;
+  value?: number;
+  placeholder?: string;
+  meaning: string;
+}
+
+function isPushadRet(gadget: RopGadget): boolean {
+  if (gadget.instructions.length !== 2) {
+    return false;
+  }
+  const [pushad, ret] = gadget.instructions;
+  return pushad.mnemonic === "pushad" && ret.mnemonic === "ret" && ret.operands.length === 0;
+}
+
+function findPushadRet(index: CapabilityIndex): RopGadget | undefined {
+  return index.gadgets
+    .filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== undefined)
+    .sort((a, b) => b.score - a.score)[0];
+}
+
+// Register map consumed by `pushad ; ret` for VirtualProtect(lpAddress, dwSize,
+// flNewProtect, lpflOldProtect): RET dispatches to EDI, then VirtualProtect's
+// stdcall frame is [ESI][EBP][ESP][EBX][EDX]. ESP is the saved stack pointer
+// used as dwSize, so it is not set here. ECX/EAX are unused by the call.
+function virtualProtectSpecs(params: VirtualProtectParams): VpRegisterSpec[] {
+  const flNewProtect = (params.flNewProtect ?? 0x40) >>> 0;
+  const named = (value: number | undefined, placeholder: string): Pick<VpRegisterSpec, "value" | "placeholder"> =>
+    value === undefined ? { placeholder } : { value: value >>> 0 };
+  return [
+    { register: "edi", ...named(params.virtualProtect, "VIRTUALPROTECT"), meaning: "VirtualProtect (RET dispatches here)" },
+    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after VirtualProtect (e.g. jmp esp)" },
+    { register: "ebp", ...named(params.lpAddress, "LP_ADDRESS"), meaning: "lpAddress (shellcode start)" },
+    { register: "ebx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+    { register: "edx", ...named(params.writable, "WRITABLE"), meaning: "lpflOldProtect (writable dummy)" },
+    { register: "ecx", ...named(params.writable, "WRITABLE"), meaning: "unused by VirtualProtect (writable)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by VirtualProtect (junk)" },
+  ];
+}
+
+export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}): VirtualProtectPlan {
+  const steps: ChainStep[] = [];
+  const satisfied: string[] = [];
+  const unsatisfied: Array<{ register: string; reason: string }> = [];
+  const placeholders = new Set<string>();
+
+  for (const spec of virtualProtectSpecs(params)) {
+    const gadget = selectPopGadget(index, spec.register);
+    if (!gadget) {
+      const reason = index.loadRegister(spec.register).length > 0
+        ? "only multi-pop or address-less load gadgets available"
+        : "no pop gadget found for register";
+      unsatisfied.push({ register: spec.register, reason });
+      continue;
+    }
+    steps.push({ kind: "gadget", address: firstKnownAddress(gadget)!, comment: `pop ${spec.register} ; ret` });
+    if (spec.placeholder) {
+      placeholders.add(spec.placeholder);
+      steps.push({ kind: "value", placeholder: spec.placeholder, comment: `${spec.register} = ${spec.placeholder} (${spec.meaning})` });
+    } else {
+      steps.push({ kind: "value", value: spec.value! >>> 0, comment: `${spec.register} = ${hex32(spec.value!)} (${spec.meaning})` });
+    }
+    satisfied.push(spec.register);
+  }
+
+  const pushad = findPushadRet(index);
+  if (pushad) {
+    steps.push({ kind: "gadget", address: firstKnownAddress(pushad)!, comment: "pushad ; ret (builds the VirtualProtect call frame and dispatches)" });
+  } else {
+    unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
+  }
+
+  return {
+    steps,
+    satisfied,
+    unsatisfied,
+    placeholders: [...placeholders],
+    hasPushad: pushad !== undefined,
+    stackBytes: steps.length * 4,
+  };
 }

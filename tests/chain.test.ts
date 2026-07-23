@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sequencesFromLiveHits } from "../src/semantics/live-provider";
-import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup } from "../src/rop";
+import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualProtect } from "../src/rop";
 
 // Chain construction over an index built from (synthetic) live gadget hits, so it
 // exercises the full live -> index -> plan path.
@@ -107,5 +107,60 @@ describe("smarter chain construction: multi-pop and zeroing", () => {
       { kind: "gadget", address: BigInt(0x00405010), comment: "pop ebx ; ret" },
       { kind: "value", value: 0x5, comment: "ebx = 0x00000005" },
     ]);
+  });
+});
+
+describe("VirtualProtect goal template (PUSHAD technique)", () => {
+  const vpIndex = buildCapabilityIndexFromSequences(
+    sequencesFromLiveHits([
+      { mnemonic: "pop edi ; ret", address: BigInt(0x00401000), module: "vuln" },
+      { mnemonic: "pop esi ; ret", address: BigInt(0x00401010), module: "vuln" },
+      { mnemonic: "pop ebp ; ret", address: BigInt(0x00401020), module: "vuln" },
+      { mnemonic: "pop ebx ; ret", address: BigInt(0x00401030), module: "vuln" },
+      { mnemonic: "pop edx ; ret", address: BigInt(0x00401040), module: "vuln" },
+      { mnemonic: "pop ecx ; ret", address: BigInt(0x00401050), module: "vuln" },
+      { mnemonic: "pop eax ; ret", address: BigInt(0x00401060), module: "vuln" },
+      { mnemonic: "pushad ; ret", address: BigInt(0x00401070), module: "vuln" },
+    ]),
+  );
+
+  test("resolves every gadget and constant when addresses are supplied", () => {
+    const plan = planVirtualProtect(vpIndex, {
+      virtualProtect: 0x7c801ad0,
+      returnAddress: 0x080414d3,
+      lpAddress: 0x00110000,
+      writable: 0x0040a000,
+    });
+    expect(plan.satisfied).toEqual(["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]);
+    expect(plan.unsatisfied).toEqual([]);
+    expect(plan.placeholders).toEqual([]);
+    expect(plan.hasPushad).toBe(true);
+    expect(plan.stackBytes).toBe(60); // 7 pops + 7 values + pushad
+    // Constants are concrete; the frame terminates with the pushad gadget.
+    expect(plan.steps[7]).toEqual({ kind: "value", value: 0x40, comment: "ebx = 0x00000040 (flNewProtect = PAGE_EXECUTE_READWRITE)" });
+    expect(plan.steps[plan.steps.length - 1]).toEqual({
+      kind: "gadget",
+      address: BigInt(0x00401070),
+      comment: "pushad ; ret (builds the VirtualProtect call frame and dispatches)",
+    });
+  });
+
+  test("emits named placeholders for runtime-dependent values", () => {
+    const plan = planVirtualProtect(vpIndex, {});
+    expect(plan.placeholders).toEqual(["VIRTUALPROTECT", "RETURN_ADDR", "LP_ADDRESS", "WRITABLE"]);
+    const python = formatChainPython(plan);
+    expect(python).toContain('rop += pack("<I", VIRTUALPROTECT)  # edi = VIRTUALPROTECT (VirtualProtect (RET dispatches here))');
+    expect(python).toContain('rop += pack("<I", 0x00000040)  # ebx = 0x00000040 (flNewProtect = PAGE_EXECUTE_READWRITE)');
+  });
+
+  test("reports missing pushad and missing pop gadgets honestly", () => {
+    const partial = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([{ mnemonic: "pop edi ; ret", address: BigInt(0x00401000), module: "vuln" }]),
+    );
+    const plan = planVirtualProtect(partial, { virtualProtect: 0x7c801ad0 });
+    expect(plan.hasPushad).toBe(false);
+    expect(plan.unsatisfied.some((entry) => entry.register === "pushad")).toBe(true);
+    expect(plan.unsatisfied.some((entry) => entry.register === "esi")).toBe(true);
+    expect(plan.satisfied).toEqual(["edi"]);
   });
 });
