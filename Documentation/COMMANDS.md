@@ -12,7 +12,9 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `reload` | `dx @$osed().reload()` | `dx @$osed().reload()` | Clears and re-registers the command registry. |
 | `pattern_create` | `dx @$osed().pattern_create(length, type?)` | `dx @$osed().pattern_create(300, "msf")` | Generates cyclic pattern text. |
 | `pattern_offset` | `dx @$osed().pattern_offset(value, type?)` | `dx @$osed().pattern_offset(0x39654138, "msf")` | Finds an offset in the selected pattern family. |
-| `badchars` | `dx @$osed().badchars(address, exclude?)` | `dx @$osed().badchars(0x00B8F900)` | Compares memory bytes against the expected byte sequence. |
+| `badchars` | `dx @$osed().badchars(address, exclude?)` | `dx @$osed().badchars(0x00B8F900)` | Compares memory bytes against the expected byte sequence at a known address. |
+| `badchar_array` | `dx @$osed().badchar_array(exclude?)` | `dx @$osed().badchar_array([0, 10, 13])` | Generates the test byte array (0x00-0xFF minus excludes) in Python, C, and hex paste-ready forms. |
+| `badchar_find` | `dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)` | `dx @$osed().badchar_find()` | Auto-locates the sent test array near an address or the stack pointer, reports the landing address, the first corrupted byte, and the suggested next exclude set. |
 | `egghunter` | `dx @$osed().egghunter(tag?, mode?, wow64?)` | `dx @$osed().egghunter("W00T", "ntaccess", false)` | Emits egghunter shellcode as hex and Python bytes. |
 | `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
 | `seh` | `dx @$osed().seh()` | `dx @$osed().seh()` | Walks the current thread SEH chain. x86-only in v1. |

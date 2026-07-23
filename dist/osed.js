@@ -512,7 +512,7 @@ var osed_bundle = (() => {
 
   // src/logic/badchars_logic.ts
   function expectedBytes(exclude) {
-    const excluded = new Set(exclude);
+    const excluded = new Set(exclude.map((value) => value & 255));
     const result3 = [];
     for (let i = 0; i <= 255; i += 1) {
       if (!excluded.has(i)) {
@@ -520,6 +520,36 @@ var osed_bundle = (() => {
       }
     }
     return result3;
+  }
+  function hexByte(value) {
+    return (value & 255).toString(16).padStart(2, "0");
+  }
+  function formatByteArray(bytes, format) {
+    switch (format) {
+      case "python":
+        return `b"${bytes.map((value) => `\\x${hexByte(value)}`).join("")}"`;
+      case "c":
+        return `"${bytes.map((value) => `\\x${hexByte(value)}`).join("")}"`;
+      case "hex":
+      default:
+        return bytes.map(hexByte).join(" ");
+    }
+  }
+  function locateExpectedArray(window, expected, minRun = 8) {
+    let best = { offset: -1, matchedRun: 0 };
+    for (let start = 0; start < window.length; start += 1) {
+      let run = 0;
+      for (let i = 0; start + i < window.length && i < expected.length; i += 1) {
+        if (window[start + i] !== expected[i]) {
+          break;
+        }
+        run += 1;
+      }
+      if (run > best.matchedRun) {
+        best = { offset: start, matchedRun: run };
+      }
+    }
+    return best.matchedRun >= minRun ? best : void 0;
   }
   function compareBadchars(observed, expected) {
     const mismatches = [];
@@ -543,259 +573,18 @@ var osed_bundle = (() => {
     };
   }
 
-  // src/commands/badchars.ts
-  function result(command, args, findings, warnings = []) {
-    return { command, args, success: true, findings, warnings, errors: [] };
-  }
-  function createBadcharsCommand() {
-    return {
-      name: "badchars",
-      description: "Identify bad characters from a memory byte sequence.",
-      usage: "dx @$osed().badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
-      examples: [
-        "dx @$osed().badchars({ address: 0x00B8F900 })",
-        "dx @$osed().badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })"
-      ],
-      schema: {
-        address: { type: ["number", "string"], required: true },
-        exclude: { type: "array", elementType: "number", default: [] }
-      },
-      execute(options) {
-        var _a;
-        const address = normalizeAddress(options.address);
-        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
-        const expected = expectedBytes(normalizedExclude.values);
-        const observed = readMemory(address, expected.length);
-        const compared = compareBadchars(observed, expected);
-        const pointerSize = getPointerSize();
-        section("Bad Character Analysis");
-        info(`Start address: ${formatAddress(address, pointerSize)}`);
-        info(`Exclude count: ${normalizedExclude.values.length}`);
-        if (compared.breakOffset !== void 0 && compared.nextExpected !== void 0) {
-          warn(`Sequence breaks at offset 0x${compared.breakOffset.toString(16).toUpperCase()}.`);
-          warn(`Next expected byte: ${formatHexByte(compared.nextExpected)}`);
-        } else {
-          info("No sequence break detected in sampled byte range.");
-        }
-        table(
-          [
-            { key: "offset", header: "Offset", width: 8 },
-            { key: "expected", header: "Expected", width: 10 },
-            { key: "observed", header: "Observed", width: 10 }
-          ],
-          compared.mismatches.slice(0, 32).map((mismatch) => ({
-            offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
-            expected: formatHexByte(mismatch.expected),
-            observed: formatHexByte(mismatch.observed)
-          }))
-        );
-        const excludeList = normalizedExclude.values.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ");
-        info(`Copy-ready exclude list: ${excludeList}`);
-        whyItMatters("Accurate badchar profiling prevents payload corruption before shellcode staging.");
-        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
-        return result(
-          "badchars",
-          __spreadProps(__spreadValues({}, options), {
-            exclude: normalizedExclude.values
-          }),
-          [
-            {
-              breakOffset: compared.breakOffset,
-              nextExpected: compared.nextExpected,
-              mismatches: compared.mismatches,
-              exclude: normalizedExclude.values
-            }
-          ],
-          warnings
-        );
+  // src/core/scan_engine.ts
+  var IMAGE_SCN_MEM_EXECUTE = 536870912;
+  function decodeAscii(bytes) {
+    let result3 = "";
+    for (const byte of bytes) {
+      if (byte === 0) {
+        break;
       }
-    };
-  }
-
-  // src/commands/egghunter.ts
-  var EGGHUNTERS = {
-    ntaccess_x86: [102, 129, 202, 255, 15, 66, 82, 106, 2, 88, 205, 46, 60, 5, 90, 116, 239, 184, 87, 48, 48, 84, 139, 250, 175, 117, 234, 175, 117, 231, 255, 231],
-    ntaccess_wow64: [102, 129, 202, 255, 15, 65, 106, 2, 88, 205, 46, 60, 5, 90, 116, 239, 184, 87, 48, 48, 84, 139, 250, 175, 117, 234, 175, 117, 231, 255, 231]
-  };
-  function bytesToHex(bytes) {
-    return bytes.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join("");
-  }
-  function bytesToPython(bytes) {
-    return `b"${bytes.map((value) => `\\x${value.toString(16).padStart(2, "0")}`).join("")}"`;
-  }
-  function build(options) {
-    if (options.mode === "seh") {
-      throw new Error(
-        'The SEH egghunter mode is not implemented. Use mode: "ntaccess" instead, which probes memory via the NtAccessCheckAndAuditAlarm syscall (INT 0x2E).'
-      );
+      result3 += String.fromCharCode(byte);
     }
-    const key2 = `${options.mode}_${options.wow64 ? "wow64" : "x86"}`;
-    const bytes = EGGHUNTERS[key2];
-    if (!bytes) {
-      throw new Error(`Unsupported egghunter mode: ${key2}`);
-    }
-    const hunter = [...bytes];
-    const tagBytes = options.tag.padEnd(4, "X").slice(0, 4).split("").map((char) => char.charCodeAt(0));
-    hunter.splice(18, 4, ...tagBytes);
-    return hunter;
+    return result3;
   }
-  function createEgghunterCommand() {
-    return {
-      name: "egghunter",
-      description: "Generate NtAccess/SEH egghunter stubs.",
-      usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
-      examples: [
-        "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
-        "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh', wow64: true })"
-      ],
-      schema: {
-        tag: { type: "string", default: "W00T" },
-        mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
-        wow64: { type: "boolean", default: false }
-      },
-      execute(options) {
-        const hunter = build(options);
-        section("Egghunter");
-        info(`Tag: ${options.tag}`);
-        info(`Mode: ${options.mode}`);
-        info(`WoW64: ${options.wow64 ? "yes" : "no"}`);
-        info(`Size: ${hunter.length} bytes`);
-        print(bytesToHex(hunter));
-        print(bytesToPython(hunter));
-        whyItMatters("Egghunters shrink staged exploits and locate payloads in constrained buffers.");
-        return {
-          command: "egghunter",
-          args: options,
-          success: true,
-          findings: [{ bytes: hunter, size: hunter.length }],
-          warnings: [],
-          errors: []
-        };
-      }
-    };
-  }
-
-  // src/analysis/seh.ts
-  function safeGet(value, key2) {
-    if (!value || typeof value !== "object") return void 0;
-    try {
-      return value[key2];
-    } catch (_error) {
-      return void 0;
-    }
-  }
-  function safeKeys(value) {
-    if (!value || typeof value !== "object") return [];
-    try {
-      return Object.keys(value);
-    } catch (_error) {
-      return [];
-    }
-  }
-  function toAddress(value) {
-    if (typeof value === "bigint") return value;
-    if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
-    if (typeof value === "string") {
-      const text = value.trim();
-      const embeddedHex = text.match(/0x[0-9a-fA-F]+/);
-      if (embeddedHex) return BigInt(embeddedHex[0]);
-      if (/^[0-9a-fA-F]+$/.test(text)) return BigInt(`0x${text}`);
-    }
-    if (value && typeof value === "object") {
-      for (const key2 of ["targetLocation", "address", "Address", "Value", "value"]) {
-        const parsed = toAddress(safeGet(value, key2));
-        if (parsed !== BigInt(0)) return parsed;
-      }
-      try {
-        const valueOf = safeGet(value, "valueOf");
-        if (typeof valueOf === "function") {
-          const resolved = valueOf.call(value);
-          if (resolved !== value) {
-            const parsed = toAddress(resolved);
-            if (parsed !== BigInt(0)) return parsed;
-          }
-        }
-      } catch (_error) {
-      }
-      try {
-        const toString = safeGet(value, "toString");
-        if (typeof toString === "function") return toAddress(toString.call(value));
-      } catch (_error) {
-      }
-    }
-    return BigInt(0);
-  }
-  function signedInteger(value) {
-    if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
-    if (typeof value === "bigint") return Number(value);
-    const text = typeof value === "string" ? value : String(value != null ? value : "");
-    const match = text.match(/-?[0-9]+/);
-    return match ? parseInt(match[0], 10) : 0;
-  }
-  function environmentTeb(thread) {
-    for (const environment of [safeGet(thread, "Environment"), safeGet(thread, "NativeEnvironment")]) {
-      const block = safeGet(environment, "EnvironmentBlock");
-      if (!block || typeof block !== "object") continue;
-      const direct = toAddress(safeGet(block, "Self"));
-      if (direct !== BigInt(0)) return direct;
-      const ntTib = safeGet(block, "NtTib");
-      const nativeSelf = toAddress(safeGet(ntTib, "Self"));
-      const wowOffset = signedInteger(safeGet(block, "WowTebOffset"));
-      if (nativeSelf !== BigInt(0) && wowOffset !== 0) return nativeSelf + BigInt(wowOffset);
-      if (nativeSelf !== BigInt(0)) return nativeSelf;
-    }
-    return BigInt(0);
-  }
-  function candidates(value, depth = 0) {
-    if (depth > 2 || value === null || value === void 0) return [];
-    const found = /* @__PURE__ */ new Set();
-    const direct = toAddress(value);
-    if (direct !== BigInt(0)) found.add(direct);
-    if (typeof value === "object") {
-      for (const key2 of safeKeys(value)) {
-        for (const item of candidates(safeGet(value, key2), depth + 1)) found.add(item);
-      }
-    }
-    return [...found];
-  }
-  function looksLikeTeb32(address, reader) {
-    try {
-      if (address < BigInt(4096) || reader(address + BigInt(24), 4) !== address) return false;
-      const head = reader(address, 4);
-      return head !== BigInt(0) && head !== BigInt(4294967295);
-    } catch (_error) {
-      return false;
-    }
-  }
-  function resolveTeb32Address(thread, reader = readPointer) {
-    const fromEnvironment = environmentTeb(thread);
-    if (fromEnvironment !== BigInt(0)) return fromEnvironment;
-    for (const key2 of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
-      const parsed = toAddress(safeGet(thread, key2));
-      if (parsed !== BigInt(0)) return parsed;
-    }
-    for (const key2 of safeKeys(thread)) {
-      if (/teb/i.test(key2)) {
-        const parsed = toAddress(safeGet(thread, key2));
-        if (parsed !== BigInt(0)) return parsed;
-      }
-    }
-    return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
-  }
-  function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
-    const records = [];
-    let node = reader(teb, 4);
-    while (node !== BigInt(4294967295) && records.length < maxRecords) {
-      const next = reader(node, 4);
-      records.push({ node, next, handler: reader(node + BigInt(4), 4) });
-      node = next;
-    }
-    return records;
-  }
-
-  // src/commands/modules.ts
-  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 64;
-  var IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 256;
   function parseBigIntString(value) {
     const text = value.trim();
     if (/^0x[0-9a-fA-F]+$/.test(text)) {
@@ -850,287 +639,15 @@ var osed_bundle = (() => {
     }
     return [];
   }
-  function parseSafeSeh(base, pe, optionalHeaderMagic) {
-    if (optionalHeaderMagic !== 267) {
-      return "unknown";
-    }
-    try {
-      const optionalHeaderOffset = pe + BigInt(24);
-      const dataDirectoryOffset = optionalHeaderOffset + BigInt(96);
-      const loadConfigRva = readUint32LE(dataDirectoryOffset + BigInt(8 * 10));
-      const loadConfigSize = readUint32LE(dataDirectoryOffset + BigInt(8 * 10 + 4));
-      if (loadConfigRva === 0 || loadConfigSize === 0) {
-        return "disabled";
-      }
-      const loadConfig = base + BigInt(loadConfigRva);
-      const sehTable = readUint32LE(loadConfig + BigInt(64));
-      const sehCount = readUint32LE(loadConfig + BigInt(68));
-      if (sehTable !== 0 && sehCount > 0) {
-        return "enabled";
-      }
-      return "disabled";
-    } catch (_error) {
-      return "unknown";
-    }
-  }
-  function listModulesWithMitigations(filter) {
-    const process = host.currentProcess;
-    const modules = asArray(process == null ? void 0 : process.Modules);
-    const listed = modules.map((entry) => {
-      var _a, _b, _c, _d, _e;
-      const module = entry;
-      const name = (_a = module.Name) != null ? _a : "<unknown>";
-      const path = (_b = module.Path) != null ? _b : name;
-      const base = toBigInt((_d = (_c = module.BaseAddress) != null ? _c : module.Base) != null ? _d : module.Address);
-      let size = toBigInt((_e = module.Size) != null ? _e : module.Length);
-      const end = toBigInt(module.EndAddress);
-      if (size === BigInt(0) && end > base) {
-        size = end - base;
-      }
-      let characteristics = 0;
-      let dllCharacteristics = 0;
-      let aslr = "unknown";
-      let dep = "unknown";
-      let safeseh = "unknown";
-      try {
-        const mz = readUint16LE(base);
-        if (mz === 23117) {
-          const peOffset = readUint32LE(base + BigInt(60));
-          const pe = base + BigInt(peOffset);
-          const sig = readUint32LE(pe);
-          if (sig === 17744) {
-            characteristics = readUint16LE(pe + BigInt(22));
-            const optionalHeaderMagic = readUint16LE(pe + BigInt(24));
-            dllCharacteristics = readUint16LE(pe + BigInt(94));
-            aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
-            dep = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
-            safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
-          }
-        }
-      } catch (_error) {
-      }
-      const system = path.toLowerCase().includes("\\windows\\system32");
-      return {
-        name,
-        path,
-        base,
-        size,
-        characteristics,
-        dllCharacteristics,
-        aslr,
-        dep,
-        safeseh,
-        system
-      };
-    }).filter((item) => {
-      if (!filter) {
-        return true;
-      }
-      const needle = filter.toLowerCase();
-      return item.name.toLowerCase().includes(needle) || item.path.toLowerCase().includes(needle);
-    }).sort((a, b) => a.base < b.base ? -1 : 1);
-    return listed;
-  }
-  function findModuleByAddress(address) {
-    return listModulesWithMitigations().find((module) => {
-      const start = module.base;
-      const end = module.base + module.size;
-      return address >= start && address < end;
-    });
-  }
-  function createModulesCommand() {
-    return {
-      name: "modules",
-      description: "Enumerate modules and mitigation states.",
-      usage: "dx @$osed().modules({ filter: 'essfunc' })",
-      examples: ["dx @$osed().modules({})", "dx @$osed().modules({ filter: 'kernel32' })"],
-      schema: {
-        filter: { type: "string" }
-      },
-      execute(options) {
-        const modules = listModulesWithMitigations(options.filter);
-        const pointerSize = getPointerSize();
-        section("Modules");
-        table(
-          [
-            { key: "name", header: "Module", width: 20 },
-            { key: "base", header: "Base", width: 18 },
-            { key: "size", header: "Size", width: 10 },
-            { key: "aslr", header: "ASLR", width: 8 },
-            { key: "dep", header: "DEP", width: 8 },
-            { key: "safeseh", header: "SafeSEH", width: 8 },
-            { key: "system", header: "System", width: 8 }
-          ],
-          modules.map((module) => ({
-            name: module.name,
-            base: formatAddress(module.base, pointerSize),
-            size: `0x${module.size.toString(16).toUpperCase()}`,
-            aslr: module.aslr,
-            dep: module.dep,
-            safeseh: module.safeseh,
-            system: module.system ? "yes" : "no"
-          }))
-        );
-        whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
-        return {
-          command: "modules",
-          args: options,
-          success: true,
-          findings: modules,
-          warnings: [],
-          errors: []
-        };
-      }
-    };
-  }
-
-  // src/commands/seh.ts
-  function createSehCommand() {
-    return {
-      name: "seh",
-      description: "Walk current thread SEH chain.",
-      usage: "dx @$osed().seh({})",
-      examples: ["dx @$osed().seh({})", "dx @$osed().seh({})"],
-      schema: {},
-      execute(options) {
-        var _a;
-        const pointerSize = getPointerSize();
-        if (pointerSize !== 4) {
-          return {
-            command: "seh",
-            args: options,
-            success: false,
-            findings: [],
-            warnings: ["SEH chain walking is x86-focused in v1."],
-            errors: ["Current pointer size is not x86."]
-          };
-        }
-        const teb = resolveTeb32Address(host.currentThread);
-        if (teb === void 0) {
-          throw new Error("Current thread TEB is unavailable.");
-        }
-        const rows = [];
-        const findings = [];
-        const records = readSehRecords(teb);
-        for (const { node, next, handler } of records) {
-          const module = findModuleByAddress(handler);
-          const safeSehRisk = module && module.safeseh !== "enabled" ? "risk" : "ok";
-          const outsideModule = module === void 0;
-          rows.push({
-            node: formatAddress(node, 4),
-            handler: formatAddress(handler, 4),
-            target: module ? `${module.name}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<outside module>",
-            safeseh: module ? module.safeseh : "unknown",
-            status: outsideModule || safeSehRisk === "risk" ? "flag" : "ok"
-          });
-          findings.push({
-            node,
-            next,
-            handler,
-            module: module == null ? void 0 : module.name,
-            outsideModule,
-            safeSeh: (_a = module == null ? void 0 : module.safeseh) != null ? _a : "unknown"
-          });
-        }
-        section("SEH Chain");
-        table(
-          [
-            { key: "node", header: "Node", width: 10 },
-            { key: "handler", header: "Handler", width: 10 },
-            { key: "target", header: "Module+Offset", width: 24 },
-            { key: "safeseh", header: "SafeSEH", width: 8 },
-            { key: "status", header: "Status", width: 6 }
-          ],
-          rows
-        );
-        whyItMatters("SEH handler control is a classic exploit path when stack overwrite is constrained.");
-        return {
-          command: "seh",
-          args: options,
-          success: true,
-          findings,
-          warnings: records.length >= 64 ? ["SEH walk stopped at guard limit (64 entries)."] : [],
-          errors: []
-        };
-      }
-    };
-  }
-
-  // src/core/scan_engine.ts
-  var IMAGE_SCN_MEM_EXECUTE = 536870912;
-  function decodeAscii(bytes) {
-    let result3 = "";
-    for (const byte of bytes) {
-      if (byte === 0) {
-        break;
-      }
-      result3 += String.fromCharCode(byte);
-    }
-    return result3;
-  }
-  function parseBigIntString2(value) {
-    const text = value.trim();
-    if (/^0x[0-9a-fA-F]+$/.test(text)) {
-      return BigInt(text);
-    }
-    if (/^[0-9a-fA-F]+$/.test(text)) {
-      return BigInt(`0x${text}`);
-    }
-    if (/^[0-9]+$/.test(text)) {
-      return BigInt(text);
-    }
-    return BigInt(0);
-  }
-  function toBigInt2(value) {
-    if (typeof value === "bigint") {
-      return value;
-    }
-    if (typeof value === "number") {
-      return BigInt(Math.max(0, Math.trunc(value)));
-    }
-    if (typeof value === "string") {
-      return parseBigIntString2(value);
-    }
-    if (value && typeof value === "object") {
-      const valueOf = value.valueOf;
-      if (typeof valueOf === "function") {
-        const resolved = valueOf.call(value);
-        if (resolved !== value) {
-          const parsed = toBigInt2(resolved);
-          if (parsed !== BigInt(0)) {
-            return parsed;
-          }
-        }
-      }
-      const asString = value.toString;
-      if (typeof asString === "function") {
-        return parseBigIntString2(asString.call(value));
-      }
-    }
-    return BigInt(0);
-  }
-  function asArray2(value) {
-    if (Array.isArray(value)) {
-      return value;
-    }
-    if (value && typeof value[Symbol.iterator] === "function") {
-      try {
-        return Array.from(value);
-      } catch (_error) {
-        return [];
-      }
-    }
-    return [];
-  }
   function getModules() {
     const process = host.currentProcess;
-    const modules = asArray2(process == null ? void 0 : process.Modules);
+    const modules = asArray(process == null ? void 0 : process.Modules);
     return modules.map((entry) => {
       var _a, _b, _c, _d, _e, _f;
       const module = entry;
-      const base = toBigInt2((_b = (_a = module.BaseAddress) != null ? _a : module.Base) != null ? _b : module.Address);
-      let size = toBigInt2((_c = module.Size) != null ? _c : module.Length);
-      const end = toBigInt2(module.EndAddress);
+      const base = toBigInt((_b = (_a = module.BaseAddress) != null ? _a : module.Base) != null ? _b : module.Address);
+      let size = toBigInt((_c = module.Size) != null ? _c : module.Length);
+      const end = toBigInt(module.EndAddress);
       if (size === BigInt(0) && end > base) {
         size = end - base;
       }
@@ -1276,6 +793,1359 @@ var osed_bundle = (() => {
         chunksSkipped,
         results: hits.length,
         stoppedEarly: 0
+      }
+    };
+  }
+
+  // src/analysis/memory.ts
+  var PAGE_NOACCESS = 1;
+  var PAGE_READONLY = 2;
+  var PAGE_READWRITE = 4;
+  var PAGE_WRITECOPY = 8;
+  var PAGE_EXECUTE = 16;
+  var PAGE_EXECUTE_READ = 32;
+  var PAGE_EXECUTE_READWRITE = 64;
+  var PAGE_EXECUTE_WRITECOPY = 128;
+  var PAGE_GUARD = 256;
+  var MEM_COMMIT = 4096;
+  var MEM_PRIVATE = 131072;
+  var MEM_MAPPED = 262144;
+  var MEM_IMAGE = 16777216;
+  function protectionBase(protection) {
+    return protection & 255;
+  }
+  function formatAddressValue(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+  }
+  function serializeMemoryRegionEvidence(evidence) {
+    return {
+      address: formatAddressValue(evidence.address),
+      baseAddress: evidence.baseAddress === void 0 ? void 0 : formatAddressValue(evidence.baseAddress),
+      allocationBase: evidence.allocationBase === void 0 ? void 0 : formatAddressValue(evidence.allocationBase),
+      regionSize: evidence.regionSize === void 0 ? void 0 : `0x${evidence.regionSize.toString(16).toUpperCase()}`,
+      readable: evidence.readable,
+      writable: evidence.writable,
+      executable: evidence.executable,
+      guarded: evidence.guarded,
+      noAccess: evidence.noAccess,
+      committed: evidence.committed,
+      regionType: evidence.regionType,
+      raw: __spreadValues({}, evidence.raw),
+      source: evidence.source,
+      warnings: [...evidence.warnings]
+    };
+  }
+  function normalizeMemoryRegion(address, raw, source = "vprot") {
+    const protection = raw.protection;
+    const base = protection === void 0 ? void 0 : protectionBase(protection);
+    const knownProtection = base !== void 0 && [
+      PAGE_NOACCESS,
+      PAGE_READONLY,
+      PAGE_READWRITE,
+      PAGE_WRITECOPY,
+      PAGE_EXECUTE,
+      PAGE_EXECUTE_READ,
+      PAGE_EXECUTE_READWRITE,
+      PAGE_EXECUTE_WRITECOPY
+    ].includes(base);
+    const readable = !knownProtection ? null : [PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    const writable = !knownProtection ? null : [PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    const executable = !knownProtection ? null : [PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
+    let regionType = "unknown";
+    if (raw.type === MEM_IMAGE) regionType = "image";
+    else if (raw.type === MEM_MAPPED) regionType = "mapped";
+    else if (raw.type === MEM_PRIVATE) regionType = "private";
+    return {
+      address,
+      baseAddress: raw.baseAddress,
+      allocationBase: raw.allocationBase,
+      regionSize: raw.regionSize,
+      readable,
+      writable,
+      executable,
+      guarded: protection === void 0 ? null : (protection & PAGE_GUARD) !== 0,
+      noAccess: !knownProtection ? null : base === PAGE_NOACCESS,
+      committed: raw.state === void 0 ? null : raw.state === MEM_COMMIT,
+      regionType,
+      raw: {
+        state: raw.state,
+        protection: raw.protection,
+        allocationProtection: raw.allocationProtection,
+        type: raw.type
+      },
+      source,
+      warnings: []
+    };
+  }
+  function toArray(value) {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseHexValue(value) {
+    const cleaned = value.replace(/`/g, "");
+    return /^[0-9a-f]+$/i.test(cleaned) ? BigInt(`0x${cleaned}`) : void 0;
+  }
+  function parseVprot(lines) {
+    const fields = /* @__PURE__ */ new Map();
+    for (const line of lines) {
+      const match = line.match(/^\s*(BaseAddress|AllocationBase|RegionSize|State|Protect|AllocationProtect|Type):\s+([0-9a-f`]+)/i);
+      if (!match) continue;
+      const value = parseHexValue(match[2]);
+      if (value !== void 0) fields.set(match[1].toLowerCase(), value);
+    }
+    const asNumber = (key2) => {
+      const value = fields.get(key2);
+      return value === void 0 ? void 0 : Number(value & BigInt(4294967295));
+    };
+    return {
+      baseAddress: fields.get("baseaddress"),
+      allocationBase: fields.get("allocationbase"),
+      regionSize: fields.get("regionsize"),
+      state: asNumber("state"),
+      protection: asNumber("protect"),
+      allocationProtection: asNumber("allocationprotect"),
+      type: asNumber("type")
+    };
+  }
+  function memoryRegion(address) {
+    var _a, _b, _c;
+    try {
+      const hostAny = host;
+      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      const execute = control == null ? void 0 : control.ExecuteCommand;
+      if (typeof execute !== "function") throw new Error("WinDbg command execution is unavailable.");
+      const result3 = execute.call(control, `!vprot 0x${address.toString(16)}`);
+      const raw = parseVprot(toArray(result3).map(String));
+      if (raw.protection === void 0 && raw.state === void 0 && raw.type === void 0) {
+        throw new Error("WinDbg returned no recognizable memory metadata.");
+      }
+      return normalizeMemoryRegion(address, raw);
+    } catch (error2) {
+      const evidence = normalizeMemoryRegion(address, {}, "unavailable");
+      evidence.warnings.push(error2 instanceof Error ? error2.message : String(error2));
+      return evidence;
+    }
+  }
+
+  // src/analysis/landing.ts
+  var POSITIVE_OBSERVATION_KINDS = /* @__PURE__ */ new Set([
+    "nop_sled_detected",
+    "repeated_marker_bytes",
+    "cyclic_pattern_match",
+    "payload_like_bytes",
+    "known_payload_prefix",
+    "executable_region",
+    "disassembly_succeeded"
+  ]);
+  function formatAddressValue2(value) {
+    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+  }
+  function serializeUnknown(value) {
+    if (typeof value === "bigint") return formatAddressValue2(value);
+    if (Array.isArray(value)) return value.map(serializeUnknown);
+    if (value && typeof value === "object") {
+      const out = {};
+      for (const [key2, entry] of Object.entries(value)) {
+        out[key2] = serializeUnknown(entry);
+      }
+      return out;
+    }
+    return value;
+  }
+  function serializeLandingEvidence(evidence) {
+    return {
+      address: evidence.address === void 0 ? void 0 : formatAddressValue2(evidence.address),
+      memory: evidence.memory === void 0 ? void 0 : serializeMemoryRegionEvidence(evidence.memory),
+      bytes: [...evidence.bytes],
+      requestedBytes: evidence.requestedBytes,
+      observations: evidence.observations.map((item) => ({
+        kind: item.kind,
+        confidence: item.confidence,
+        address: item.address === void 0 ? void 0 : formatAddressValue2(item.address),
+        length: item.length,
+        details: serializeUnknown(item.details)
+      })),
+      confidence: evidence.confidence,
+      recommendation: evidence.recommendation
+    };
+  }
+  function calculateLandingConfidence(observations) {
+    const contributions = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind)).map((item) => Math.max(0, Math.min(1, Number.isFinite(item.confidence) ? item.confidence : 0))).sort((left, right) => left - right);
+    if (contributions.length === 0) return 0;
+    return Math.max(0, Math.min(1, contributions.reduce((sum, value) => sum + value, 0) / 2));
+  }
+  function observation(kind, confidence, address, offset, length, details = {}) {
+    return { kind, confidence, address: address + BigInt(offset), length, details: __spreadValues({ offset }, details) };
+  }
+  function repeatedRuns(bytes, minimum = 4) {
+    const runs = [];
+    for (let start = 0; start < bytes.length; ) {
+      let end = start + 1;
+      while (end < bytes.length && bytes[end] === bytes[start]) end += 1;
+      if (end - start >= minimum) runs.push({ byte: bytes[start], offset: start, length: end - start });
+      start = end;
+    }
+    return runs;
+  }
+  function findPattern(bytes) {
+    if (bytes.length < 8) return void 0;
+    const text = String.fromCharCode(...bytes);
+    const candidates2 = [
+      { kind: "msf", value: generateMsfPattern(20280) },
+      { kind: "cyclic", value: generateCyclicPattern(2e4) }
+    ];
+    for (const candidate of candidates2) {
+      const length = Math.min(text.length, 32);
+      for (let window = length; window >= 8; window -= 1) {
+        for (let offset = 0; offset <= text.length - window; offset += 1) {
+          if (candidate.value.includes(text.slice(offset, offset + window))) return { kind: candidate.kind, offset, length: window };
+        }
+      }
+    }
+    return void 0;
+  }
+  function analyzeLandingBytes(address, bytes, memory, requestedBytes = bytes.length, disassemblySucceeded = null) {
+    const observations = [];
+    const runs = repeatedRuns(bytes);
+    for (const run of runs) {
+      if (run.byte === 144 && run.length >= 8) {
+        observations.push(observation("nop_sled_detected", 0.95, address, run.offset, run.length, { byte: run.byte }));
+      } else if ([65, 66, 67, 68].includes(run.byte)) {
+        observations.push(observation("repeated_marker_bytes", 0.8, address, run.offset, run.length, { byte: run.byte }));
+      } else {
+        observations.push(observation("repeated_byte_run", 0.45, address, run.offset, run.length, { byte: run.byte }));
+      }
+    }
+    const pattern = findPattern(bytes);
+    if (pattern) observations.push(observation("cyclic_pattern_match", 0.9, address, pattern.offset, pattern.length, { pattern: pattern.kind }));
+    for (let offset = 0; offset <= bytes.length - 32; offset += 4) {
+      const window = bytes.slice(offset, offset + 32);
+      let zeroes = 0;
+      let printable = 0;
+      for (const byte of window) {
+        if (byte === 0) zeroes += 1;
+        if (byte >= 32 && byte <= 126) printable += 1;
+      }
+      if (zeroes <= 1 && printable <= 8) {
+        observations.push(observation("payload_like_bytes", 0.4, address, offset, window.length, { zeroes, printable }));
+      }
+    }
+    const prefixes = [
+      { name: "x86_cld_call", bytes: [252, 232] },
+      { name: "x86_getpc_fnstenv", bytes: [217, 238, 217, 116, 36, 244] }
+    ];
+    for (const prefix of prefixes) {
+      if (prefix.bytes.every((value, index) => bytes[index] === value)) {
+        observations.push(observation("known_payload_prefix", 0.65, address, 0, prefix.bytes.length, { prefix: prefix.name }));
+      }
+    }
+    if (memory.readable !== null) observations.push(observation(memory.readable ? "readable_region" : "unreadable_region", 1, address, 0, bytes.length));
+    if (memory.executable !== null) observations.push(observation(memory.executable ? "executable_region" : "non_executable_region", 1, address, 0, bytes.length));
+    if (disassemblySucceeded !== null) observations.push(observation(disassemblySucceeded ? "disassembly_succeeded" : "disassembly_failed", 0.8, address, 0, Math.min(bytes.length, 16)));
+    if (bytes.length < requestedBytes) observations.push(observation(bytes.length === 0 ? "bytes_inaccessible" : "bytes_truncated", 1, address, bytes.length, requestedBytes - bytes.length, { requestedBytes, actualBytes: bytes.length }));
+    const positive = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind));
+    const confidence = calculateLandingConfidence(observations);
+    const recommendation = memory.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
+    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation };
+  }
+  function stackPointer() {
+    var _a, _b, _c;
+    const thread = host.currentThread;
+    const registers = (_b = (_a = thread == null ? void 0 : thread.Registers) == null ? void 0 : _a.User) != null ? _b : thread == null ? void 0 : thread.Registers;
+    const names = getPointerSize() === 8 ? ["rsp", "esp"] : ["esp", "rsp"];
+    for (const name of names) {
+      const value = (_c = registers == null ? void 0 : registers[name]) != null ? _c : registers == null ? void 0 : registers[name.toUpperCase()];
+      if (typeof value === "bigint") return value;
+      if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+      if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value)) return BigInt(`0x${value.replace(/^0x/i, "").replace(/`/g, "")}`);
+      if (value && typeof value === "object") {
+        try {
+          const rendered = String(value);
+          if (/^(0x)?[0-9a-f`]+$/i.test(rendered)) return BigInt(`0x${rendered.replace(/^0x/i, "").replace(/`/g, "")}`);
+        } catch (_error) {
+        }
+      }
+    }
+    return void 0;
+  }
+  function readAvailablePrefix(address, requestedBytes) {
+    const complete = tryReadMemory(address, requestedBytes);
+    if (complete) return complete;
+    let low = 0;
+    let high = requestedBytes - 1;
+    let available = new Uint8Array();
+    while (low <= high) {
+      const length = Math.floor((low + high) / 2);
+      if (length === 0) {
+        low = 1;
+        continue;
+      }
+      const bytes = tryReadMemory(address, length);
+      if (bytes) {
+        available = bytes;
+        low = length + 1;
+      } else {
+        high = length - 1;
+      }
+    }
+    return available;
+  }
+  function canDisassemble(address) {
+    var _a, _b, _c;
+    try {
+      const hostAny = host;
+      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
+      if (typeof (control == null ? void 0 : control.ExecuteCommand) !== "function") return null;
+      const lines = Array.from(control.ExecuteCommand.call(control, `u 0x${address.toString(16)} L1`)).map(String);
+      return lines.some((line) => /\b[0-9a-f`]+\s+[0-9a-f]{2}/i.test(line)) && !lines.some((line) => /memory access error|could not be read|unable to/i.test(line));
+    } catch (_error) {
+      return null;
+    }
+  }
+  function landing(address, requestedBytes = 64) {
+    const target = address != null ? address : stackPointer();
+    if (target === void 0) {
+      return { bytes: [], requestedBytes, observations: [], confidence: 0, recommendation: "Stack pointer is unavailable; provide an explicit address." };
+    }
+    const memory = memoryRegion(target);
+    const bytes = readAvailablePrefix(target, requestedBytes);
+    return analyzeLandingBytes(target, bytes, memory, requestedBytes, canDisassemble(target));
+  }
+
+  // src/analysis/seh.ts
+  function safeGet(value, key2) {
+    if (!value || typeof value !== "object") return void 0;
+    try {
+      return value[key2];
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function safeKeys(value) {
+    if (!value || typeof value !== "object") return [];
+    try {
+      return Object.keys(value);
+    } catch (_error) {
+      return [];
+    }
+  }
+  function toAddress(value) {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
+    if (typeof value === "string") {
+      const text = value.trim();
+      const embeddedHex = text.match(/0x[0-9a-fA-F]+/);
+      if (embeddedHex) return BigInt(embeddedHex[0]);
+      if (/^[0-9a-fA-F]+$/.test(text)) return BigInt(`0x${text}`);
+    }
+    if (value && typeof value === "object") {
+      for (const key2 of ["targetLocation", "address", "Address", "Value", "value"]) {
+        const parsed = toAddress(safeGet(value, key2));
+        if (parsed !== BigInt(0)) return parsed;
+      }
+      try {
+        const valueOf = safeGet(value, "valueOf");
+        if (typeof valueOf === "function") {
+          const resolved = valueOf.call(value);
+          if (resolved !== value) {
+            const parsed = toAddress(resolved);
+            if (parsed !== BigInt(0)) return parsed;
+          }
+        }
+      } catch (_error) {
+      }
+      try {
+        const toString = safeGet(value, "toString");
+        if (typeof toString === "function") return toAddress(toString.call(value));
+      } catch (_error) {
+      }
+    }
+    return BigInt(0);
+  }
+  function signedInteger(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+    if (typeof value === "bigint") return Number(value);
+    const text = typeof value === "string" ? value : String(value != null ? value : "");
+    const match = text.match(/-?[0-9]+/);
+    return match ? parseInt(match[0], 10) : 0;
+  }
+  function environmentTeb(thread) {
+    for (const environment of [safeGet(thread, "Environment"), safeGet(thread, "NativeEnvironment")]) {
+      const block = safeGet(environment, "EnvironmentBlock");
+      if (!block || typeof block !== "object") continue;
+      const direct = toAddress(safeGet(block, "Self"));
+      if (direct !== BigInt(0)) return direct;
+      const ntTib = safeGet(block, "NtTib");
+      const nativeSelf = toAddress(safeGet(ntTib, "Self"));
+      const wowOffset = signedInteger(safeGet(block, "WowTebOffset"));
+      if (nativeSelf !== BigInt(0) && wowOffset !== 0) return nativeSelf + BigInt(wowOffset);
+      if (nativeSelf !== BigInt(0)) return nativeSelf;
+    }
+    return BigInt(0);
+  }
+  function candidates(value, depth = 0) {
+    if (depth > 2 || value === null || value === void 0) return [];
+    const found = /* @__PURE__ */ new Set();
+    const direct = toAddress(value);
+    if (direct !== BigInt(0)) found.add(direct);
+    if (typeof value === "object") {
+      for (const key2 of safeKeys(value)) {
+        for (const item of candidates(safeGet(value, key2), depth + 1)) found.add(item);
+      }
+    }
+    return [...found];
+  }
+  function looksLikeTeb32(address, reader) {
+    try {
+      if (address < BigInt(4096) || reader(address + BigInt(24), 4) !== address) return false;
+      const head = reader(address, 4);
+      return head !== BigInt(0) && head !== BigInt(4294967295);
+    } catch (_error) {
+      return false;
+    }
+  }
+  function resolveTeb32Address(thread, reader = readPointer) {
+    const fromEnvironment = environmentTeb(thread);
+    if (fromEnvironment !== BigInt(0)) return fromEnvironment;
+    for (const key2 of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
+      const parsed = toAddress(safeGet(thread, key2));
+      if (parsed !== BigInt(0)) return parsed;
+    }
+    for (const key2 of safeKeys(thread)) {
+      if (/teb/i.test(key2)) {
+        const parsed = toAddress(safeGet(thread, key2));
+        if (parsed !== BigInt(0)) return parsed;
+      }
+    }
+    return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
+  }
+  function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
+    const records = [];
+    let node = reader(teb, 4);
+    while (node !== BigInt(4294967295) && records.length < maxRecords) {
+      const next = reader(node, 4);
+      records.push({ node, next, handler: reader(node + BigInt(4), 4) });
+      node = next;
+    }
+    return records;
+  }
+
+  // src/commands/modules.ts
+  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 64;
+  var IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 256;
+  function parseBigIntString2(value) {
+    const text = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(text)) {
+      return BigInt(text);
+    }
+    if (/^[0-9a-fA-F]+$/.test(text)) {
+      return BigInt(`0x${text}`);
+    }
+    if (/^[0-9]+$/.test(text)) {
+      return BigInt(text);
+    }
+    return BigInt(0);
+  }
+  function toBigInt2(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return BigInt(Math.max(0, Math.trunc(value)));
+    }
+    if (typeof value === "string") {
+      return parseBigIntString2(value);
+    }
+    if (value && typeof value === "object") {
+      const valueOf = value.valueOf;
+      if (typeof valueOf === "function") {
+        const resolved = valueOf.call(value);
+        if (resolved !== value) {
+          const parsed = toBigInt2(resolved);
+          if (parsed !== BigInt(0)) {
+            return parsed;
+          }
+        }
+      }
+      const asString = value.toString;
+      if (typeof asString === "function") {
+        return parseBigIntString2(asString.call(value));
+      }
+    }
+    return BigInt(0);
+  }
+  function asArray2(value) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value && typeof value[Symbol.iterator] === "function") {
+      try {
+        return Array.from(value);
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseSafeSeh(base, pe, optionalHeaderMagic) {
+    if (optionalHeaderMagic !== 267) {
+      return "unknown";
+    }
+    try {
+      const optionalHeaderOffset = pe + BigInt(24);
+      const dataDirectoryOffset = optionalHeaderOffset + BigInt(96);
+      const loadConfigRva = readUint32LE(dataDirectoryOffset + BigInt(8 * 10));
+      const loadConfigSize = readUint32LE(dataDirectoryOffset + BigInt(8 * 10 + 4));
+      if (loadConfigRva === 0 || loadConfigSize === 0) {
+        return "disabled";
+      }
+      const loadConfig = base + BigInt(loadConfigRva);
+      const sehTable = readUint32LE(loadConfig + BigInt(64));
+      const sehCount = readUint32LE(loadConfig + BigInt(68));
+      if (sehTable !== 0 && sehCount > 0) {
+        return "enabled";
+      }
+      return "disabled";
+    } catch (_error) {
+      return "unknown";
+    }
+  }
+  function listModulesWithMitigations(filter) {
+    const process = host.currentProcess;
+    const modules = asArray2(process == null ? void 0 : process.Modules);
+    const listed = modules.map((entry) => {
+      var _a, _b, _c, _d, _e;
+      const module = entry;
+      const name = (_a = module.Name) != null ? _a : "<unknown>";
+      const path = (_b = module.Path) != null ? _b : name;
+      const base = toBigInt2((_d = (_c = module.BaseAddress) != null ? _c : module.Base) != null ? _d : module.Address);
+      let size = toBigInt2((_e = module.Size) != null ? _e : module.Length);
+      const end = toBigInt2(module.EndAddress);
+      if (size === BigInt(0) && end > base) {
+        size = end - base;
+      }
+      let characteristics = 0;
+      let dllCharacteristics = 0;
+      let aslr = "unknown";
+      let dep = "unknown";
+      let safeseh = "unknown";
+      try {
+        const mz = readUint16LE(base);
+        if (mz === 23117) {
+          const peOffset = readUint32LE(base + BigInt(60));
+          const pe = base + BigInt(peOffset);
+          const sig = readUint32LE(pe);
+          if (sig === 17744) {
+            characteristics = readUint16LE(pe + BigInt(22));
+            const optionalHeaderMagic = readUint16LE(pe + BigInt(24));
+            dllCharacteristics = readUint16LE(pe + BigInt(94));
+            aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
+            dep = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
+            safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
+          }
+        }
+      } catch (_error) {
+      }
+      const system = path.toLowerCase().includes("\\windows\\system32");
+      return {
+        name,
+        path,
+        base,
+        size,
+        characteristics,
+        dllCharacteristics,
+        aslr,
+        dep,
+        safeseh,
+        system
+      };
+    }).filter((item) => {
+      if (!filter) {
+        return true;
+      }
+      const needle = filter.toLowerCase();
+      return item.name.toLowerCase().includes(needle) || item.path.toLowerCase().includes(needle);
+    }).sort((a, b) => a.base < b.base ? -1 : 1);
+    return listed;
+  }
+  function findModuleByAddress(address) {
+    return listModulesWithMitigations().find((module) => {
+      const start = module.base;
+      const end = module.base + module.size;
+      return address >= start && address < end;
+    });
+  }
+  function createModulesCommand() {
+    return {
+      name: "modules",
+      description: "Enumerate modules and mitigation states.",
+      usage: "dx @$osed().modules({ filter: 'essfunc' })",
+      examples: ["dx @$osed().modules({})", "dx @$osed().modules({ filter: 'kernel32' })"],
+      schema: {
+        filter: { type: "string" }
+      },
+      execute(options) {
+        const modules = listModulesWithMitigations(options.filter);
+        const pointerSize = getPointerSize();
+        section("Modules");
+        table(
+          [
+            { key: "name", header: "Module", width: 20 },
+            { key: "base", header: "Base", width: 18 },
+            { key: "size", header: "Size", width: 10 },
+            { key: "aslr", header: "ASLR", width: 8 },
+            { key: "dep", header: "DEP", width: 8 },
+            { key: "safeseh", header: "SafeSEH", width: 8 },
+            { key: "system", header: "System", width: 8 }
+          ],
+          modules.map((module) => ({
+            name: module.name,
+            base: formatAddress(module.base, pointerSize),
+            size: `0x${module.size.toString(16).toUpperCase()}`,
+            aslr: module.aslr,
+            dep: module.dep,
+            safeseh: module.safeseh,
+            system: module.system ? "yes" : "no"
+          }))
+        );
+        whyItMatters("Mitigation triage identifies practical modules for reliable exploitation paths.");
+        return {
+          command: "modules",
+          args: options,
+          success: true,
+          findings: modules,
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/triage.ts
+  function safeGet2(value, key2) {
+    if (!value || typeof value !== "object") {
+      return void 0;
+    }
+    try {
+      return value[key2];
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function safeKeys2(value) {
+    if (!value || typeof value !== "object") {
+      return [];
+    }
+    try {
+      return Object.keys(value);
+    } catch (_error) {
+      return [];
+    }
+  }
+  function toBigInt3(value) {
+    if (typeof value === "bigint") {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return BigInt(Math.trunc(value));
+    }
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (/^0x[0-9a-fA-F]+$/.test(text)) {
+        return BigInt(text);
+      }
+      if (/^[0-9a-fA-F]+$/.test(text)) {
+        return BigInt(`0x${text}`);
+      }
+      if (/^[0-9]+$/.test(text)) {
+        return BigInt(text);
+      }
+    }
+    if (value && typeof value === "object") {
+      const nested = ["value", "Value", "address", "Address", "targetLocation"];
+      for (const key2 of nested) {
+        const parsed = toBigInt3(safeGet2(value, key2));
+        if (parsed !== void 0) {
+          return parsed;
+        }
+      }
+      try {
+        const valueOf = safeGet2(value, "valueOf");
+        if (typeof valueOf === "function") {
+          const resolved = valueOf.call(value);
+          if (resolved !== value) {
+            const parsed = toBigInt3(resolved);
+            if (parsed !== void 0) {
+              return parsed;
+            }
+          }
+        }
+      } catch (_error) {
+      }
+      try {
+        const asString = safeGet2(value, "toString");
+        if (typeof asString === "function") {
+          const str = asString.call(value);
+          if (typeof str === "string" && str !== "[object Object]") {
+            return toBigInt3(str);
+          }
+        }
+      } catch (_error) {
+      }
+    }
+    return void 0;
+  }
+  function readRegisters(pointerSize) {
+    var _a;
+    const thread = host.currentThread;
+    const regsRoot = safeGet2(thread, "Registers");
+    const userRegs = (_a = safeGet2(regsRoot, "User")) != null ? _a : regsRoot;
+    const all = [];
+    for (const key2 of safeKeys2(userRegs)) {
+      const parsed = toBigInt3(safeGet2(userRegs, key2));
+      if (parsed !== void 0) {
+        all.push({ name: key2, value: parsed });
+      }
+    }
+    const pick = (...names) => {
+      for (const candidate of names) {
+        const found = all.find((entry) => entry.name.toLowerCase() === candidate.toLowerCase());
+        if (found) {
+          return found;
+        }
+      }
+      return void 0;
+    };
+    const ip = pointerSize === 8 ? pick("rip", "eip") : pick("eip", "rip");
+    const sp = pointerSize === 8 ? pick("rsp", "esp") : pick("esp", "rsp");
+    const ex = pick("exceptioncode", "exception", "lastExceptionCode");
+    return {
+      ip: ip == null ? void 0 : ip.value,
+      ipName: ip == null ? void 0 : ip.name,
+      sp: sp == null ? void 0 : sp.value,
+      spName: sp == null ? void 0 : sp.name,
+      exceptionCode: ex == null ? void 0 : ex.value,
+      all
+    };
+  }
+  function findOffset(raw, maxLen) {
+    if (raw === void 0) {
+      return void 0;
+    }
+    const low = Number(raw & BigInt(4294967295));
+    const candidates2 = [
+      { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
+      { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
+    ];
+    for (const candidate of candidates2) {
+      const needle = decodeOffsetNeedle(low);
+      const offset = candidate.haystack.indexOf(needle);
+      if (offset >= 0) {
+        return { kind: candidate.kind, offset };
+      }
+    }
+    return void 0;
+  }
+  function isInstructionPointerControlled(evidence) {
+    if (evidence.patternMatched) {
+      return true;
+    }
+    if (evidence.ip === void 0) {
+      return false;
+    }
+    if (evidence.exceptionCode === BigInt(3221225477)) {
+      return true;
+    }
+    return evidence.ipBackedByModule === false;
+  }
+  function landingCandidateAddresses(evidence) {
+    const candidateKinds = /* @__PURE__ */ new Set(["nop_sled_detected", "payload_like_bytes"]);
+    const addresses = evidence.observations.filter((item) => candidateKinds.has(item.kind) && item.address !== void 0).map((item) => item.address);
+    return [...new Set(addresses.map(String))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 5);
+  }
+  function scoreModule(module) {
+    let score = 0;
+    if (!module.system) score += 25;
+    if (module.aslr === "disabled") score += 35;
+    if (module.dep === "disabled") score += 10;
+    if (module.safeseh === "disabled") score += 30;
+    return score;
+  }
+  function scanGadgets(pointerSize, moduleFilter) {
+    const fmt = (address) => {
+      const mod = findModuleByAddress(address);
+      if (!mod) {
+        return formatAddress(address, getPointerSize());
+      }
+      const delta = address - mod.base;
+      return `${mod.name}+0x${delta.toString(16).toUpperCase()}`;
+    };
+    const jmpHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 228])).hits;
+    const callHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 212])).hits;
+    const pprHits = [];
+    if (pointerSize === 4) {
+      for (let a = 88; a <= 95 && pprHits.length < 12; a += 1) {
+        for (let b = 88; b <= 95 && pprHits.length < 12; b += 1) {
+          const hits = scanPattern(
+            { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 16384 },
+            Uint8Array.from([a, b, 195])
+          ).hits;
+          pprHits.push(...hits);
+        }
+      }
+    }
+    const pivotPatterns = pointerSize === 8 ? [
+      Uint8Array.from([72, 148, 195]),
+      Uint8Array.from([84, 195]),
+      Uint8Array.from([72, 137, 236, 195]),
+      Uint8Array.from([72, 137, 196, 195])
+    ] : [Uint8Array.from([148, 195]), Uint8Array.from([84, 195]), Uint8Array.from([139, 229, 195])];
+    const pivotHits = [];
+    for (const pattern of pivotPatterns) {
+      const hits = scanPattern(
+        { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pivotHits.length), chunkSize: 16384 },
+        pattern
+      ).hits;
+      pivotHits.push(...hits);
+      if (pivotHits.length >= 12) {
+        break;
+      }
+    }
+    const uniq = (values) => [...new Set(values.map((v) => v.toString()))].map((v) => BigInt(v));
+    return {
+      jmp: uniq(jmpHits).slice(0, 5).map(fmt),
+      call: uniq(callHits).slice(0, 5).map(fmt),
+      ppr: uniq(pprHits).slice(0, 5).map(fmt),
+      pivots: uniq(pivotHits).slice(0, 5).map(fmt)
+    };
+  }
+  function readSehPreview(pointerSize) {
+    if (pointerSize !== 4) {
+      return { overwritten: "unknown", warning: "SEH overwrite analysis is x86-only." };
+    }
+    const tebCandidate = resolveTeb32Address(host.currentThread);
+    if (!tebCandidate) {
+      return { overwritten: "unknown", warning: "TEB unavailable for SEH walk." };
+    }
+    try {
+      const first = readSehRecords(tebCandidate, 1)[0];
+      if (!first) {
+        return { overwritten: "no", warning: "SEH chain is empty." };
+      }
+      const { next, handler } = first;
+      const mod = findModuleByAddress(handler);
+      const overwritten = mod ? "no" : "yes";
+      return { overwritten, next, handler };
+    } catch (error2) {
+      const msg = error2 instanceof Error ? error2.message : String(error2);
+      return { overwritten: "unknown", warning: `SEH read failed: ${msg}` };
+    }
+  }
+  function quickBadcharScan(bytes, badchars) {
+    if (!bytes) {
+      return [];
+    }
+    return badchars.map((byte) => {
+      let count = 0;
+      let first;
+      for (let i = 0; i < bytes.length; i += 1) {
+        if (bytes[i] === byte) {
+          count += 1;
+          if (first === void 0) {
+            first = i;
+          }
+        }
+      }
+      return { byte, count, first };
+    });
+  }
+  function createTriageCommand() {
+    return {
+      name: "triage",
+      description: "Fast crash triage for exploit-development workflows.",
+      usage: "dx @$osed().triage({ patternLength: 10000, badchars: [0,10,13], module: 'essfunc' })",
+      examples: ["dx @$osed().triage()", "dx @$osed().triage({ module: 'vuln' })"],
+      schema: {
+        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
+        badchars: { type: "array", elementType: "number", default: [0, 10, 13] },
+        module: { type: "string" },
+        stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
+      },
+      execute(options) {
+        var _a, _b, _c, _d, _e;
+        const pointerSize = getPointerSize();
+        const regs = readRegisters(pointerSize);
+        const patternLength = options.patternLength;
+        const stackBytesToRead = options.stackBytes;
+        const badchars = ((_a = options.badchars) != null ? _a : [0, 10, 13]).map((v) => v & 255);
+        const moduleFilter = options.module;
+        const patternOffset = findOffset(regs.ip, patternLength);
+        const seh = readSehPreview(pointerSize);
+        const landingEvidence = landing(regs.sp, stackBytesToRead);
+        const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : void 0;
+        const shellcode = landingCandidateAddresses(landingEvidence);
+        const badcharStats = quickBadcharScan(stackBytes, badchars);
+        const modules = listModulesWithMitigations(moduleFilter).map((module) => ({
+          module: module.name,
+          score: scoreModule(module),
+          aslr: module.aslr,
+          dep: module.dep,
+          safeseh: module.safeseh,
+          system: module.system
+        })).sort((a, b) => b.score - a.score).slice(0, 6);
+        const gadgets = scanGadgets(pointerSize, moduleFilter);
+        const ipBackedByModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) !== void 0 : void 0;
+        const eipControlled = isInstructionPointerControlled({
+          patternMatched: patternOffset !== void 0,
+          ip: regs.ip,
+          ipBackedByModule,
+          exceptionCode: regs.exceptionCode
+        }) ? "yes" : "no";
+        const badSp = stackBytes ? "no" : "yes";
+        section("CONTROL");
+        print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
+        print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
+        print(`Pattern: ${patternOffset ? patternOffset.kind : "n/a"}`);
+        section("SEH");
+        if (pointerSize === 8) {
+          print("Not applicable: classic SEH overwrite workflow is x86-only.");
+        } else {
+          print(`Overwritten: ${seh.overwritten}`);
+          print(`Next SEH: ${seh.next !== void 0 ? formatAddress(seh.next, 4) : "n/a"}`);
+          print(`Handler: ${seh.handler !== void 0 ? formatAddress(seh.handler, 4) : "n/a"}`);
+          if (seh.warning) print(`Status: ${seh.warning}`);
+        }
+        section("STACK");
+        print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
+        print(`Bad stack pointer: ${badSp}`);
+        print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? findOffset(regs.sp, patternLength) ? "yes" : "no" : "unknown"}`);
+        if (shellcode.length > 0) {
+          print("Shellcode candidates:");
+          for (const candidate of shellcode) {
+            print(`  ${formatAddress(candidate, pointerSize)}`);
+          }
+        } else {
+          print("Shellcode candidates: none");
+        }
+        section("GADGETS");
+        print(pointerSize === 8 ? "JMP RSP:" : "JMP ESP:");
+        for (const line of gadgets.jmp) print(`  ${line}`);
+        print(pointerSize === 8 ? "CALL RSP:" : "CALL ESP:");
+        for (const line of gadgets.call) print(`  ${line}`);
+        if (pointerSize === 4) {
+          print("POP POP RET:");
+          for (const line of gadgets.ppr) print(`  ${line}`);
+        }
+        print("Stack pivots:");
+        for (const line of gadgets.pivots) print(`  ${line}`);
+        section("CONTEXT");
+        print(`Exception code: ${regs.exceptionCode !== void 0 ? formatAddress(regs.exceptionCode, 4) : "n/a"}`);
+        print(`${(_c = regs.ipName) != null ? _c : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
+        section("MODULE SCORE");
+        table(
+          [
+            { key: "module", header: "Module", width: 20 },
+            { key: "score", header: "Score", width: 6 },
+            { key: "aslr", header: "ASLR", width: 8 },
+            { key: "dep", header: "DEP", width: 8 },
+            { key: "safeseh", header: "SafeSEH", width: 8 },
+            { key: "system", header: "System", width: 8 }
+          ],
+          modules.map((item) => ({
+            module: item.module,
+            score: `${item.score}`,
+            aslr: item.aslr,
+            dep: item.dep,
+            safeseh: item.safeseh,
+            system: item.system ? "yes" : "no"
+          }))
+        );
+        section("BADCHAR QUICK SCAN");
+        table(
+          [
+            { key: "byte", header: "Byte", width: 8 },
+            { key: "count", header: "Count", width: 6 },
+            { key: "first", header: "FirstOff", width: 8 }
+          ],
+          badcharStats.map((entry) => ({
+            byte: formatHexByte(entry.byte),
+            count: `${entry.count}`,
+            first: entry.first !== void 0 ? `${entry.first}` : "n/a"
+          }))
+        );
+        const warnings = [];
+        warnings.push(...(_e = (_d = landingEvidence.memory) == null ? void 0 : _d.warnings) != null ? _e : []);
+        if (landingEvidence.address === void 0) warnings.push(landingEvidence.recommendation);
+        else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
+        else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
+        if (seh.warning) warnings.push(seh.warning);
+        const findings = [
+          {
+            control: {
+              ipControlled: eipControlled === "yes",
+              offset: patternOffset == null ? void 0 : patternOffset.offset,
+              pattern: patternOffset == null ? void 0 : patternOffset.kind,
+              ip: regs.ip,
+              ipName: regs.ipName
+            },
+            seh,
+            stack: {
+              sp: regs.sp,
+              spName: regs.spName,
+              badPointer: badSp === "yes",
+              shellcodeCandidates: shellcode,
+              landing: landingEvidence
+            },
+            gadgets,
+            modules,
+            badchars: badcharStats,
+            exception: regs.exceptionCode
+          }
+        ];
+        return {
+          command: "triage",
+          args: options,
+          success: true,
+          findings,
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/badchars.ts
+  function result(command, args, findings, warnings = []) {
+    return { command, args, success: true, findings, warnings, errors: [] };
+  }
+  function createBadcharsCommand() {
+    return {
+      name: "badchars",
+      description: "Identify bad characters from a memory byte sequence.",
+      usage: "dx @$osed().badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
+      examples: [
+        "dx @$osed().badchars({ address: 0x00B8F900 })",
+        "dx @$osed().badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })"
+      ],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        exclude: { type: "array", elementType: "number", default: [] }
+      },
+      execute(options) {
+        var _a;
+        const address = normalizeAddress(options.address);
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const expected = expectedBytes(normalizedExclude.values);
+        const observed = readMemory(address, expected.length);
+        const compared = compareBadchars(observed, expected);
+        const pointerSize = getPointerSize();
+        section("Bad Character Analysis");
+        info(`Start address: ${formatAddress(address, pointerSize)}`);
+        info(`Exclude count: ${normalizedExclude.values.length}`);
+        if (compared.breakOffset !== void 0 && compared.nextExpected !== void 0) {
+          warn(`Sequence breaks at offset 0x${compared.breakOffset.toString(16).toUpperCase()}.`);
+          warn(`Next expected byte: ${formatHexByte(compared.nextExpected)}`);
+        } else {
+          info("No sequence break detected in sampled byte range.");
+        }
+        table(
+          [
+            { key: "offset", header: "Offset", width: 8 },
+            { key: "expected", header: "Expected", width: 10 },
+            { key: "observed", header: "Observed", width: 10 }
+          ],
+          compared.mismatches.slice(0, 32).map((mismatch) => ({
+            offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
+            expected: formatHexByte(mismatch.expected),
+            observed: formatHexByte(mismatch.observed)
+          }))
+        );
+        const excludeList = normalizedExclude.values.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+        info(`Copy-ready exclude list: ${excludeList}`);
+        whyItMatters("Accurate badchar profiling prevents payload corruption before shellcode staging.");
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result(
+          "badchars",
+          __spreadProps(__spreadValues({}, options), {
+            exclude: normalizedExclude.values
+          }),
+          [
+            {
+              breakOffset: compared.breakOffset,
+              nextExpected: compared.nextExpected,
+              mismatches: compared.mismatches,
+              exclude: normalizedExclude.values
+            }
+          ],
+          warnings
+        );
+      }
+    };
+  }
+  function createBadcharArrayCommand() {
+    return {
+      name: "badchar_array",
+      description: "Generate a bad-character test byte array (0x00-0xFF minus excludes) in paste-ready forms.",
+      usage: "dx @$osed().badchar_array({ exclude: [0, 10, 13] })",
+      examples: ["dx @$osed().badchar_array()", "dx @$osed().badchar_array({ exclude: [0, 10, 13] })"],
+      schema: {
+        exclude: { type: "array", elementType: "number", default: [] }
+      },
+      execute(options) {
+        var _a;
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const expected = expectedBytes(normalizedExclude.values);
+        const python = formatByteArray(expected, "python");
+        const c = formatByteArray(expected, "c");
+        const hex = formatByteArray(expected, "hex");
+        section("Bad Character Test Array");
+        info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
+        print(`Python: ${python}`);
+        print(`C:      ${c}`);
+        print(`Hex:    ${hex}`);
+        whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result(
+          "badchar_array",
+          __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
+          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex } }],
+          warnings
+        );
+      }
+    };
+  }
+  function createBadcharFindCommand() {
+    return {
+      name: "badchar_find",
+      description: "Locate a sent bad-character array in memory (near an address or the stack pointer) and report the first corrupted byte.",
+      usage: "dx @$osed().badchar_find({ address: 0x0012F800, exclude: [0, 10, 13] })",
+      examples: ["dx @$osed().badchar_find()", "dx @$osed().badchar_find({ address: '0012F800', exclude: [0, 10, 13] })"],
+      schema: {
+        address: { type: ["number", "string"] },
+        exclude: { type: "array", elementType: "number", default: [] },
+        windowBytes: { type: "number", min: 256, max: 16384, default: 2048 },
+        minRun: { type: "number", min: 4, max: 64, default: 8 }
+      },
+      execute(options) {
+        var _a, _b;
+        const pointerSize = getPointerSize();
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
+        const expected = expectedBytes(normalizedExclude.values);
+        const windowBytes = options.windowBytes;
+        const minRun = options.minRun;
+        let anchor;
+        let anchorLabel = "n/a";
+        if (options.address !== void 0) {
+          anchor = normalizeAddress(options.address);
+          anchorLabel = formatAddress(anchor, pointerSize);
+        } else {
+          const regs = readRegisters(pointerSize);
+          anchor = regs.sp;
+          anchorLabel = regs.sp !== void 0 ? `${(_b = regs.spName) != null ? _b : "sp"} ${formatAddress(regs.sp, pointerSize)}` : "n/a";
+        }
+        section("Bad Character Locate");
+        if (anchor === void 0) {
+          warn("No anchor address available (stack pointer unreadable). Provide an explicit address.");
+          return result("badchar_find", options, [{ located: false }], ["No anchor address available."]);
+        }
+        info(`Anchor: ${anchorLabel}`);
+        info(`Window: ${windowBytes} bytes, expecting a ${expected.length}-byte array.`);
+        const window = tryReadMemory(anchor, windowBytes);
+        if (!window) {
+          warn("Anchor memory was not readable.");
+          return result("badchar_find", options, [{ located: false }], ["Anchor memory was not readable."]);
+        }
+        const located = locateExpectedArray(window, expected, minRun);
+        if (!located) {
+          warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
+          return result("badchar_find", options, [{ located: false }], ["Test array not found near anchor."]);
+        }
+        const landing2 = anchor + BigInt(located.offset);
+        const observed = window.slice(located.offset);
+        const compared = compareBadchars(observed, expected);
+        info(`Located at ${formatAddress(landing2, pointerSize)} (anchor + 0x${located.offset.toString(16).toUpperCase()}).`);
+        info(`Clean run before first break: ${located.matchedRun} bytes.`);
+        if (compared.breakOffset !== void 0 && compared.nextExpected !== void 0) {
+          warn(`First corruption at array offset 0x${compared.breakOffset.toString(16).toUpperCase()}: expected ${formatHexByte(compared.nextExpected)}, observed ${formatHexByte(observed[compared.breakOffset])}.`);
+          info("The first break is the high-confidence bad byte; later mismatches may be shift artifacts.");
+        } else {
+          info("No corruption detected across the located array \u2014 no bad characters in this exclude set.");
+        }
+        table(
+          [
+            { key: "offset", header: "Offset", width: 8 },
+            { key: "expected", header: "Expected", width: 10 },
+            { key: "observed", header: "Observed", width: 10 }
+          ],
+          compared.mismatches.slice(0, 32).map((mismatch) => ({
+            offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
+            expected: formatHexByte(mismatch.expected),
+            observed: formatHexByte(mismatch.observed)
+          }))
+        );
+        const suggestedExclude = compared.nextExpected !== void 0 ? [.../* @__PURE__ */ new Set([...normalizedExclude.values, compared.nextExpected])].sort((a, b) => a - b) : normalizedExclude.values;
+        info(`Suggested next exclude: ${suggestedExclude.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        return result(
+          "badchar_find",
+          __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
+          [
+            {
+              located: true,
+              landingAddress: landing2,
+              anchorOffset: located.offset,
+              cleanRun: located.matchedRun,
+              breakOffset: compared.breakOffset,
+              nextExpected: compared.nextExpected,
+              mismatches: compared.mismatches,
+              suggestedExclude,
+              exclude: normalizedExclude.values
+            }
+          ],
+          warnings
+        );
+      }
+    };
+  }
+
+  // src/commands/egghunter.ts
+  var EGGHUNTERS = {
+    ntaccess_x86: [102, 129, 202, 255, 15, 66, 82, 106, 2, 88, 205, 46, 60, 5, 90, 116, 239, 184, 87, 48, 48, 84, 139, 250, 175, 117, 234, 175, 117, 231, 255, 231],
+    ntaccess_wow64: [102, 129, 202, 255, 15, 65, 106, 2, 88, 205, 46, 60, 5, 90, 116, 239, 184, 87, 48, 48, 84, 139, 250, 175, 117, 234, 175, 117, 231, 255, 231]
+  };
+  function bytesToHex(bytes) {
+    return bytes.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join("");
+  }
+  function bytesToPython(bytes) {
+    return `b"${bytes.map((value) => `\\x${value.toString(16).padStart(2, "0")}`).join("")}"`;
+  }
+  function build(options) {
+    if (options.mode === "seh") {
+      throw new Error(
+        'The SEH egghunter mode is not implemented. Use mode: "ntaccess" instead, which probes memory via the NtAccessCheckAndAuditAlarm syscall (INT 0x2E).'
+      );
+    }
+    const key2 = `${options.mode}_${options.wow64 ? "wow64" : "x86"}`;
+    const bytes = EGGHUNTERS[key2];
+    if (!bytes) {
+      throw new Error(`Unsupported egghunter mode: ${key2}`);
+    }
+    const hunter = [...bytes];
+    const tagBytes = options.tag.padEnd(4, "X").slice(0, 4).split("").map((char) => char.charCodeAt(0));
+    hunter.splice(18, 4, ...tagBytes);
+    return hunter;
+  }
+  function createEgghunterCommand() {
+    return {
+      name: "egghunter",
+      description: "Generate NtAccess/SEH egghunter stubs.",
+      usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+      examples: [
+        "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+        "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh', wow64: true })"
+      ],
+      schema: {
+        tag: { type: "string", default: "W00T" },
+        mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
+        wow64: { type: "boolean", default: false }
+      },
+      execute(options) {
+        const hunter = build(options);
+        section("Egghunter");
+        info(`Tag: ${options.tag}`);
+        info(`Mode: ${options.mode}`);
+        info(`WoW64: ${options.wow64 ? "yes" : "no"}`);
+        info(`Size: ${hunter.length} bytes`);
+        print(bytesToHex(hunter));
+        print(bytesToPython(hunter));
+        whyItMatters("Egghunters shrink staged exploits and locate payloads in constrained buffers.");
+        return {
+          command: "egghunter",
+          args: options,
+          success: true,
+          findings: [{ bytes: hunter, size: hunter.length }],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/seh.ts
+  function createSehCommand() {
+    return {
+      name: "seh",
+      description: "Walk current thread SEH chain.",
+      usage: "dx @$osed().seh({})",
+      examples: ["dx @$osed().seh({})", "dx @$osed().seh({})"],
+      schema: {},
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        if (pointerSize !== 4) {
+          return {
+            command: "seh",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: ["SEH chain walking is x86-focused in v1."],
+            errors: ["Current pointer size is not x86."]
+          };
+        }
+        const teb = resolveTeb32Address(host.currentThread);
+        if (teb === void 0) {
+          throw new Error("Current thread TEB is unavailable.");
+        }
+        const rows = [];
+        const findings = [];
+        const records = readSehRecords(teb);
+        for (const { node, next, handler } of records) {
+          const module = findModuleByAddress(handler);
+          const safeSehRisk = module && module.safeseh !== "enabled" ? "risk" : "ok";
+          const outsideModule = module === void 0;
+          rows.push({
+            node: formatAddress(node, 4),
+            handler: formatAddress(handler, 4),
+            target: module ? `${module.name}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<outside module>",
+            safeseh: module ? module.safeseh : "unknown",
+            status: outsideModule || safeSehRisk === "risk" ? "flag" : "ok"
+          });
+          findings.push({
+            node,
+            next,
+            handler,
+            module: module == null ? void 0 : module.name,
+            outsideModule,
+            safeSeh: (_a = module == null ? void 0 : module.safeseh) != null ? _a : "unknown"
+          });
+        }
+        section("SEH Chain");
+        table(
+          [
+            { key: "node", header: "Node", width: 10 },
+            { key: "handler", header: "Handler", width: 10 },
+            { key: "target", header: "Module+Offset", width: 24 },
+            { key: "safeseh", header: "SafeSEH", width: 8 },
+            { key: "status", header: "Status", width: 6 }
+          ],
+          rows
+        );
+        whyItMatters("SEH handler control is a classic exploit path when stack overwrite is constrained.");
+        return {
+          command: "seh",
+          args: options,
+          success: true,
+          findings,
+          warnings: records.length >= 64 ? ["SEH walk stopped at guard limit (64 entries)."] : [],
+          errors: []
+        };
       }
     };
   }
@@ -4211,721 +5081,6 @@ var osed_bundle = (() => {
     };
   }
 
-  // src/analysis/memory.ts
-  var PAGE_NOACCESS = 1;
-  var PAGE_READONLY = 2;
-  var PAGE_READWRITE = 4;
-  var PAGE_WRITECOPY = 8;
-  var PAGE_EXECUTE = 16;
-  var PAGE_EXECUTE_READ = 32;
-  var PAGE_EXECUTE_READWRITE = 64;
-  var PAGE_EXECUTE_WRITECOPY = 128;
-  var PAGE_GUARD = 256;
-  var MEM_COMMIT = 4096;
-  var MEM_PRIVATE = 131072;
-  var MEM_MAPPED = 262144;
-  var MEM_IMAGE = 16777216;
-  function protectionBase(protection) {
-    return protection & 255;
-  }
-  function formatAddressValue(value) {
-    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
-  }
-  function serializeMemoryRegionEvidence(evidence) {
-    return {
-      address: formatAddressValue(evidence.address),
-      baseAddress: evidence.baseAddress === void 0 ? void 0 : formatAddressValue(evidence.baseAddress),
-      allocationBase: evidence.allocationBase === void 0 ? void 0 : formatAddressValue(evidence.allocationBase),
-      regionSize: evidence.regionSize === void 0 ? void 0 : `0x${evidence.regionSize.toString(16).toUpperCase()}`,
-      readable: evidence.readable,
-      writable: evidence.writable,
-      executable: evidence.executable,
-      guarded: evidence.guarded,
-      noAccess: evidence.noAccess,
-      committed: evidence.committed,
-      regionType: evidence.regionType,
-      raw: __spreadValues({}, evidence.raw),
-      source: evidence.source,
-      warnings: [...evidence.warnings]
-    };
-  }
-  function normalizeMemoryRegion(address, raw, source = "vprot") {
-    const protection = raw.protection;
-    const base = protection === void 0 ? void 0 : protectionBase(protection);
-    const knownProtection = base !== void 0 && [
-      PAGE_NOACCESS,
-      PAGE_READONLY,
-      PAGE_READWRITE,
-      PAGE_WRITECOPY,
-      PAGE_EXECUTE,
-      PAGE_EXECUTE_READ,
-      PAGE_EXECUTE_READWRITE,
-      PAGE_EXECUTE_WRITECOPY
-    ].includes(base);
-    const readable = !knownProtection ? null : [PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
-    const writable = !knownProtection ? null : [PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
-    const executable = !knownProtection ? null : [PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY].includes(base);
-    let regionType = "unknown";
-    if (raw.type === MEM_IMAGE) regionType = "image";
-    else if (raw.type === MEM_MAPPED) regionType = "mapped";
-    else if (raw.type === MEM_PRIVATE) regionType = "private";
-    return {
-      address,
-      baseAddress: raw.baseAddress,
-      allocationBase: raw.allocationBase,
-      regionSize: raw.regionSize,
-      readable,
-      writable,
-      executable,
-      guarded: protection === void 0 ? null : (protection & PAGE_GUARD) !== 0,
-      noAccess: !knownProtection ? null : base === PAGE_NOACCESS,
-      committed: raw.state === void 0 ? null : raw.state === MEM_COMMIT,
-      regionType,
-      raw: {
-        state: raw.state,
-        protection: raw.protection,
-        allocationProtection: raw.allocationProtection,
-        type: raw.type
-      },
-      source,
-      warnings: []
-    };
-  }
-  function toArray(value) {
-    if (Array.isArray(value)) return value;
-    if (value && typeof value[Symbol.iterator] === "function") {
-      try {
-        return Array.from(value);
-      } catch (_error) {
-        return [];
-      }
-    }
-    return [];
-  }
-  function parseHexValue(value) {
-    const cleaned = value.replace(/`/g, "");
-    return /^[0-9a-f]+$/i.test(cleaned) ? BigInt(`0x${cleaned}`) : void 0;
-  }
-  function parseVprot(lines) {
-    const fields = /* @__PURE__ */ new Map();
-    for (const line of lines) {
-      const match = line.match(/^\s*(BaseAddress|AllocationBase|RegionSize|State|Protect|AllocationProtect|Type):\s+([0-9a-f`]+)/i);
-      if (!match) continue;
-      const value = parseHexValue(match[2]);
-      if (value !== void 0) fields.set(match[1].toLowerCase(), value);
-    }
-    const asNumber = (key2) => {
-      const value = fields.get(key2);
-      return value === void 0 ? void 0 : Number(value & BigInt(4294967295));
-    };
-    return {
-      baseAddress: fields.get("baseaddress"),
-      allocationBase: fields.get("allocationbase"),
-      regionSize: fields.get("regionsize"),
-      state: asNumber("state"),
-      protection: asNumber("protect"),
-      allocationProtection: asNumber("allocationprotect"),
-      type: asNumber("type")
-    };
-  }
-  function memoryRegion(address) {
-    var _a, _b, _c;
-    try {
-      const hostAny = host;
-      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
-      const execute = control == null ? void 0 : control.ExecuteCommand;
-      if (typeof execute !== "function") throw new Error("WinDbg command execution is unavailable.");
-      const result3 = execute.call(control, `!vprot 0x${address.toString(16)}`);
-      const raw = parseVprot(toArray(result3).map(String));
-      if (raw.protection === void 0 && raw.state === void 0 && raw.type === void 0) {
-        throw new Error("WinDbg returned no recognizable memory metadata.");
-      }
-      return normalizeMemoryRegion(address, raw);
-    } catch (error2) {
-      const evidence = normalizeMemoryRegion(address, {}, "unavailable");
-      evidence.warnings.push(error2 instanceof Error ? error2.message : String(error2));
-      return evidence;
-    }
-  }
-
-  // src/analysis/landing.ts
-  var POSITIVE_OBSERVATION_KINDS = /* @__PURE__ */ new Set([
-    "nop_sled_detected",
-    "repeated_marker_bytes",
-    "cyclic_pattern_match",
-    "payload_like_bytes",
-    "known_payload_prefix",
-    "executable_region",
-    "disassembly_succeeded"
-  ]);
-  function formatAddressValue2(value) {
-    return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
-  }
-  function serializeUnknown(value) {
-    if (typeof value === "bigint") return formatAddressValue2(value);
-    if (Array.isArray(value)) return value.map(serializeUnknown);
-    if (value && typeof value === "object") {
-      const out = {};
-      for (const [key2, entry] of Object.entries(value)) {
-        out[key2] = serializeUnknown(entry);
-      }
-      return out;
-    }
-    return value;
-  }
-  function serializeLandingEvidence(evidence) {
-    return {
-      address: evidence.address === void 0 ? void 0 : formatAddressValue2(evidence.address),
-      memory: evidence.memory === void 0 ? void 0 : serializeMemoryRegionEvidence(evidence.memory),
-      bytes: [...evidence.bytes],
-      requestedBytes: evidence.requestedBytes,
-      observations: evidence.observations.map((item) => ({
-        kind: item.kind,
-        confidence: item.confidence,
-        address: item.address === void 0 ? void 0 : formatAddressValue2(item.address),
-        length: item.length,
-        details: serializeUnknown(item.details)
-      })),
-      confidence: evidence.confidence,
-      recommendation: evidence.recommendation
-    };
-  }
-  function calculateLandingConfidence(observations) {
-    const contributions = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind)).map((item) => Math.max(0, Math.min(1, Number.isFinite(item.confidence) ? item.confidence : 0))).sort((left, right) => left - right);
-    if (contributions.length === 0) return 0;
-    return Math.max(0, Math.min(1, contributions.reduce((sum, value) => sum + value, 0) / 2));
-  }
-  function observation(kind, confidence, address, offset, length, details = {}) {
-    return { kind, confidence, address: address + BigInt(offset), length, details: __spreadValues({ offset }, details) };
-  }
-  function repeatedRuns(bytes, minimum = 4) {
-    const runs = [];
-    for (let start = 0; start < bytes.length; ) {
-      let end = start + 1;
-      while (end < bytes.length && bytes[end] === bytes[start]) end += 1;
-      if (end - start >= minimum) runs.push({ byte: bytes[start], offset: start, length: end - start });
-      start = end;
-    }
-    return runs;
-  }
-  function findPattern(bytes) {
-    if (bytes.length < 8) return void 0;
-    const text = String.fromCharCode(...bytes);
-    const candidates2 = [
-      { kind: "msf", value: generateMsfPattern(20280) },
-      { kind: "cyclic", value: generateCyclicPattern(2e4) }
-    ];
-    for (const candidate of candidates2) {
-      const length = Math.min(text.length, 32);
-      for (let window = length; window >= 8; window -= 1) {
-        for (let offset = 0; offset <= text.length - window; offset += 1) {
-          if (candidate.value.includes(text.slice(offset, offset + window))) return { kind: candidate.kind, offset, length: window };
-        }
-      }
-    }
-    return void 0;
-  }
-  function analyzeLandingBytes(address, bytes, memory, requestedBytes = bytes.length, disassemblySucceeded = null) {
-    const observations = [];
-    const runs = repeatedRuns(bytes);
-    for (const run of runs) {
-      if (run.byte === 144 && run.length >= 8) {
-        observations.push(observation("nop_sled_detected", 0.95, address, run.offset, run.length, { byte: run.byte }));
-      } else if ([65, 66, 67, 68].includes(run.byte)) {
-        observations.push(observation("repeated_marker_bytes", 0.8, address, run.offset, run.length, { byte: run.byte }));
-      } else {
-        observations.push(observation("repeated_byte_run", 0.45, address, run.offset, run.length, { byte: run.byte }));
-      }
-    }
-    const pattern = findPattern(bytes);
-    if (pattern) observations.push(observation("cyclic_pattern_match", 0.9, address, pattern.offset, pattern.length, { pattern: pattern.kind }));
-    for (let offset = 0; offset <= bytes.length - 32; offset += 4) {
-      const window = bytes.slice(offset, offset + 32);
-      let zeroes = 0;
-      let printable = 0;
-      for (const byte of window) {
-        if (byte === 0) zeroes += 1;
-        if (byte >= 32 && byte <= 126) printable += 1;
-      }
-      if (zeroes <= 1 && printable <= 8) {
-        observations.push(observation("payload_like_bytes", 0.4, address, offset, window.length, { zeroes, printable }));
-      }
-    }
-    const prefixes = [
-      { name: "x86_cld_call", bytes: [252, 232] },
-      { name: "x86_getpc_fnstenv", bytes: [217, 238, 217, 116, 36, 244] }
-    ];
-    for (const prefix of prefixes) {
-      if (prefix.bytes.every((value, index) => bytes[index] === value)) {
-        observations.push(observation("known_payload_prefix", 0.65, address, 0, prefix.bytes.length, { prefix: prefix.name }));
-      }
-    }
-    if (memory.readable !== null) observations.push(observation(memory.readable ? "readable_region" : "unreadable_region", 1, address, 0, bytes.length));
-    if (memory.executable !== null) observations.push(observation(memory.executable ? "executable_region" : "non_executable_region", 1, address, 0, bytes.length));
-    if (disassemblySucceeded !== null) observations.push(observation(disassemblySucceeded ? "disassembly_succeeded" : "disassembly_failed", 0.8, address, 0, Math.min(bytes.length, 16)));
-    if (bytes.length < requestedBytes) observations.push(observation(bytes.length === 0 ? "bytes_inaccessible" : "bytes_truncated", 1, address, bytes.length, requestedBytes - bytes.length, { requestedBytes, actualBytes: bytes.length }));
-    const positive = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind));
-    const confidence = calculateLandingConfidence(observations);
-    const recommendation = memory.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
-    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation };
-  }
-  function stackPointer() {
-    var _a, _b, _c;
-    const thread = host.currentThread;
-    const registers = (_b = (_a = thread == null ? void 0 : thread.Registers) == null ? void 0 : _a.User) != null ? _b : thread == null ? void 0 : thread.Registers;
-    const names = getPointerSize() === 8 ? ["rsp", "esp"] : ["esp", "rsp"];
-    for (const name of names) {
-      const value = (_c = registers == null ? void 0 : registers[name]) != null ? _c : registers == null ? void 0 : registers[name.toUpperCase()];
-      if (typeof value === "bigint") return value;
-      if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
-      if (typeof value === "string" && /^(0x)?[0-9a-f`]+$/i.test(value)) return BigInt(`0x${value.replace(/^0x/i, "").replace(/`/g, "")}`);
-      if (value && typeof value === "object") {
-        try {
-          const rendered = String(value);
-          if (/^(0x)?[0-9a-f`]+$/i.test(rendered)) return BigInt(`0x${rendered.replace(/^0x/i, "").replace(/`/g, "")}`);
-        } catch (_error) {
-        }
-      }
-    }
-    return void 0;
-  }
-  function readAvailablePrefix(address, requestedBytes) {
-    const complete = tryReadMemory(address, requestedBytes);
-    if (complete) return complete;
-    let low = 0;
-    let high = requestedBytes - 1;
-    let available = new Uint8Array();
-    while (low <= high) {
-      const length = Math.floor((low + high) / 2);
-      if (length === 0) {
-        low = 1;
-        continue;
-      }
-      const bytes = tryReadMemory(address, length);
-      if (bytes) {
-        available = bytes;
-        low = length + 1;
-      } else {
-        high = length - 1;
-      }
-    }
-    return available;
-  }
-  function canDisassemble(address) {
-    var _a, _b, _c;
-    try {
-      const hostAny = host;
-      const control = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control;
-      if (typeof (control == null ? void 0 : control.ExecuteCommand) !== "function") return null;
-      const lines = Array.from(control.ExecuteCommand.call(control, `u 0x${address.toString(16)} L1`)).map(String);
-      return lines.some((line) => /\b[0-9a-f`]+\s+[0-9a-f]{2}/i.test(line)) && !lines.some((line) => /memory access error|could not be read|unable to/i.test(line));
-    } catch (_error) {
-      return null;
-    }
-  }
-  function landing(address, requestedBytes = 64) {
-    const target = address != null ? address : stackPointer();
-    if (target === void 0) {
-      return { bytes: [], requestedBytes, observations: [], confidence: 0, recommendation: "Stack pointer is unavailable; provide an explicit address." };
-    }
-    const memory = memoryRegion(target);
-    const bytes = readAvailablePrefix(target, requestedBytes);
-    return analyzeLandingBytes(target, bytes, memory, requestedBytes, canDisassemble(target));
-  }
-
-  // src/commands/triage.ts
-  function safeGet2(value, key2) {
-    if (!value || typeof value !== "object") {
-      return void 0;
-    }
-    try {
-      return value[key2];
-    } catch (_error) {
-      return void 0;
-    }
-  }
-  function safeKeys2(value) {
-    if (!value || typeof value !== "object") {
-      return [];
-    }
-    try {
-      return Object.keys(value);
-    } catch (_error) {
-      return [];
-    }
-  }
-  function toBigInt3(value) {
-    if (typeof value === "bigint") {
-      return value;
-    }
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-      return BigInt(Math.trunc(value));
-    }
-    if (typeof value === "string") {
-      const text = value.trim();
-      if (/^0x[0-9a-fA-F]+$/.test(text)) {
-        return BigInt(text);
-      }
-      if (/^[0-9a-fA-F]+$/.test(text)) {
-        return BigInt(`0x${text}`);
-      }
-      if (/^[0-9]+$/.test(text)) {
-        return BigInt(text);
-      }
-    }
-    if (value && typeof value === "object") {
-      const nested = ["value", "Value", "address", "Address", "targetLocation"];
-      for (const key2 of nested) {
-        const parsed = toBigInt3(safeGet2(value, key2));
-        if (parsed !== void 0) {
-          return parsed;
-        }
-      }
-      try {
-        const valueOf = safeGet2(value, "valueOf");
-        if (typeof valueOf === "function") {
-          const resolved = valueOf.call(value);
-          if (resolved !== value) {
-            const parsed = toBigInt3(resolved);
-            if (parsed !== void 0) {
-              return parsed;
-            }
-          }
-        }
-      } catch (_error) {
-      }
-      try {
-        const asString = safeGet2(value, "toString");
-        if (typeof asString === "function") {
-          const str = asString.call(value);
-          if (typeof str === "string" && str !== "[object Object]") {
-            return toBigInt3(str);
-          }
-        }
-      } catch (_error) {
-      }
-    }
-    return void 0;
-  }
-  function readRegisters(pointerSize) {
-    var _a;
-    const thread = host.currentThread;
-    const regsRoot = safeGet2(thread, "Registers");
-    const userRegs = (_a = safeGet2(regsRoot, "User")) != null ? _a : regsRoot;
-    const all = [];
-    for (const key2 of safeKeys2(userRegs)) {
-      const parsed = toBigInt3(safeGet2(userRegs, key2));
-      if (parsed !== void 0) {
-        all.push({ name: key2, value: parsed });
-      }
-    }
-    const pick = (...names) => {
-      for (const candidate of names) {
-        const found = all.find((entry) => entry.name.toLowerCase() === candidate.toLowerCase());
-        if (found) {
-          return found;
-        }
-      }
-      return void 0;
-    };
-    const ip = pointerSize === 8 ? pick("rip", "eip") : pick("eip", "rip");
-    const sp = pointerSize === 8 ? pick("rsp", "esp") : pick("esp", "rsp");
-    const ex = pick("exceptioncode", "exception", "lastExceptionCode");
-    return {
-      ip: ip == null ? void 0 : ip.value,
-      ipName: ip == null ? void 0 : ip.name,
-      sp: sp == null ? void 0 : sp.value,
-      spName: sp == null ? void 0 : sp.name,
-      exceptionCode: ex == null ? void 0 : ex.value,
-      all
-    };
-  }
-  function findOffset(raw, maxLen) {
-    if (raw === void 0) {
-      return void 0;
-    }
-    const low = Number(raw & BigInt(4294967295));
-    const candidates2 = [
-      { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
-      { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
-    ];
-    for (const candidate of candidates2) {
-      const needle = decodeOffsetNeedle(low);
-      const offset = candidate.haystack.indexOf(needle);
-      if (offset >= 0) {
-        return { kind: candidate.kind, offset };
-      }
-    }
-    return void 0;
-  }
-  function isInstructionPointerControlled(evidence) {
-    if (evidence.patternMatched) {
-      return true;
-    }
-    if (evidence.ip === void 0) {
-      return false;
-    }
-    if (evidence.exceptionCode === BigInt(3221225477)) {
-      return true;
-    }
-    return evidence.ipBackedByModule === false;
-  }
-  function landingCandidateAddresses(evidence) {
-    const candidateKinds = /* @__PURE__ */ new Set(["nop_sled_detected", "payload_like_bytes"]);
-    const addresses = evidence.observations.filter((item) => candidateKinds.has(item.kind) && item.address !== void 0).map((item) => item.address);
-    return [...new Set(addresses.map(String))].map(BigInt).sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 5);
-  }
-  function scoreModule(module) {
-    let score = 0;
-    if (!module.system) score += 25;
-    if (module.aslr === "disabled") score += 35;
-    if (module.dep === "disabled") score += 10;
-    if (module.safeseh === "disabled") score += 30;
-    return score;
-  }
-  function scanGadgets(pointerSize, moduleFilter) {
-    const fmt = (address) => {
-      const mod = findModuleByAddress(address);
-      if (!mod) {
-        return formatAddress(address, getPointerSize());
-      }
-      const delta = address - mod.base;
-      return `${mod.name}+0x${delta.toString(16).toUpperCase()}`;
-    };
-    const jmpHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 228])).hits;
-    const callHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 212])).hits;
-    const pprHits = [];
-    if (pointerSize === 4) {
-      for (let a = 88; a <= 95 && pprHits.length < 12; a += 1) {
-        for (let b = 88; b <= 95 && pprHits.length < 12; b += 1) {
-          const hits = scanPattern(
-            { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pprHits.length), chunkSize: 16384 },
-            Uint8Array.from([a, b, 195])
-          ).hits;
-          pprHits.push(...hits);
-        }
-      }
-    }
-    const pivotPatterns = pointerSize === 8 ? [
-      Uint8Array.from([72, 148, 195]),
-      Uint8Array.from([84, 195]),
-      Uint8Array.from([72, 137, 236, 195]),
-      Uint8Array.from([72, 137, 196, 195])
-    ] : [Uint8Array.from([148, 195]), Uint8Array.from([84, 195]), Uint8Array.from([139, 229, 195])];
-    const pivotHits = [];
-    for (const pattern of pivotPatterns) {
-      const hits = scanPattern(
-        { module: moduleFilter, executableOnly: true, maxResults: Math.max(0, 12 - pivotHits.length), chunkSize: 16384 },
-        pattern
-      ).hits;
-      pivotHits.push(...hits);
-      if (pivotHits.length >= 12) {
-        break;
-      }
-    }
-    const uniq = (values) => [...new Set(values.map((v) => v.toString()))].map((v) => BigInt(v));
-    return {
-      jmp: uniq(jmpHits).slice(0, 5).map(fmt),
-      call: uniq(callHits).slice(0, 5).map(fmt),
-      ppr: uniq(pprHits).slice(0, 5).map(fmt),
-      pivots: uniq(pivotHits).slice(0, 5).map(fmt)
-    };
-  }
-  function readSehPreview(pointerSize) {
-    if (pointerSize !== 4) {
-      return { overwritten: "unknown", warning: "SEH overwrite analysis is x86-only." };
-    }
-    const tebCandidate = resolveTeb32Address(host.currentThread);
-    if (!tebCandidate) {
-      return { overwritten: "unknown", warning: "TEB unavailable for SEH walk." };
-    }
-    try {
-      const first = readSehRecords(tebCandidate, 1)[0];
-      if (!first) {
-        return { overwritten: "no", warning: "SEH chain is empty." };
-      }
-      const { next, handler } = first;
-      const mod = findModuleByAddress(handler);
-      const overwritten = mod ? "no" : "yes";
-      return { overwritten, next, handler };
-    } catch (error2) {
-      const msg = error2 instanceof Error ? error2.message : String(error2);
-      return { overwritten: "unknown", warning: `SEH read failed: ${msg}` };
-    }
-  }
-  function quickBadcharScan(bytes, badchars) {
-    if (!bytes) {
-      return [];
-    }
-    return badchars.map((byte) => {
-      let count = 0;
-      let first;
-      for (let i = 0; i < bytes.length; i += 1) {
-        if (bytes[i] === byte) {
-          count += 1;
-          if (first === void 0) {
-            first = i;
-          }
-        }
-      }
-      return { byte, count, first };
-    });
-  }
-  function createTriageCommand() {
-    return {
-      name: "triage",
-      description: "Fast crash triage for exploit-development workflows.",
-      usage: "dx @$osed().triage({ patternLength: 10000, badchars: [0,10,13], module: 'essfunc' })",
-      examples: ["dx @$osed().triage()", "dx @$osed().triage({ module: 'vuln' })"],
-      schema: {
-        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
-        badchars: { type: "array", elementType: "number", default: [0, 10, 13] },
-        module: { type: "string" },
-        stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
-      },
-      execute(options) {
-        var _a, _b, _c, _d, _e;
-        const pointerSize = getPointerSize();
-        const regs = readRegisters(pointerSize);
-        const patternLength = options.patternLength;
-        const stackBytesToRead = options.stackBytes;
-        const badchars = ((_a = options.badchars) != null ? _a : [0, 10, 13]).map((v) => v & 255);
-        const moduleFilter = options.module;
-        const patternOffset = findOffset(regs.ip, patternLength);
-        const seh = readSehPreview(pointerSize);
-        const landingEvidence = landing(regs.sp, stackBytesToRead);
-        const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : void 0;
-        const shellcode = landingCandidateAddresses(landingEvidence);
-        const badcharStats = quickBadcharScan(stackBytes, badchars);
-        const modules = listModulesWithMitigations(moduleFilter).map((module) => ({
-          module: module.name,
-          score: scoreModule(module),
-          aslr: module.aslr,
-          dep: module.dep,
-          safeseh: module.safeseh,
-          system: module.system
-        })).sort((a, b) => b.score - a.score).slice(0, 6);
-        const gadgets = scanGadgets(pointerSize, moduleFilter);
-        const ipBackedByModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) !== void 0 : void 0;
-        const eipControlled = isInstructionPointerControlled({
-          patternMatched: patternOffset !== void 0,
-          ip: regs.ip,
-          ipBackedByModule,
-          exceptionCode: regs.exceptionCode
-        }) ? "yes" : "no";
-        const badSp = stackBytes ? "no" : "yes";
-        section("CONTROL");
-        print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
-        print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
-        print(`Pattern: ${patternOffset ? patternOffset.kind : "n/a"}`);
-        section("SEH");
-        if (pointerSize === 8) {
-          print("Not applicable: classic SEH overwrite workflow is x86-only.");
-        } else {
-          print(`Overwritten: ${seh.overwritten}`);
-          print(`Next SEH: ${seh.next !== void 0 ? formatAddress(seh.next, 4) : "n/a"}`);
-          print(`Handler: ${seh.handler !== void 0 ? formatAddress(seh.handler, 4) : "n/a"}`);
-          if (seh.warning) print(`Status: ${seh.warning}`);
-        }
-        section("STACK");
-        print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
-        print(`Bad stack pointer: ${badSp}`);
-        print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? findOffset(regs.sp, patternLength) ? "yes" : "no" : "unknown"}`);
-        if (shellcode.length > 0) {
-          print("Shellcode candidates:");
-          for (const candidate of shellcode) {
-            print(`  ${formatAddress(candidate, pointerSize)}`);
-          }
-        } else {
-          print("Shellcode candidates: none");
-        }
-        section("GADGETS");
-        print(pointerSize === 8 ? "JMP RSP:" : "JMP ESP:");
-        for (const line of gadgets.jmp) print(`  ${line}`);
-        print(pointerSize === 8 ? "CALL RSP:" : "CALL ESP:");
-        for (const line of gadgets.call) print(`  ${line}`);
-        if (pointerSize === 4) {
-          print("POP POP RET:");
-          for (const line of gadgets.ppr) print(`  ${line}`);
-        }
-        print("Stack pivots:");
-        for (const line of gadgets.pivots) print(`  ${line}`);
-        section("CONTEXT");
-        print(`Exception code: ${regs.exceptionCode !== void 0 ? formatAddress(regs.exceptionCode, 4) : "n/a"}`);
-        print(`${(_c = regs.ipName) != null ? _c : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
-        section("MODULE SCORE");
-        table(
-          [
-            { key: "module", header: "Module", width: 20 },
-            { key: "score", header: "Score", width: 6 },
-            { key: "aslr", header: "ASLR", width: 8 },
-            { key: "dep", header: "DEP", width: 8 },
-            { key: "safeseh", header: "SafeSEH", width: 8 },
-            { key: "system", header: "System", width: 8 }
-          ],
-          modules.map((item) => ({
-            module: item.module,
-            score: `${item.score}`,
-            aslr: item.aslr,
-            dep: item.dep,
-            safeseh: item.safeseh,
-            system: item.system ? "yes" : "no"
-          }))
-        );
-        section("BADCHAR QUICK SCAN");
-        table(
-          [
-            { key: "byte", header: "Byte", width: 8 },
-            { key: "count", header: "Count", width: 6 },
-            { key: "first", header: "FirstOff", width: 8 }
-          ],
-          badcharStats.map((entry) => ({
-            byte: formatHexByte(entry.byte),
-            count: `${entry.count}`,
-            first: entry.first !== void 0 ? `${entry.first}` : "n/a"
-          }))
-        );
-        const warnings = [];
-        warnings.push(...(_e = (_d = landingEvidence.memory) == null ? void 0 : _d.warnings) != null ? _e : []);
-        if (landingEvidence.address === void 0) warnings.push(landingEvidence.recommendation);
-        else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
-        else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
-        if (seh.warning) warnings.push(seh.warning);
-        const findings = [
-          {
-            control: {
-              ipControlled: eipControlled === "yes",
-              offset: patternOffset == null ? void 0 : patternOffset.offset,
-              pattern: patternOffset == null ? void 0 : patternOffset.kind,
-              ip: regs.ip,
-              ipName: regs.ipName
-            },
-            seh,
-            stack: {
-              sp: regs.sp,
-              spName: regs.spName,
-              badPointer: badSp === "yes",
-              shellcodeCandidates: shellcode,
-              landing: landingEvidence
-            },
-            gadgets,
-            modules,
-            badchars: badcharStats,
-            exception: regs.exceptionCode
-          }
-        ];
-        return {
-          command: "triage",
-          args: options,
-          success: true,
-          findings,
-          warnings,
-          errors: []
-        };
-      }
-    };
-  }
-
   // src/logic/pattern_scan_logic.ts
   var CYCLIC_MAX_LENGTH = 62 * 62 * 62;
   function buildHaystacks(length) {
@@ -5684,7 +5839,7 @@ var osed_bundle = (() => {
   }
 
   // src/commands/fmtstr.ts
-  function hexByte(value) {
+  function hexByte2(value) {
     return value.toString(16).toUpperCase().padStart(2, "0");
   }
   function toPythonBytes(bytes) {
@@ -5776,7 +5931,7 @@ var osed_bundle = (() => {
         section("Address block");
         for (let i = 0; i < result3.addressDwords.length; i += 1) {
           const dword = result3.addressDwords[i];
-          const bytes = result3.addressBlock.slice(i * 4, i * 4 + 4).map(hexByte).join(" ");
+          const bytes = result3.addressBlock.slice(i * 4, i * 4 + 4).map(hexByte2).join(" ");
           print(`  ${bytes}    ; slot ${i} -> %${argIndex + i}$  (0x${dword.toString(16).toUpperCase().padStart(8, "0")})`);
         }
         section("Format string");
@@ -5792,7 +5947,7 @@ var osed_bundle = (() => {
         print(`    ${fmtLiteral}`);
         print(")");
         section("Payload (hex)");
-        print(result3.payload.map(hexByte).join(" "));
+        print(result3.payload.map(hexByte2).join(" "));
         if (warnings.length > 0) {
           section("Warnings");
           for (const warning of warnings) {
@@ -7651,8 +7806,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.1",
-      buildTime: "2026-07-23T02:12:00.286Z",
-      gitCommit: "fb9134ba4d49",
+      buildTime: "2026-07-23T02:23:59.072Z",
+      gitCommit: "8f212a7dad41",
       gitDirty: true
     };
   }
@@ -7718,6 +7873,8 @@ var osed_bundle = (() => {
     const commands = [
       ...createPatternCommands(),
       createBadcharsCommand(),
+      createBadcharArrayCommand(),
+      createBadcharFindCommand(),
       createEgghunterCommand(),
       createSehCommand(),
       createModulesCommand(),

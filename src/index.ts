@@ -26,7 +26,7 @@ dx @$osed().sc.iat_ptr("app.exe","VirtualAlloc")
 
 import { Command, CommandRegistry, CommandResult } from "./core/registry";
 import { createPatternCommands } from "./commands/pattern";
-import { createBadcharsCommand } from "./commands/badchars";
+import { createBadcharsCommand, createBadcharArrayCommand, createBadcharFindCommand } from "./commands/badchars";
 import { createEgghunterCommand } from "./commands/egghunter";
 import { createSehCommand } from "./commands/seh";
 import { createModulesCommand } from "./commands/modules";
@@ -88,6 +88,8 @@ function registerAll(): void {
   const commands: Command[] = [
     ...createPatternCommands(),
     createBadcharsCommand(),
+    createBadcharArrayCommand(),
+    createBadcharFindCommand(),
     createEgghunterCommand(),
     createSehCommand(),
     createModulesCommand(),
