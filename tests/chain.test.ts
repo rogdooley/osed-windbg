@@ -110,6 +110,98 @@ describe("smarter chain construction: multi-pop and zeroing", () => {
   });
 });
 
+describe("ret imm compensation", () => {
+  test("pop reg ; ret 4 inserts one padding dword after the value", () => {
+    const retImmIndex = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "pop eax ; ret 4", address: BigInt(0x00406000), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(retImmIndex, [{ register: "eax", value: 0xDEAD }]);
+    expect(plan.satisfied).toEqual(["eax"]);
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00406000), comment: "pop eax ; ret 4" },
+      { kind: "value", value: 0xDEAD, comment: "eax = 0x0000DEAD" },
+      { kind: "value", value: 0x41414141, comment: "padding (ret 4 compensation)" },
+    ]);
+    expect(plan.stackBytes).toBe(12);
+  });
+
+  test("plain ret is preferred over ret imm when both exist", () => {
+    const bothIndex = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "pop eax ; ret 8", address: BigInt(0x00406000), module: "vuln" },
+        { mnemonic: "pop eax ; ret", address: BigInt(0x00406010), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(bothIndex, [{ register: "eax", value: 0x42 }]);
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00406010), comment: "pop eax ; ret" },
+      { kind: "value", value: 0x42, comment: "eax = 0x00000042" },
+    ]);
+  });
+
+  test("xor reg, reg ; ret 4 inserts padding after the zero gadget", () => {
+    const zeroRetImm = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "xor eax, eax ; ret 4", address: BigInt(0x00406000), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(zeroRetImm, [{ register: "eax", value: 0 }]);
+    expect(plan.satisfied).toEqual(["eax"]);
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00406000), comment: "xor eax, eax ; ret 4 (eax = 0)" },
+      { kind: "value", value: 0x41414141, comment: "padding (ret 4 compensation)" },
+    ]);
+  });
+
+  test("PUSHAD chain inserts padding after ret imm pop gadgets", () => {
+    const pushadRetImm = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "pop edi ; ret 4", address: BigInt(0x00407000), module: "vuln" },
+        { mnemonic: "pop esi ; ret", address: BigInt(0x00407010), module: "vuln" },
+        { mnemonic: "pop ebp ; ret", address: BigInt(0x00407020), module: "vuln" },
+        { mnemonic: "pop ebx ; ret", address: BigInt(0x00407030), module: "vuln" },
+        { mnemonic: "pop edx ; ret", address: BigInt(0x00407040), module: "vuln" },
+        { mnemonic: "pop ecx ; ret", address: BigInt(0x00407050), module: "vuln" },
+        { mnemonic: "pop eax ; ret", address: BigInt(0x00407060), module: "vuln" },
+        { mnemonic: "pushad ; ret", address: BigInt(0x00407070), module: "vuln" },
+      ]),
+    );
+    const plan = planVirtualProtect(pushadRetImm, { mode: "direct", virtualProtect: 0x7c801ad0 });
+    // EDI's pop has ret 4, so there should be a padding word after the EDI value.
+    const ediGadgetIdx = plan.steps.findIndex((s) => s.comment.includes("pop edi"));
+    expect(ediGadgetIdx).toBeGreaterThanOrEqual(0);
+    expect(plan.steps[ediGadgetIdx].comment).toContain("ret 4");
+    expect(plan.steps[ediGadgetIdx + 2]).toEqual({
+      kind: "value", value: 0x41414141, comment: "padding (ret 4 compensation)",
+    });
+    // ESI's pop is plain ret — no padding after its value.
+    const esiGadgetIdx = plan.steps.findIndex((s) => s.comment.includes("pop esi"));
+    expect(plan.steps[esiGadgetIdx].comment).not.toContain("ret 4");
+  });
+
+  test("multi-pop with ret imm inserts padding after all values", () => {
+    const multiRetImm = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "pop ecx ; pop edx ; ret 8", address: BigInt(0x00408000), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(multiRetImm, [
+      { register: "ecx", value: 0xA },
+      { register: "edx", value: 0xB },
+    ]);
+    expect(plan.satisfied).toEqual(["ecx", "edx"]);
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00408000), comment: "pop ecx ; pop edx ; ret 8" },
+      { kind: "value", value: 0xA, comment: "ecx = 0x0000000A" },
+      { kind: "value", value: 0xB, comment: "edx = 0x0000000B" },
+      { kind: "value", value: 0x41414141, comment: "padding (ret 8 compensation)" },
+      { kind: "value", value: 0x41414141, comment: "padding (ret 8 compensation)" },
+    ]);
+  });
+});
+
 describe("VirtualProtect goal template (PUSHAD technique)", () => {
   const vpIndex = buildCapabilityIndexFromSequences(
     sequencesFromLiveHits([
