@@ -97,6 +97,24 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().rop.chain_va({ virtualAlloc: 0x7C809AE1 })"],
   },
   {
+    name: "rop.frame_vp",
+    description: "Builds a flat VirtualProtect stdcall frame without requiring ROP gadgets.",
+    usage: "dx @$osed().rop.frame_vp({ virtualProtect?, returnAddress?, lpAddress?, dwSize?, flNewProtect?, writable?, badchars? })",
+    examples: ["dx @$osed().rop.frame_vp({ virtualProtect: 0x7C801AD0, badchars: [0, 10, 13] })"],
+  },
+  {
+    name: "rop.frame_wpm",
+    description: "Builds a flat WriteProcessMemory stdcall frame without requiring ROP gadgets.",
+    usage: "dx @$osed().rop.frame_wpm({ writeProcessMemory?, returnAddress?, hProcess?, lpBaseAddress?, lpBuffer?, nSize?, writable?, badchars? })",
+    examples: ["dx @$osed().rop.frame_wpm({ writeProcessMemory: 0x7C802213, badchars: [0] })"],
+  },
+  {
+    name: "rop.frame_va",
+    description: "Builds a flat VirtualAlloc stdcall frame without requiring ROP gadgets.",
+    usage: "dx @$osed().rop.frame_va({ virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars? })",
+    examples: ["dx @$osed().rop.frame_va({ virtualAlloc: 0x7C809AE1, badchars: [0, 10, 13] })"],
+  },
+  {
     name: "sc.iat",
     description: "Enumerates imported addresses for a module, optionally filtered by DLL or symbol substring.",
     usage: "dx @$osed().sc.iat(module?, filter?)",

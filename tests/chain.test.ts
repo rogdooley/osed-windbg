@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sequencesFromLiveHits } from "../src/semantics/live-provider";
-import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualProtect, planWriteProcessMemory } from "../src/rop";
+import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame } from "../src/rop";
 
 // Chain construction over an index built from (synthetic) live gadget hits, so it
 // exercises the full live -> index -> plan path.
@@ -280,5 +280,50 @@ describe("VirtualAlloc goal template (PUSHAD technique)", () => {
     const plan = planVirtualAlloc(fullIndex, {});
     const last = plan.steps[plan.steps.length - 1];
     expect(last.comment).toContain("VirtualAlloc");
+  });
+});
+
+describe("flat stdcall DEP frames", () => {
+  test("builds a VirtualProtect frame without requiring gadgets", () => {
+    const plan = planVirtualProtectFrame({
+      virtualProtect: 0x62506060,
+      returnAddress: 0x625011af,
+      lpAddress: 0x0012f900,
+      writable: 0x62509090,
+    });
+    expect(plan.steps).toEqual([
+      { kind: "value", value: 0x62506060, comment: "ret target: VirtualProtect" },
+      { kind: "value", value: 0x625011af, comment: "return address after VirtualProtect" },
+      { kind: "value", value: 0x0012f900, comment: "lpAddress" },
+      { kind: "value", value: 0x201, comment: "dwSize" },
+      { kind: "value", value: 0x40, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      { kind: "value", value: 0x62509090, comment: "lpflOldProtect (writable dummy)" },
+    ]);
+    expect(plan.stackBytes).toBe(24);
+    expect(plan.placeholders).toEqual([]);
+  });
+
+  test("emits placeholders and warns they still require badchar validation", () => {
+    const plan = planVirtualProtectFrame({ badchars: [0, 10, 13] });
+    expect(plan.placeholders).toEqual(["VIRTUALPROTECT", "RETURN_ADDR", "LP_ADDRESS", "WRITABLE"]);
+    expect(plan.warnings).toEqual(expect.arrayContaining([
+      "VIRTUALPROTECT: placeholder value must be checked against badchars after resolution.",
+      "flNewProtect = PAGE_EXECUTE_READWRITE: 0x00000040 contains badchar byte(s) 0x00 in little-endian form.",
+    ]));
+    expect(plan.badcharViolations.length).toBeGreaterThan(0);
+    expect(formatChainPython(plan)).toContain('rop += pack("<I", VIRTUALPROTECT)  # ret target: VirtualProtect');
+  });
+
+  test("builds WriteProcessMemory and VirtualAlloc flat frames with defaults", () => {
+    const wpm = planWriteProcessMemoryFrame({ writeProcessMemory: 0x7c802213 });
+    expect(wpm.steps[0]).toEqual({ kind: "value", value: 0x7c802213, comment: "ret target: WriteProcessMemory" });
+    expect(wpm.steps[2]).toEqual({ kind: "value", value: 0xffffffff, comment: "hProcess = GetCurrentProcess() pseudo-handle" });
+    expect(wpm.placeholders).toEqual(["RETURN_ADDR", "LP_BASE_ADDRESS", "LP_BUFFER", "NSIZE", "WRITABLE"]);
+
+    const va = planVirtualAllocFrame({ virtualAlloc: 0x7c809ae1 });
+    expect(va.steps[0]).toEqual({ kind: "value", value: 0x7c809ae1, comment: "ret target: VirtualAlloc" });
+    expect(va.steps[3]).toEqual({ kind: "value", value: 0x201, comment: "dwSize" });
+    expect(va.steps[4]).toEqual({ kind: "value", value: 0x1000, comment: "flAllocationType = MEM_COMMIT" });
+    expect(va.steps[5]).toEqual({ kind: "value", value: 0x40, comment: "flProtect = PAGE_EXECUTE_READWRITE" });
   });
 });

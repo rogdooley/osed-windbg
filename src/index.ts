@@ -44,7 +44,7 @@ import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualProtect, planWriteProcessMemory, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type RopQuery, type VirtualAllocParams, type VirtualProtectParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type FlatFramePlan, type RopQuery, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
@@ -386,6 +386,49 @@ function bindApi(): OsedApi {
     return [];
   };
 
+  const parseBadcharsOption = (value: unknown): number[] => {
+    const parsed = parseHexByteList(value);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((entry): entry is number => Number.isInteger(entry) && entry >= 0 && entry <= 0xff);
+  };
+
+  const renderFlatFrame = (
+    command: string,
+    title: string,
+    options: Record<string, unknown>,
+    plan: FlatFramePlan,
+  ): DxResult => {
+    const python = formatChainPython(plan);
+    out.section(title);
+    out.info(`Words: ${plan.steps.length} | Stack: ${plan.stackBytes} bytes`);
+    if (plan.badchars.length > 0) {
+      out.info(`Badchars: ${plan.badchars.map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(", ")}`);
+    }
+    for (const line of python) {
+      out.print(line);
+    }
+    for (const warning of plan.warnings) {
+      out.warn(warning);
+    }
+
+    const rows = plan.steps.map((step) => ({
+      Word: step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Meaning: step.comment,
+    }));
+    renderRows(title, rows);
+    setResult({
+      command,
+      args: options,
+      success: plan.badcharViolations.length === 0,
+      findings: [{ ...plan, python }],
+      warnings: plan.warnings,
+      errors: plan.badcharViolations,
+    });
+    return toDxResult(title, rows);
+  };
+
   const executeRopChain = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.chain");
@@ -600,6 +643,58 @@ function bindApi(): OsedApi {
     return toDxResult("ROP VirtualAlloc Chain", rows);
   };
 
+  const executeRopFrameVp = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.frame_vp");
+    }
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const params: VirtualProtectFrameParams = {
+      virtualProtect: options.virtualProtect !== undefined ? Number(options.virtualProtect) : undefined,
+      returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
+      lpAddress: options.lpAddress !== undefined ? Number(options.lpAddress) : undefined,
+      dwSize: options.dwSize !== undefined ? Number(options.dwSize) : undefined,
+      flNewProtect: options.flNewProtect !== undefined ? Number(options.flNewProtect) : undefined,
+      writable: options.writable !== undefined ? Number(options.writable) : undefined,
+      badchars: parseBadcharsOption(options.badchars),
+    };
+    return renderFlatFrame("rop.frame_vp", "ROP Frame — VirtualProtect (stdcall)", options, planVirtualProtectFrame(params));
+  };
+
+  const executeRopFrameWpm = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.frame_wpm");
+    }
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const params: WriteProcessMemoryFrameParams = {
+      writeProcessMemory: options.writeProcessMemory !== undefined ? Number(options.writeProcessMemory) : undefined,
+      returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
+      hProcess: options.hProcess !== undefined ? Number(options.hProcess) : undefined,
+      lpBaseAddress: options.lpBaseAddress !== undefined ? Number(options.lpBaseAddress) : undefined,
+      lpBuffer: options.lpBuffer !== undefined ? Number(options.lpBuffer) : undefined,
+      nSize: options.nSize !== undefined ? Number(options.nSize) : undefined,
+      writable: options.writable !== undefined ? Number(options.writable) : undefined,
+      badchars: parseBadcharsOption(options.badchars),
+    };
+    return renderFlatFrame("rop.frame_wpm", "ROP Frame — WriteProcessMemory (stdcall)", options, planWriteProcessMemoryFrame(params));
+  };
+
+  const executeRopFrameVa = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.frame_va");
+    }
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const params: VirtualAllocFrameParams = {
+      virtualAlloc: options.virtualAlloc !== undefined ? Number(options.virtualAlloc) : undefined,
+      returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
+      lpAddress: options.lpAddress !== undefined ? Number(options.lpAddress) : undefined,
+      dwSize: options.dwSize !== undefined ? Number(options.dwSize) : undefined,
+      flAllocationType: options.flAllocationType !== undefined ? Number(options.flAllocationType) : undefined,
+      flProtect: options.flProtect !== undefined ? Number(options.flProtect) : undefined,
+      badchars: parseBadcharsOption(options.badchars),
+    };
+    return renderFlatFrame("rop.frame_va", "ROP Frame — VirtualAlloc (stdcall)", options, planVirtualAllocFrame(params));
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -621,6 +716,9 @@ function bindApi(): OsedApi {
     chain_vp: executeRopChainVp,
     chain_wpm: executeRopChainWpm,
     chain_va: executeRopChainVa,
+    frame_vp: executeRopFrameVp,
+    frame_wpm: executeRopFrameWpm,
+    frame_va: executeRopFrameVa,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 

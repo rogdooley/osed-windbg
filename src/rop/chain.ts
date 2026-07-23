@@ -23,6 +23,21 @@ export interface ChainStep {
   comment: string;
 }
 
+export interface FlatFrameInput {
+  value?: number;
+  placeholder: string;
+  comment: string;
+}
+
+export interface FlatFramePlan {
+  steps: ChainStep[];
+  placeholders: string[];
+  badcharViolations: string[];
+  warnings: string[];
+  badchars: number[];
+  stackBytes: number;
+}
+
 export interface ChainPlan {
   steps: ChainStep[];
   satisfied: string[];
@@ -210,6 +225,139 @@ export function formatChainPython(plan: { steps: ChainStep[] }): string[] {
     lines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
   }
   return lines;
+}
+
+function uniqueBytes(values: number[] | undefined): number[] {
+  const seen = new Set<number>();
+  for (const value of values ?? []) {
+    if (Number.isInteger(value) && value >= 0 && value <= 0xff) {
+      seen.add(value & 0xff);
+    }
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+function badcharHits(value: number, badchars: number[]): number[] {
+  if (badchars.length === 0) {
+    return [];
+  }
+  const bad = new Set(badchars);
+  const hits: number[] = [];
+  const word = value >>> 0;
+  for (let offset = 0; offset < 4; offset += 1) {
+    const byte = (word >>> (offset * 8)) & 0xff;
+    if (bad.has(byte) && !hits.includes(byte)) {
+      hits.push(byte);
+    }
+  }
+  return hits;
+}
+
+function byteList(bytes: number[]): string {
+  return bytes.map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
+}
+
+function planFlatStdcallFrame(entries: FlatFrameInput[], badchars?: number[]): FlatFramePlan {
+  const normalizedBadchars = uniqueBytes(badchars);
+  const placeholders = new Set<string>();
+  const badcharViolations: string[] = [];
+  const warnings: string[] = [];
+  const steps = entries.map((entry): ChainStep => {
+    if (entry.value === undefined) {
+      placeholders.add(entry.placeholder);
+      warnings.push(`${entry.placeholder}: placeholder value must be checked against badchars after resolution.`);
+      return { kind: "value", placeholder: entry.placeholder, comment: entry.comment };
+    }
+
+    const value = entry.value >>> 0;
+    const hits = badcharHits(value, normalizedBadchars);
+    if (hits.length > 0) {
+      badcharViolations.push(`${entry.comment}: ${hex32(value)} contains badchar byte(s) ${byteList(hits)} in little-endian form.`);
+    }
+    return { kind: "value", value, comment: entry.comment };
+  });
+
+  return {
+    steps,
+    placeholders: [...placeholders],
+    badcharViolations,
+    warnings: [...warnings, ...badcharViolations],
+    badchars: normalizedBadchars,
+    stackBytes: steps.length * 4,
+  };
+}
+
+// ---- Flat stdcall frames ---------------------------------------------------
+//
+// These emit the simplest DEP-bypass layout: the overwritten return address
+// points directly to the API, followed by the API return address and arguments.
+// No gadgets or loaded ROP corpus are required. Every argument must be supplied
+// explicitly, and every concrete dword can be checked against the caller's
+// current bad-character set.
+
+export interface VirtualProtectFrameParams {
+  virtualProtect?: number;
+  returnAddress?: number;
+  lpAddress?: number;
+  dwSize?: number;
+  flNewProtect?: number;
+  writable?: number;
+  badchars?: number[];
+}
+
+export function planVirtualProtectFrame(params: VirtualProtectFrameParams = {}): FlatFramePlan {
+  return planFlatStdcallFrame([
+    { value: params.virtualProtect, placeholder: "VIRTUALPROTECT", comment: "ret target: VirtualProtect" },
+    { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after VirtualProtect" },
+    { value: params.lpAddress, placeholder: "LP_ADDRESS", comment: "lpAddress" },
+    { value: params.dwSize ?? 0x201, placeholder: "DW_SIZE", comment: "dwSize" },
+    { value: params.flNewProtect ?? 0x40, placeholder: "FL_NEW_PROTECT", comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+    { value: params.writable, placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" },
+  ], params.badchars);
+}
+
+export interface WriteProcessMemoryFrameParams {
+  writeProcessMemory?: number;
+  returnAddress?: number;
+  hProcess?: number;
+  lpBaseAddress?: number;
+  lpBuffer?: number;
+  nSize?: number;
+  writable?: number;
+  badchars?: number[];
+}
+
+export function planWriteProcessMemoryFrame(params: WriteProcessMemoryFrameParams = {}): FlatFramePlan {
+  return planFlatStdcallFrame([
+    { value: params.writeProcessMemory, placeholder: "WRITEPROCESSMEMORY", comment: "ret target: WriteProcessMemory" },
+    { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after WriteProcessMemory" },
+    { value: params.hProcess ?? 0xffffffff, placeholder: "HPROCESS", comment: "hProcess = GetCurrentProcess() pseudo-handle" },
+    { value: params.lpBaseAddress, placeholder: "LP_BASE_ADDRESS", comment: "lpBaseAddress (executable destination)" },
+    { value: params.lpBuffer, placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
+    { value: params.nSize, placeholder: "NSIZE", comment: "nSize" },
+    { value: params.writable, placeholder: "WRITABLE", comment: "lpNumberOfBytesWritten (writable dummy)" },
+  ], params.badchars);
+}
+
+export interface VirtualAllocFrameParams {
+  virtualAlloc?: number;
+  returnAddress?: number;
+  lpAddress?: number;
+  dwSize?: number;
+  flAllocationType?: number;
+  flProtect?: number;
+  badchars?: number[];
+}
+
+export function planVirtualAllocFrame(params: VirtualAllocFrameParams = {}): FlatFramePlan {
+  return planFlatStdcallFrame([
+    { value: params.virtualAlloc, placeholder: "VIRTUALALLOC", comment: "ret target: VirtualAlloc" },
+    { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after VirtualAlloc" },
+    { value: params.lpAddress, placeholder: "LP_ADDRESS", comment: "lpAddress" },
+    { value: params.dwSize ?? 0x201, placeholder: "DW_SIZE", comment: "dwSize" },
+    { value: params.flAllocationType ?? 0x1000, placeholder: "FL_ALLOCATION_TYPE", comment: "flAllocationType = MEM_COMMIT" },
+    { value: params.flProtect ?? 0x40, placeholder: "FL_PROTECT", comment: "flProtect = PAGE_EXECUTE_READWRITE" },
+  ], params.badchars);
 }
 
 // ---- PUSHAD goal templates (DEP bypass techniques) -------------------------

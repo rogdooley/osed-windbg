@@ -19,6 +19,10 @@ first appeared or materially changed; they are not package release dates.
   defaults to the RET-slide VirtualProtect layout, while constrained
   `rop.chain_wpm()` and `rop.chain_va()` report their saved-ESP argument
   assumptions instead of presenting them as unconstrained complete chains.
+- Added flat stdcall frame emitters (`rop.frame_vp()`, `rop.frame_wpm()`, and
+  `rop.frame_va()`) for the no-gadget case. They require no loaded ROP corpus,
+  emit the API return target plus arguments as data words, and check every
+  concrete dword against the caller's bad-character set.
 
 ### 2026-03-24 - Initial WinDbg exploit-development toolkit
 
