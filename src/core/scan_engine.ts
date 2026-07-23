@@ -224,6 +224,7 @@ export function forEachSection(options: ScanOptions): { sections: ModuleSection[
 
 export function scanPattern(options: ScanOptions, pattern: Uint8Array): ScanResult {
   const hits: bigint[] = [];
+  const seenHits = new Set<string>();
   const warnings: ScanWarning[] = [];
 
   const normalizedChunk = Math.max(0x1000, Math.min(0x4000, options.chunkSize));
@@ -275,7 +276,14 @@ export function scanPattern(options: ScanOptions, pattern: Uint8Array): ScanResu
         }
 
         if (matched) {
-          hits.push(chunkStart + BigInt(i));
+          const hit = chunkStart + BigInt(i);
+          const hitKey = hit.toString();
+          if (seenHits.has(hitKey)) {
+            continue;
+          }
+
+          seenHits.add(hitKey);
+          hits.push(hit);
           if (hits.length >= normalizedMax) {
             return {
               hits: hits.sort((a, b) => (a < b ? -1 : 1)),

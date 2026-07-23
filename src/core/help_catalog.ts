@@ -37,6 +37,24 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().fmt.offset(0x41414141, 40)"],
   },
   {
+    name: "str.read",
+    description: "Reads a null-terminated ASCII or UTF-16LE string from memory.",
+    usage: "dx @$osed().str.read(address, max?, encoding?)",
+    examples: ["dx @$osed().str.read(0x0019F920)", "dx @$osed().str.read(0x0019F920, 128, \"utf16le\")"],
+  },
+  {
+    name: "str.find",
+    description: "Finds ASCII and/or UTF-16LE string bytes in loaded module sections.",
+    usage: "dx @$osed().str.find(text, module?, encoding?, maxResults?)",
+    examples: ["dx @$osed().str.find(\"VirtualProtect\")", "dx @$osed().str.find(\"cmd.exe\", \"target\", \"ascii\", 25)"],
+  },
+  {
+    name: "str.bytes",
+    description: "Encodes text as payload bytes and reports bad-character hits.",
+    usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",
+    examples: ["dx @$osed().str.bytes(\"cmd.exe\")", "dx @$osed().str.bytes(\"W00T\", \"ascii\", true, \"00 0A 0D\")"],
+  },
+  {
     name: "rop_find",
     description: "Flat alias for legacy ROP helper/module triage.",
     usage: "dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)",

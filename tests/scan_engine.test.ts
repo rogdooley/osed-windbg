@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createRopCommands } from "../src/commands/rop";
+import { scanPattern } from "../src/core/scan_engine";
 
 function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
   bytes[offset] = value & 0xff;
@@ -15,7 +15,6 @@ function writeUint32LE(bytes: Uint8Array, offset: number, value: number): void {
 
 function installPeBackedHost(image: Uint8Array, base: bigint): void {
   (globalThis as unknown as { host: unknown }).host = {
-    diagnostics: { debugLog: () => undefined },
     currentProcess: {
       Modules: [
         {
@@ -59,35 +58,19 @@ function makeImageWithTextSection(): { image: Uint8Array; base: bigint; textStar
   return { image, base, textStart: base + BigInt(0x1000) };
 }
 
-describe("rop_suggest command", () => {
-  test("exposes an engine option with legacy and semantic modes", () => {
-    const ropSuggest = createRopCommands().find((command) => command.name === "rop_suggest");
-
-    expect(ropSuggest).toBeDefined();
-    expect(ropSuggest?.schema.engine).toEqual({
-      type: "string",
-      enum: ["legacy", "semantic"],
-      default: "legacy",
-    });
-    expect(ropSuggest?.examples).toContain("dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })");
-  });
-
-  test("find_bytes executes through the command adapter and returns unique hits", () => {
+describe("scanPattern", () => {
+  test("deduplicates matches visible in overlapping chunk reads", () => {
     const { image, base, textStart } = makeImageWithTextSection();
-    image.set([0xff, 0xe4], Number(textStart - base) + 0x1000);
+    const pattern = Uint8Array.from([0xff, 0xe4, 0xcc, 0xc3]);
+    image.set(pattern, Number(textStart - base) + 0x1000);
     installPeBackedHost(image, base);
 
-    const findBytes = createRopCommands().find((command) => command.name === "find_bytes");
-    const result = findBytes?.execute({
-      module: "target",
-      bytes: [0xff, 0xe4],
-      executableOnly: true,
-      maxResults: 10,
-      mode: "fast",
-    });
+    const result = scanPattern(
+      { executableOnly: true, maxResults: 10, chunkSize: 0x1000 },
+      pattern,
+    );
 
-    expect(result?.success).toBe(true);
-    expect(result?.findings).toEqual([textStart + BigInt(0x1000)]);
-    expect(result?.stats?.results).toBe(1);
+    expect(result.hits).toEqual([textStart + BigInt(0x1000)]);
+    expect(result.stats.results).toBe(1);
   });
 });

@@ -65,7 +65,7 @@ dx @$osed().rop_suggest("essfunc", 50)
 | `memory(address)` | Return normalized memory-region evidence, including tri-state access flags and raw protection metadata. |
 | `can_execute(address)` | Project the normalized executable flag from `memory(address)` as `true`, `false`, or `null`. |
 | `landing(address?)` | Analyze bytes and memory evidence at an address, defaulting to ESP/RSP. |
-| `modules(filter?)` | List loaded modules with ASLR/SafeSEH/DEP/CFG state. |
+| `modules(filter?)` | List loaded modules with ASLR/SafeSEH/DEP state. |
 | `badchars(address, exclude?)` | Compare memory against the expected byte sequence and highlight deviations. |
 
 ### Pattern / offset
@@ -130,6 +130,16 @@ dx @$osed().rop.capabilities()
 dx @$osed().egghunter("W00T", "ntaccess")
 dx @$osed().encode("fc e8 82 00 00 00...", "00 0A 0D")   ; XOR encode, auto-key
 dx @$osed().nop(16)
+```
+
+### String helpers (`str`)
+
+Read strings, search module sections, and convert text into payload bytes:
+
+```
+dx @$osed().str.read(0x0019F920)
+dx @$osed().str.find("VirtualProtect", "target", "both", 25)
+dx @$osed().str.bytes("cmd.exe", "ascii", true, "00 0A 0D")
 ```
 
 ### Format-string namespace (`fmt`)

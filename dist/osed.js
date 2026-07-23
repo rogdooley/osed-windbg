@@ -726,6 +726,7 @@ var osed_bundle = (() => {
   }
   function scanPattern(options, pattern) {
     const hits = [];
+    const seenHits = /* @__PURE__ */ new Set();
     const warnings = [];
     const normalizedChunk = Math.max(4096, Math.min(16384, options.chunkSize));
     const normalizedMax = Math.min(options.maxResults, 200);
@@ -766,7 +767,13 @@ var osed_bundle = (() => {
             }
           }
           if (matched) {
-            hits.push(chunkStart + BigInt(i));
+            const hit = chunkStart + BigInt(i);
+            const hitKey = hit.toString();
+            if (seenHits.has(hitKey)) {
+              continue;
+            }
+            seenHits.add(hitKey);
+            hits.push(hit);
             if (hits.length >= normalizedMax) {
               return {
                 hits: hits.sort((a, b) => a < b ? -1 : 1),
@@ -5133,6 +5140,24 @@ var osed_bundle = (() => {
       examples: ["dx @$osed().fmt.offset(0x41414141, 40)"]
     },
     {
+      name: "str.read",
+      description: "Reads a null-terminated ASCII or UTF-16LE string from memory.",
+      usage: "dx @$osed().str.read(address, max?, encoding?)",
+      examples: ["dx @$osed().str.read(0x0019F920)", 'dx @$osed().str.read(0x0019F920, 128, "utf16le")']
+    },
+    {
+      name: "str.find",
+      description: "Finds ASCII and/or UTF-16LE string bytes in loaded module sections.",
+      usage: "dx @$osed().str.find(text, module?, encoding?, maxResults?)",
+      examples: ['dx @$osed().str.find("VirtualProtect")', 'dx @$osed().str.find("cmd.exe", "target", "ascii", 25)']
+    },
+    {
+      name: "str.bytes",
+      description: "Encodes text as payload bytes and reports bad-character hits.",
+      usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",
+      examples: ['dx @$osed().str.bytes("cmd.exe")', 'dx @$osed().str.bytes("W00T", "ascii", true, "00 0A 0D")']
+    },
+    {
       name: "rop_find",
       description: "Flat alias for legacy ROP helper/module triage.",
       usage: "dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)",
@@ -8731,9 +8756,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-23T12:34:26.397Z",
-      gitCommit: "7b4f5250d285",
-      gitDirty: true
+      buildTime: "2026-07-23T14:27:57.928Z",
+      gitCommit: "5b31e961557b",
+      gitDirty: false
     };
   }
 
@@ -8772,6 +8797,248 @@ var osed_bundle = (() => {
         };
       }
     };
+  }
+
+  // src/commands/strings.ts
+  var DEFAULT_MAX_READ = 256;
+  var DEFAULT_MAX_RESULTS = 50;
+  function normalizeEncoding(value, fallback = "ascii") {
+    const text = String(value != null ? value : fallback).trim().toLowerCase();
+    if (text === "ascii" || text === "ansi") {
+      return "ascii";
+    }
+    if (text === "utf16" || text === "utf-16" || text === "utf16le" || text === "wide") {
+      return "utf16le";
+    }
+    throw new Error("encoding must be ascii or utf16le.");
+  }
+  function normalizeFindEncoding(value) {
+    const text = String(value != null ? value : "both").trim().toLowerCase();
+    if (text === "both") {
+      return "both";
+    }
+    return normalizeEncoding(text);
+  }
+  function byteToPython(byte) {
+    if (byte >= 32 && byte <= 126 && byte !== 34 && byte !== 92) {
+      return String.fromCharCode(byte);
+    }
+    if (byte === 34) return '\\"';
+    if (byte === 92) return "\\\\";
+    return `\\x${byte.toString(16).padStart(2, "0")}`;
+  }
+  function bytesToPython2(bytes) {
+    return `b"${bytes.map(byteToPython).join("")}"`;
+  }
+  function bytesToHex2(bytes) {
+    return bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  }
+  function encodeText(text, encoding, terminator = false) {
+    const bytes = [];
+    if (encoding === "ascii") {
+      for (let i = 0; i < text.length; i += 1) {
+        const code = text.charCodeAt(i);
+        if (code > 127) {
+          throw new Error("ASCII strings may only contain 0x00..0x7F characters.");
+        }
+        bytes.push(code & 255);
+      }
+      if (terminator) bytes.push(0);
+      return bytes;
+    }
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      bytes.push(code & 255, code >>> 8 & 255);
+    }
+    if (terminator) bytes.push(0, 0);
+    return bytes;
+  }
+  function decodeBytes(bytes, encoding) {
+    if (encoding === "ascii") {
+      const chars2 = [];
+      for (let i = 0; i < bytes.length; i += 1) {
+        if (bytes[i] === 0) {
+          return { text: chars2.join(""), length: i, terminated: true };
+        }
+        chars2.push(String.fromCharCode(bytes[i]));
+      }
+      return { text: chars2.join(""), length: bytes.length, terminated: false };
+    }
+    const chars = [];
+    const evenLength = bytes.length - bytes.length % 2;
+    for (let i = 0; i < evenLength; i += 2) {
+      const code = bytes[i] | bytes[i + 1] << 8;
+      if (code === 0) {
+        return { text: chars.join(""), length: i, terminated: true };
+      }
+      chars.push(String.fromCharCode(code));
+    }
+    return { text: chars.join(""), length: evenLength, terminated: false };
+  }
+  function addressRow(address, pointerSize) {
+    return formatAddress(address, pointerSize);
+  }
+  function createStringCommands() {
+    const readString = {
+      name: "str_read",
+      description: "Read a null-terminated ASCII or UTF-16LE string from memory.",
+      usage: "dx @$osed().str.read(address, max?, encoding?)",
+      examples: [
+        "dx @$osed().str.read(0x0019F920)",
+        'dx @$osed().str.read(0x0019F920, 128, "utf16le")'
+      ],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        max: { type: "number", min: 1, max: 4096, default: DEFAULT_MAX_READ },
+        encoding: { type: "string", default: "ascii" }
+      },
+      execute(options) {
+        const pointerSize = getPointerSize();
+        const address = normalizeAddress(options.address);
+        const max = options.max;
+        const encoding = normalizeEncoding(options.encoding);
+        const bytes = tryReadMemory(address, max);
+        if (!bytes) {
+          throw new Error(`Could not read ${max} bytes at ${addressRow(address, pointerSize)}.`);
+        }
+        const decoded = decodeBytes(bytes, encoding);
+        const finding = {
+          address,
+          encoding,
+          text: decoded.text,
+          length: decoded.length,
+          terminated: decoded.terminated
+        };
+        section("String Read");
+        info(`Address:    ${addressRow(address, pointerSize)}`);
+        info(`Encoding:   ${encoding}`);
+        info(`Length:     ${decoded.length} bytes`);
+        info(`Terminated: ${decoded.terminated ? "yes" : "no"}`);
+        print(decoded.text);
+        return {
+          command: "str_read",
+          args: options,
+          success: true,
+          findings: [finding],
+          warnings: decoded.terminated ? [] : [`No terminator found within ${max} bytes.`],
+          errors: []
+        };
+      }
+    };
+    const findString = {
+      name: "str_find",
+      description: "Find ASCII and/or UTF-16LE string bytes in loaded module sections.",
+      usage: "dx @$osed().str.find(text, module?, encoding?, maxResults?)",
+      examples: [
+        'dx @$osed().str.find("VirtualProtect")',
+        'dx @$osed().str.find("cmd.exe", "target", "ascii", 25)'
+      ],
+      schema: {
+        text: { type: "string", required: true },
+        module: { type: "string" },
+        encoding: { type: "string", default: "both" },
+        maxResults: { type: "number", min: 1, max: 200, default: DEFAULT_MAX_RESULTS }
+      },
+      execute(options) {
+        const text = options.text;
+        const module = options.module;
+        const encoding = normalizeFindEncoding(options.encoding);
+        const maxResults = options.maxResults;
+        const pointerSize = getPointerSize();
+        const encodings = encoding === "both" ? ["ascii", "utf16le"] : [encoding];
+        const findings = [];
+        const warnings = [];
+        for (const selected of encodings) {
+          const pattern = Uint8Array.from(encodeText(text, selected, false));
+          if (pattern.length === 0) {
+            throw new Error("text must not be empty.");
+          }
+          const scan = scanPattern(
+            {
+              module,
+              executableOnly: false,
+              maxResults: Math.max(0, maxResults - findings.length),
+              chunkSize: 16384
+            },
+            pattern
+          );
+          findings.push(...scan.hits.map((address) => ({ address, encoding: selected, text })));
+          warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+          if (findings.length >= maxResults) {
+            break;
+          }
+        }
+        const rows = findings.slice(0, maxResults).map((finding) => ({
+          address: addressRow(finding.address, pointerSize),
+          encoding: finding.encoding,
+          python: `0x${finding.address.toString(16).toUpperCase()}`
+        }));
+        section("String Find");
+        info(`Text:     ${text}`);
+        info(`Encoding: ${encoding}`);
+        table(
+          [
+            { key: "address", header: "Address", width: 18 },
+            { key: "encoding", header: "Encoding", width: 9 },
+            { key: "python", header: "Python", width: 14 }
+          ],
+          rows
+        );
+        return {
+          command: "str_find",
+          args: options,
+          success: true,
+          findings: findings.slice(0, maxResults),
+          warnings,
+          errors: [],
+          stats: { results: Math.min(findings.length, maxResults) }
+        };
+      }
+    };
+    const stringBytes = {
+      name: "str_bytes",
+      description: "Encode text as payload bytes and report bad-character hits.",
+      usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",
+      examples: [
+        'dx @$osed().str.bytes("cmd.exe")',
+        'dx @$osed().str.bytes("W00T", "ascii", true, "00 0A 0D")'
+      ],
+      schema: {
+        text: { type: "string", required: true },
+        encoding: { type: "string", default: "ascii" },
+        terminator: { type: "boolean", default: false },
+        exclude: { type: "array", elementType: "number", default: [0, 10, 13] }
+      },
+      execute(options) {
+        var _a;
+        const text = options.text;
+        const encoding = normalizeEncoding(options.encoding);
+        const terminator = options.terminator;
+        const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
+        const exclude = new Set(normalizedExclude.values);
+        const bytes = encodeText(text, encoding, terminator);
+        const badchars = bytes.map((byte, offset) => ({ byte, offset })).filter((entry) => exclude.has(entry.byte));
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        section("String Bytes");
+        info(`Encoding:   ${encoding}`);
+        info(`Terminator: ${terminator ? "yes" : "no"}`);
+        info(`Length:     ${bytes.length} bytes`);
+        print(bytesToHex2(bytes));
+        print(bytesToPython2(bytes));
+        if (badchars.length > 0) {
+          warn(`Bad characters: ${badchars.map((entry) => `${formatHexByte(entry.byte)}@${entry.offset}`).join(", ")}`);
+        }
+        return {
+          command: "str_bytes",
+          args: options,
+          success: true,
+          findings: [{ text, encoding, terminator, bytes, python: bytesToPython2(bytes), badchars }],
+          warnings,
+          errors: []
+        };
+      }
+    };
+    return [readString, findString, stringBytes];
   }
 
   // src/index.ts
@@ -8814,6 +9081,7 @@ var osed_bundle = (() => {
       createLandingCommand(),
       createMathCommand(),
       createVersionCommand(),
+      ...createStringCommands(),
       createEncodeCommand(),
       createNopCommand(),
       createRopTemplateCommand(),
@@ -9394,6 +9662,20 @@ var osed_bundle = (() => {
       build: (...args) => invoke("fmt_build", args),
       offset: (...args) => invoke("fmt_offset", args)
     };
+    api.str = {
+      read: (...args) => {
+        invoke("str_read", args.length === 0 ? args : [commandAddress(args[0]), ...args.slice(1)]);
+        return lastResult == null ? void 0 : lastResult.findings[0];
+      },
+      find: (...args) => {
+        invoke("str_find", args);
+        return lastResult == null ? void 0 : lastResult.findings;
+      },
+      bytes: (...args) => {
+        invoke("str_bytes", args);
+        return lastResult == null ? void 0 : lastResult.findings[0];
+      }
+    };
     api.last_result = () => lastResult;
     api.version = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -9442,8 +9724,9 @@ var osed_bundle = (() => {
       return lastResult == null ? void 0 : lastResult.findings[0];
     };
     api.can_execute = (address) => {
+      var _a;
       const evidence = api.memory(address);
-      return evidence.executable;
+      return (_a = evidence == null ? void 0 : evidence.executable) != null ? _a : null;
     };
     api.landing = (address) => {
       invoke("landing", address === void 0 ? [] : [commandAddress(address)]);
@@ -9509,6 +9792,12 @@ var osed_bundle = (() => {
         return { filter: args[0] };
       case "math":
         return { value: args[0], bits: args[1] };
+      case "str_read":
+        return { address: args[0], max: args[1], encoding: args[2] };
+      case "str_find":
+        return { text: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
+      case "str_bytes":
+        return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
       case "rop":
       case "rop_suggest":
       case "pivots":

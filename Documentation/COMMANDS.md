@@ -162,6 +162,18 @@ The two address dwords occupy `%6$`/`%7$`; the low word `0x11AF` is written firs
 
 If a target address contains a badchar (e.g. a null in `0x00402118`), pass `exclude` and the builder warns that the address itself cannot be delivered — that constraint is on the buffer, not something an encoder can fix.
 
+## String Namespace
+
+The `str` namespace provides small string helpers for exploit workflow evidence and payload layout.
+
+| Helper | Syntax | Example | Notes |
+| --- | --- | --- | --- |
+| `str.read` | `dx @$osed().str.read(address, max?, encoding?)` | `dx @$osed().str.read(0x0019F920)` | Reads a null-terminated ASCII or UTF-16LE string from memory. |
+| `str.find` | `dx @$osed().str.find(text, module?, encoding?, maxResults?)` | `dx @$osed().str.find("VirtualProtect", "target", "both", 25)` | Searches loaded module sections for ASCII and/or UTF-16LE bytes. |
+| `str.bytes` | `dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)` | `dx @$osed().str.bytes("cmd.exe", "ascii", true, "00 0A 0D")` | Converts text to payload bytes/Python bytes and reports excluded-byte hits. |
+
+`encoding` accepts `ascii` or `utf16le`; `str.find` also accepts `both`.
+
 ## Semantic ROP Namespace
 
 The `rop` runtime namespace includes semantic gadget queries, corpus-backed chain builders, and flat stdcall frame emitters. Load a corpus first with `rop.scan(...)` (pasted RP++ output) or `rop.scan_live(...)` (live target memory) before using `rop.query(...)`, `rop.capabilities()`, or `rop.chain*()` helpers. The `rop.frame_*()` helpers emit data-only stdcall frames and do not require a loaded corpus.

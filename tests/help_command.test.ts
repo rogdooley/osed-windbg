@@ -17,6 +17,15 @@ describe("help command", () => {
     expect(findHelpEntry("sc.iat_ptr")?.description).toContain("IAT slot");
   });
 
+  test("catalog exposes string namespace helpers", () => {
+    expect(findHelpEntry("str.read")).toMatchObject({
+      name: "str.read",
+      usage: "dx @$osed().str.read(address, max?, encoding?)",
+    });
+    expect(findHelpEntry("str.find")?.examples).toContain("dx @$osed().str.find(\"VirtualProtect\")");
+    expect(findHelpEntry("str.bytes")?.description).toContain("payload bytes");
+  });
+
   test("help lists namespace helpers and resolves sc.iat detail", () => {
     const logs: string[] = [];
     (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {

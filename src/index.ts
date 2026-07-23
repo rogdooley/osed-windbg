@@ -58,6 +58,7 @@ import { createLandingCommand } from "./commands/landing";
 import { createMathCommand } from "./commands/math";
 import { createVersionCommand } from "./commands/version";
 import { getVersionInfo } from "./core/version";
+import { createStringCommands } from "./commands/strings";
 
 declare const self: Record<string, unknown> | undefined;
 
@@ -107,6 +108,7 @@ function registerAll(): void {
     createLandingCommand(),
     createMathCommand(),
     createVersionCommand(),
+    ...createStringCommands(),
     createEncodeCommand(),
     createNopCommand(),
     createRopTemplateCommand(),
@@ -733,6 +735,20 @@ function bindApi(): OsedApi {
     build: (...args: unknown[]) => invoke("fmt_build", args),
     offset: (...args: unknown[]) => invoke("fmt_offset", args),
   };
+  api.str = {
+    read: (...args: unknown[]) => {
+      invoke("str_read", args.length === 0 ? args : [commandAddress(args[0]), ...args.slice(1)]);
+      return lastResult?.findings[0];
+    },
+    find: (...args: unknown[]) => {
+      invoke("str_find", args);
+      return lastResult?.findings;
+    },
+    bytes: (...args: unknown[]) => {
+      invoke("str_bytes", args);
+      return lastResult?.findings[0];
+    },
+  };
 
   api.last_result = () => lastResult;
   api.version = (...args: unknown[]) => {
@@ -785,8 +801,8 @@ function bindApi(): OsedApi {
     return lastResult?.findings[0];
   };
   api.can_execute = (address: unknown) => {
-    const evidence = (api.memory as (value: unknown) => { executable: boolean | null })(address);
-    return evidence.executable;
+    const evidence = (api.memory as (value: unknown) => { executable?: boolean | null } | undefined)(address);
+    return evidence?.executable ?? null;
   };
   api.landing = (address?: unknown) => {
     invoke("landing", address === undefined ? [] : [commandAddress(address)]);
@@ -860,6 +876,12 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
       return { filter: args[0] };
     case "math":
       return { value: args[0], bits: args[1] };
+    case "str_read":
+      return { address: args[0], max: args[1], encoding: args[2] };
+    case "str_find":
+      return { text: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
+    case "str_bytes":
+      return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
     case "rop":
     case "rop_suggest":
     case "pivots":

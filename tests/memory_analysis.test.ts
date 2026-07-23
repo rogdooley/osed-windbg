@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { normalizeMemoryRegion, parseVprot, serializeMemoryRegionEvidence } from "../src/analysis/memory";
+import { initializeScript } from "../src";
 
 describe("memory analysis", () => {
   test("normalizes Win32 protection, state, and type flags", () => {
@@ -92,5 +93,17 @@ describe("memory analysis", () => {
       executable: true,
       regionType: "image",
     });
+  });
+
+  test("can_execute returns unknown when memory evidence is unavailable", () => {
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: () => undefined },
+      currentProcess: { Is64Bit: false },
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as { osed: { can_execute: (address: number) => boolean | null } }).osed;
+
+    expect(api.can_execute(0x41414141)).toBeNull();
   });
 });
