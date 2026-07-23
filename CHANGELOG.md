@@ -7,6 +7,15 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-07-22 - Live ROP indexing and native chain construction
+
+- Added `rop.scan_live()` to discover known gadget patterns directly from live
+  executable target memory, apply bad-character address filtering, and feed the
+  surviving hits into the semantic capability index without RP++.
+- Added `rop.chain()` to emit paste-ready register-setup chains from the loaded
+  corpus using real gadget addresses, with support for xor-zero targets, pure
+  multi-pop co-satisfaction, and single-pop fallback.
+
 ### 2026-03-24 - Initial WinDbg exploit-development toolkit
 
 The first implementation appeared in `OSED-Toolkit` as a TypeScript/JavaScript
@@ -151,4 +160,3 @@ In short, the project evolved through these stages:
 - Pre-migration history: `OSED-Toolkit`, path `osed-windbg/`, commits
   `9eb9764` through `ad5b08d`.
 - Standalone history: this repository, beginning with `9db6bfb`.
-

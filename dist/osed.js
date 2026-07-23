@@ -2960,23 +2960,104 @@ var osed_bundle = (() => {
   function selectPopGadget(index, register) {
     return index.loadRegister(register).filter((gadget) => isSinglePopRet(gadget, register) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
   }
+  function isZeroRet(gadget, register) {
+    if (gadget.instructions.length !== 2) {
+      return false;
+    }
+    const [xor, ret] = gadget.instructions;
+    return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register && xor.operands[1].trim().toLowerCase() === register && ret.mnemonic === "ret" && ret.operands.length === 0;
+  }
+  function selectZeroGadget(index, register) {
+    return index.zeroRegister(register).filter((gadget) => isZeroRet(gadget, register) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+  }
+  function popSequenceRegisters(gadget) {
+    const instructions = gadget.instructions;
+    if (instructions.length < 2) {
+      return void 0;
+    }
+    const ret = instructions[instructions.length - 1];
+    if (ret.mnemonic !== "ret" || ret.operands.length !== 0) {
+      return void 0;
+    }
+    const registers = [];
+    for (let index = 0; index < instructions.length - 1; index += 1) {
+      const step = instructions[index];
+      if (step.mnemonic !== "pop" || step.operands.length !== 1) {
+        return void 0;
+      }
+      registers.push(step.operands[0].trim().toLowerCase());
+    }
+    return registers;
+  }
+  function valueComment(register, value) {
+    return `${register} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
   function planRegisterSetup(index, targets) {
     const steps = [];
     const satisfied = [];
     const unsatisfied = [];
+    const remaining = /* @__PURE__ */ new Map();
+    const order = [];
     for (const target of targets) {
       const register = target.register.trim().toLowerCase();
+      if (!remaining.has(register)) {
+        order.push(register);
+      }
+      remaining.set(register, target.value >>> 0);
+    }
+    for (const register of order) {
+      if (remaining.get(register) !== 0) {
+        continue;
+      }
+      const gadget = selectZeroGadget(index, register);
+      if (gadget) {
+        steps.push({ kind: "gadget", address: firstKnownAddress(gadget), comment: `xor ${register}, ${register} ; ret (${register} = 0)` });
+        satisfied.push(register);
+        remaining.delete(register);
+      }
+    }
+    const popSequences = index.gadgets.map((gadget) => ({ gadget, registers: popSequenceRegisters(gadget) })).filter((entry) => entry.registers !== void 0 && entry.registers.length >= 2 && firstKnownAddress(entry.gadget) !== void 0);
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      let best;
+      for (const candidate of popSequences) {
+        const { registers } = candidate;
+        const distinct = new Set(registers).size === registers.length;
+        if (!distinct || !registers.every((register) => remaining.has(register))) {
+          continue;
+        }
+        if (!best || registers.length > best.registers.length || registers.length === best.registers.length && candidate.gadget.score > best.gadget.score) {
+          best = candidate;
+        }
+      }
+      if (best) {
+        steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget), comment: `${best.registers.map((register) => `pop ${register}`).join(" ; ")} ; ret` });
+        for (const register of best.registers) {
+          const value = remaining.get(register) >>> 0;
+          steps.push({ kind: "value", value, comment: valueComment(register, value) });
+          satisfied.push(register);
+          remaining.delete(register);
+        }
+        progressed = true;
+      }
+    }
+    for (const register of order) {
+      if (!remaining.has(register)) {
+        continue;
+      }
       const gadget = selectPopGadget(index, register);
       if (!gadget) {
         const reason = index.loadRegister(register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
         unsatisfied.push({ register, reason });
+        remaining.delete(register);
         continue;
       }
-      const address = firstKnownAddress(gadget);
-      const value = target.value >>> 0;
-      steps.push({ kind: "gadget", address, comment: `pop ${register} ; ret` });
-      steps.push({ kind: "value", value, comment: `${register} = 0x${value.toString(16).toUpperCase().padStart(8, "0")}` });
+      const value = remaining.get(register) >>> 0;
+      steps.push({ kind: "gadget", address: firstKnownAddress(gadget), comment: `pop ${register} ; ret` });
+      steps.push({ kind: "value", value, comment: valueComment(register, value) });
       satisfied.push(register);
+      remaining.delete(register);
     }
     return { steps, satisfied, unsatisfied, stackBytes: steps.length * 4 };
   }
@@ -8115,9 +8196,9 @@ var osed_bundle = (() => {
   function getVersionInfo() {
     return {
       name: "osed-windbg",
-      version: "1.0.1",
-      buildTime: "2026-07-23T02:46:08.423Z",
-      gitCommit: "7a6990f2a1c3",
+      version: "1.0.2",
+      buildTime: "2026-07-23T02:54:50.191Z",
+      gitCommit: "db48f26348d4",
       gitDirty: true
     };
   }
@@ -8164,6 +8245,7 @@ var osed_bundle = (() => {
   var osed = {};
   var lastResult;
   var currentRopCorpus;
+  var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
   function getGlobalObject() {
     if (typeof globalThis !== "undefined") {
       return globalThis;
@@ -8252,7 +8334,7 @@ var osed_bundle = (() => {
     };
     const queryRows = (query) => {
       if (!currentRopCorpus) {
-        return [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+        return [{ Error: NO_ROP_CORPUS_MESSAGE }];
       }
       const gadgets = currentRopCorpus.query(query);
       const pointerSize = getPointerSize();
@@ -8276,7 +8358,7 @@ var osed_bundle = (() => {
     };
     const capabilityRows = () => {
       if (!currentRopCorpus) {
-        return [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+        return [{ Error: NO_ROP_CORPUS_MESSAGE }];
       }
       return summarizeCapabilities(currentRopCorpus);
     };
@@ -8404,7 +8486,7 @@ var osed_bundle = (() => {
         return toDxResult("ROP Query", rows2);
       }
       if (!currentRopCorpus) {
-        const rows2 = [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
         renderRows("ROP Query", rows2);
         setResult({
           command: "rop.query",
@@ -8412,7 +8494,7 @@ var osed_bundle = (() => {
           success: false,
           findings: [],
           warnings: [],
-          errors: ["No RP++ corpus loaded."]
+          errors: [NO_ROP_CORPUS_MESSAGE]
         });
         return toDxResult("ROP Query", rows2);
       }
@@ -8441,7 +8523,7 @@ var osed_bundle = (() => {
         success: currentRopCorpus !== void 0,
         findings: currentRopCorpus ? currentRopCorpus.gadgets : [],
         warnings: [],
-        errors: currentRopCorpus ? [] : ["No RP++ corpus loaded."]
+        errors: currentRopCorpus ? [] : [NO_ROP_CORPUS_MESSAGE]
       });
       return toDxResult("ROP Capabilities", rows);
     };
@@ -8463,9 +8545,9 @@ var osed_bundle = (() => {
         return helperHelp("rop.chain");
       }
       if (!currentRopCorpus) {
-        const rows2 = [{ Error: "No corpus loaded. Run rop.scan(...) or rop.scan_live(...) first." }];
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
         renderRows("ROP Chain", rows2);
-        setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: ["No corpus loaded."] });
+        setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP Chain", rows2);
       }
       const options = isPlainObject(args[0]) ? args[0] : {};

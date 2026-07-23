@@ -69,6 +69,7 @@ const registry = new CommandRegistry();
 let osed: OsedApi = {};
 let lastResult: CommandResult | undefined;
 let currentRopCorpus: CapabilityIndex | undefined;
+const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
 
 function getGlobalObject(): Record<string, unknown> | undefined {
   if (typeof globalThis !== "undefined") {
@@ -167,7 +168,7 @@ function bindApi(): OsedApi {
 
   const queryRows = (query: RopQuery): Array<Record<string, string>> => {
     if (!currentRopCorpus) {
-      return [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+      return [{ Error: NO_ROP_CORPUS_MESSAGE }];
     }
 
     const gadgets = currentRopCorpus.query(query);
@@ -192,7 +193,7 @@ function bindApi(): OsedApi {
 
   const capabilityRows = (): Array<Record<string, string>> => {
     if (!currentRopCorpus) {
-      return [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+      return [{ Error: NO_ROP_CORPUS_MESSAGE }];
     }
     return summarizeCapabilities(currentRopCorpus);
   };
@@ -328,7 +329,7 @@ function bindApi(): OsedApi {
       return toDxResult("ROP Query", rows);
     }
     if (!currentRopCorpus) {
-      const rows = [{ Error: "No RP++ corpus loaded. Run rop.scan(...) first." }];
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
       renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
@@ -336,7 +337,7 @@ function bindApi(): OsedApi {
         success: false,
         findings: [],
         warnings: [],
-        errors: ["No RP++ corpus loaded."],
+        errors: [NO_ROP_CORPUS_MESSAGE],
       });
       return toDxResult("ROP Query", rows);
     }
@@ -367,7 +368,7 @@ function bindApi(): OsedApi {
       success: currentRopCorpus !== undefined,
       findings: currentRopCorpus ? currentRopCorpus.gadgets : [],
       warnings: [],
-      errors: currentRopCorpus ? [] : ["No RP++ corpus loaded."],
+      errors: currentRopCorpus ? [] : [NO_ROP_CORPUS_MESSAGE],
     });
     return toDxResult("ROP Capabilities", rows);
   };
@@ -390,9 +391,9 @@ function bindApi(): OsedApi {
       return helperHelp("rop.chain");
     }
     if (!currentRopCorpus) {
-      const rows = [{ Error: "No corpus loaded. Run rop.scan(...) or rop.scan_live(...) first." }];
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
       renderRows("ROP Chain", rows);
-      setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: ["No corpus loaded."] });
+      setResult({ command: "rop.chain", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("ROP Chain", rows);
     }
 

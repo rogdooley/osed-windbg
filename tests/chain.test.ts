@@ -52,3 +52,60 @@ describe("register-setup chain construction", () => {
     ]);
   });
 });
+
+describe("smarter chain construction: multi-pop and zeroing", () => {
+  test("co-satisfies two registers with a single multi-pop gadget", () => {
+    const multi = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "pop eax ; pop ebx ; ret", address: BigInt(0x00402000), module: "vuln" },
+        { mnemonic: "pop eax ; ret", address: BigInt(0x00402100), module: "vuln" },
+        { mnemonic: "pop ebx ; ret", address: BigInt(0x00402110), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(multi, [
+      { register: "eax", value: 0x11111111 },
+      { register: "ebx", value: 0x22222222 },
+    ]);
+    expect(plan.satisfied).toEqual(["eax", "ebx"]);
+    expect(plan.stackBytes).toBe(12); // one gadget slot + two value slots
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00402000), comment: "pop eax ; pop ebx ; ret" },
+      { kind: "value", value: 0x11111111, comment: "eax = 0x11111111" },
+      { kind: "value", value: 0x22222222, comment: "ebx = 0x22222222" },
+    ]);
+  });
+
+  test("zeroes a value-0 target with xor, preferring it over a pop", () => {
+    const both = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "xor eax, eax ; ret", address: BigInt(0x00404000), module: "vuln" },
+        { mnemonic: "pop eax ; ret", address: BigInt(0x00404010), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(both, [{ register: "eax", value: 0 }]);
+    expect(plan.satisfied).toEqual(["eax"]);
+    expect(plan.stackBytes).toBe(4); // xor gadget only, no value slot
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00404000), comment: "xor eax, eax ; ret (eax = 0)" },
+    ]);
+  });
+
+  test("mixes zeroing and pop across targets", () => {
+    const mixed = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "xor eax, eax ; ret", address: BigInt(0x00405000), module: "vuln" },
+        { mnemonic: "pop ebx ; ret", address: BigInt(0x00405010), module: "vuln" },
+      ]),
+    );
+    const plan = planRegisterSetup(mixed, [
+      { register: "eax", value: 0 },
+      { register: "ebx", value: 0x5 },
+    ]);
+    expect(plan.satisfied).toEqual(["eax", "ebx"]);
+    expect(plan.steps).toEqual([
+      { kind: "gadget", address: BigInt(0x00405000), comment: "xor eax, eax ; ret (eax = 0)" },
+      { kind: "gadget", address: BigInt(0x00405010), comment: "pop ebx ; ret" },
+      { kind: "value", value: 0x5, comment: "ebx = 0x00000005" },
+    ]);
+  });
+});

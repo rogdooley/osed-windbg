@@ -173,7 +173,7 @@ The `rop` runtime namespace is a semantic query surface. Load a corpus first wit
 | `rop.scan_live` | `dx @$osed().rop.scan_live({ module?, badchars?, maxPerPattern? })` | `dx @$osed().rop.scan_live({ module: "essfunc", badchars: [0, 10, 13] })` | Discovers gadgets directly from live target memory (bad-char-filtered addresses), feeds them through the semantic pipeline, and loads the same queryable corpus — no RP++ text, reads only. |
 | `rop.query` | `dx @$osed().rop.query(query)` | `dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
-| `rop.chain` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })` | Constructs a register-setup chain from the loaded corpus using clobber-free `pop reg ; ret` gadgets at their real addresses. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
+| `rop.chain` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })` | `dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })` | Constructs a register-setup chain from the loaded corpus using real-address gadgets. It can zero value-0 targets with `xor reg, reg ; ret`, co-satisfy compatible registers with pure multi-pop gadgets, and fall back to single `pop reg ; ret`. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
 
 `rop.query` supports net register-transform predicates:
 
