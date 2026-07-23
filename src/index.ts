@@ -37,6 +37,7 @@ import { createReloadCommand } from "./commands/reload";
 import { createSehPprCommand } from "./commands/seh_ppr";
 import { createExploitCommand } from "./commands/exploit";
 import { createTriageCommand } from "./commands/triage";
+import { createFindMspCommand } from "./commands/findmsp";
 import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
@@ -94,6 +95,7 @@ function registerAll(): void {
     createPivotCommand(),
     createSehPprCommand(),
     createTriageCommand(),
+    createFindMspCommand(),
     createMemoryCommand(),
     createLandingCommand(),
     createMathCommand(),

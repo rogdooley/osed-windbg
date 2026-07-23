@@ -7,7 +7,7 @@ import { LandingEvidence, landing } from "../analysis/landing";
 import { readSehRecords, resolveTeb32Address } from "../analysis/seh";
 import { findModuleByAddress, listModulesWithMitigations, ModuleMitigation } from "./modules";
 
-type RegisterSnapshot = {
+export type RegisterSnapshot = {
   ip?: bigint;
   ipName?: string;
   sp?: bigint;
@@ -117,7 +117,7 @@ function toArray(value: unknown): unknown[] {
   return [];
 }
 
-function readRegisters(pointerSize: 4 | 8): RegisterSnapshot {
+export function readRegisters(pointerSize: 4 | 8): RegisterSnapshot {
   const thread = host.currentThread as Record<string, unknown>;
   const regsRoot = safeGet(thread, "Registers");
   const userRegs = safeGet(regsRoot, "User") ?? regsRoot;

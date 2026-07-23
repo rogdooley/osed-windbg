@@ -4926,6 +4926,265 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/logic/pattern_scan_logic.ts
+  var CYCLIC_MAX_LENGTH = 62 * 62 * 62;
+  function buildHaystacks(length) {
+    const requested = Number.isFinite(length) ? Math.trunc(length) : 0;
+    return {
+      msf: generateMsfPattern(Math.max(4, Math.min(requested, MSF_MAX_LENGTH))),
+      cyclic: generateCyclicPattern(Math.max(4, Math.min(Math.max(requested, 2e4), CYCLIC_MAX_LENGTH)))
+    };
+  }
+  function confidenceFor(haystack, needle, firstOffset) {
+    return haystack.indexOf(needle, firstOffset + 1) === -1 ? "EXACT" : "CONSERVATIVE";
+  }
+  function matchRegisterValue(low322, haystacks) {
+    const needle = decodeOffsetNeedle(low322 >>> 0);
+    for (const kind of ["msf", "cyclic"]) {
+      const offset = haystacks[kind].indexOf(needle);
+      if (offset >= 0) {
+        return { kind, offset, confidence: confidenceFor(haystacks[kind], needle, offset) };
+      }
+    }
+    return void 0;
+  }
+  function bufferToLatin1(buffer) {
+    let text = "";
+    for (let index = 0; index < buffer.length; index += 1) {
+      text += String.fromCharCode(buffer[index]);
+    }
+    return text;
+  }
+  function locatePatternInBuffer(buffer, haystacks, maxProbe = 64) {
+    const text = bufferToLatin1(buffer);
+    const cap = Math.min(text.length, maxProbe);
+    for (const kind of ["msf", "cyclic"]) {
+      const haystack = haystacks[kind];
+      for (let length = cap; length >= 4; length -= 1) {
+        const needle = text.slice(0, length);
+        const offset = haystack.indexOf(needle);
+        if (offset >= 0) {
+          return { kind, offset, length, confidence: confidenceFor(haystack, needle, offset) };
+        }
+      }
+    }
+    return void 0;
+  }
+  function dwordAt(buffer, index) {
+    if (index < 0 || index + 4 > buffer.length) {
+      return void 0;
+    }
+    return (buffer[index] | buffer[index + 1] << 8 | buffer[index + 2] << 16 | buffer[index + 3] << 24) >>> 0;
+  }
+
+  // src/commands/findmsp.ts
+  var MIN_POINTER = BigInt(65536);
+  var MAX_STACK_MATCHES = 100;
+  function low32(value) {
+    return Number(value & BigInt(4294967295)) >>> 0;
+  }
+  function scanRegisters(regs, haystacks, probeBytes) {
+    const matches = [];
+    for (const register of regs.all) {
+      const direct = matchRegisterValue(low32(register.value), haystacks);
+      if (direct) {
+        matches.push({
+          source: register.name.toLowerCase(),
+          type: "register",
+          kind: direct.kind,
+          offset: direct.offset,
+          confidence: direct.confidence,
+          detail: "register overwritten with pattern bytes"
+        });
+        continue;
+      }
+      if (register.value < MIN_POINTER) {
+        continue;
+      }
+      const buffer = tryReadMemory(register.value, probeBytes);
+      if (!buffer) {
+        continue;
+      }
+      const located = locatePatternInBuffer(buffer, haystacks);
+      if (located) {
+        matches.push({
+          source: register.name.toLowerCase(),
+          type: "pointer",
+          kind: located.kind,
+          offset: located.offset,
+          confidence: located.confidence,
+          detail: `points into pattern (${located.length} contiguous bytes readable)`
+        });
+      }
+    }
+    return matches;
+  }
+  function scanStack(regs, haystacks, stackBytes) {
+    var _a;
+    if (regs.sp === void 0) {
+      return { matches: [], truncated: false, readable: false };
+    }
+    const buffer = tryReadMemory(regs.sp, stackBytes);
+    if (!buffer) {
+      return { matches: [], truncated: false, readable: false };
+    }
+    const label = ((_a = regs.spName) != null ? _a : "sp").toLowerCase();
+    const matches = [];
+    let truncated = false;
+    for (let index = 0; index + 4 <= buffer.length; index += 4) {
+      const value = dwordAt(buffer, index);
+      if (value === void 0) {
+        continue;
+      }
+      const match = matchRegisterValue(value, haystacks);
+      if (!match) {
+        continue;
+      }
+      if (matches.length >= MAX_STACK_MATCHES) {
+        truncated = true;
+        break;
+      }
+      matches.push({
+        source: `${label}+0x${index.toString(16)}`,
+        type: "stack",
+        kind: match.kind,
+        offset: match.offset,
+        confidence: match.confidence,
+        detail: "stack slot holds pattern bytes"
+      });
+    }
+    return { matches, truncated, readable: true };
+  }
+  function scanSeh(pointerSize, haystacks) {
+    if (pointerSize !== 4) {
+      return { matches: [] };
+    }
+    const teb = resolveTeb32Address(host.currentThread);
+    if (!teb) {
+      return { matches: [], warning: "TEB unavailable for SEH walk." };
+    }
+    try {
+      const records = readSehRecords(teb, 3);
+      const matches = [];
+      records.forEach((record, index) => {
+        const fields = [
+          { name: "next", value: record.next },
+          { name: "handler", value: record.handler }
+        ];
+        for (const field of fields) {
+          const match = matchRegisterValue(low32(field.value), haystacks);
+          if (match) {
+            matches.push({
+              source: `seh[${index}].${field.name}`,
+              type: "seh",
+              kind: match.kind,
+              offset: match.offset,
+              confidence: match.confidence,
+              detail: "SEH record field holds pattern bytes"
+            });
+          }
+        }
+      });
+      return { matches };
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      return { matches: [], warning: `SEH read failed: ${message}` };
+    }
+  }
+  function createFindMspCommand() {
+    return {
+      name: "findmsp",
+      description: "Comprehensive cyclic-pattern offset scan across registers, the stack, SEH, and pointer targets.",
+      usage: "dx @$osed().findmsp({ patternLength: 10000 })",
+      examples: ["dx @$osed().findmsp()", "dx @$osed().findmsp({ patternLength: 20000, stackBytes: 4096 })"],
+      schema: {
+        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
+        stackBytes: { type: "number", min: 128, max: 8192, default: 2048 },
+        probeBytes: { type: "number", min: 8, max: 256, default: 32 }
+      },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        const patternLength = options.patternLength;
+        const stackBytes = options.stackBytes;
+        const probeBytes = options.probeBytes;
+        const haystacks = buildHaystacks(patternLength);
+        const regs = readRegisters(pointerSize);
+        const registerMatches = scanRegisters(regs, haystacks, probeBytes);
+        const stack = scanStack(regs, haystacks, stackBytes);
+        const seh = scanSeh(pointerSize, haystacks);
+        const matches = [...registerMatches, ...stack.matches, ...seh.matches];
+        const ipName = ((_a = regs.ipName) != null ? _a : pointerSize === 8 ? "rip" : "eip").toLowerCase();
+        const ipMatch = registerMatches.find((match) => match.source === ipName && match.type === "register");
+        section("INSTRUCTION POINTER");
+        if (ipMatch) {
+          print(`${ipName.toUpperCase()} overwritten at pattern offset ${ipMatch.offset} (${ipMatch.kind}, ${ipMatch.confidence}).`);
+        } else {
+          print(`${ipName.toUpperCase()} does not hold cyclic-pattern bytes.`);
+        }
+        section("PATTERN MATCHES");
+        if (matches.length === 0) {
+          print("No cyclic-pattern evidence found in registers, stack, SEH, or pointer targets.");
+        } else {
+          table(
+            [
+              { key: "source", header: "Source", width: 16 },
+              { key: "type", header: "Where", width: 10 },
+              { key: "offset", header: "Offset", width: 8 },
+              { key: "kind", header: "Pattern", width: 8 },
+              { key: "confidence", header: "Conf", width: 12 },
+              { key: "detail", header: "Detail" }
+            ],
+            matches.map((match) => ({
+              source: match.source,
+              type: match.type,
+              offset: `${match.offset}`,
+              kind: match.kind,
+              confidence: match.confidence,
+              detail: match.detail
+            }))
+          );
+        }
+        const warnings = [];
+        if (!stack.readable) {
+          warnings.push("Stack pointer memory was not readable; stack scan skipped.");
+        } else if (stack.truncated) {
+          warnings.push(`Stack scan stopped after ${MAX_STACK_MATCHES} matches; increase specificity or reduce stackBytes.`);
+        }
+        if (seh.warning) {
+          warnings.push(seh.warning);
+        }
+        return {
+          command: "findmsp",
+          args: options,
+          success: true,
+          findings: [
+            {
+              pointerSize,
+              instructionPointer: {
+                register: ipName,
+                value: regs.ip,
+                matched: ipMatch !== void 0,
+                offset: ipMatch == null ? void 0 : ipMatch.offset,
+                pattern: ipMatch == null ? void 0 : ipMatch.kind,
+                confidence: ipMatch == null ? void 0 : ipMatch.confidence
+              },
+              matches,
+              counts: {
+                register: registerMatches.filter((match) => match.type === "register").length,
+                pointer: registerMatches.filter((match) => match.type === "pointer").length,
+                stack: stack.matches.length,
+                seh: seh.matches.length
+              }
+            }
+          ],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
+
   // src/commands/encode.ts
   var MAX_SHELLCODE_LEN = 65535;
   function buildXorStub(key2, payloadLen) {
@@ -7392,8 +7651,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.1",
-      buildTime: "2026-07-23T01:32:49.000Z",
-      gitCommit: "21070692d283",
+      buildTime: "2026-07-23T02:12:00.286Z",
+      gitCommit: "fb9134ba4d49",
       gitDirty: true
     };
   }
@@ -7466,6 +7725,7 @@ var osed_bundle = (() => {
       createPivotCommand(),
       createSehPprCommand(),
       createTriageCommand(),
+      createFindMspCommand(),
       createMemoryCommand(),
       createLandingCommand(),
       createMathCommand(),

@@ -17,6 +17,7 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
 | `seh` | `dx @$osed().seh()` | `dx @$osed().seh()` | Walks the current thread SEH chain. x86-only in v1. |
 | `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, stack, and gadget context. Uses EIP/ESP on x86 and RIP/RSP on x64; SEH/PPR evidence is x86-only. |
+| `findmsp` | `dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)` | `dx @$osed().findmsp(20000, 4096)` | Comprehensive cyclic-pattern offset scan across all registers, dword-aligned stack slots, SEH record fields, and pointer targets. Reports pattern offset and a confidence per hit (EXACT = unique offset, CONSERVATIVE = repeats). |
 | `memory` | `dx @$osed().memory(address)` | `dx @$osed().memory(0x0012F800)` | Returns normalized region evidence. Unknown semantic flags are `null`; raw numeric metadata is preserved. |
 | `landing` | `dx @$osed().landing(address?)` | `dx @$osed().landing()` | Returns byte-range and memory observations at an explicit address or ESP/RSP. |
 | `math` | `dx @$osed().math(value, bits?)` | `dx @$osed().math(0xFFFFFFD6, 32)` | Formats integers as hex, signed, unsigned, little-endian bytes, and two's complement. |
