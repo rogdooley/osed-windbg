@@ -12,6 +12,8 @@ export type InstructionValidationResult = {
 };
 
 const KNOWN_PATTERNS: GadgetPattern[] = [
+  // plain ret — useful as a RET-slide dispatcher in PUSHAD DEP-bypass chains
+  { name: "ret", bytes: [0xc3], mnemonic: "ret" },
   // pop-register ; ret — all 8 general-purpose registers
   { name: "pop_eax_ret", bytes: [0x58, 0xc3], mnemonic: "pop eax ; ret" },
   { name: "pop_ecx_ret", bytes: [0x59, 0xc3], mnemonic: "pop ecx ; ret" },
@@ -70,6 +72,7 @@ const KNOWN_PATTERNS: GadgetPattern[] = [
 ];
 
 const X64_PATTERNS: GadgetPattern[] = [
+  { name: "ret", bytes: [0xc3], mnemonic: "ret" },
   { name: "pop_rax_ret", bytes: [0x58, 0xc3], mnemonic: "pop rax ; ret" },
   { name: "pop_rcx_ret", bytes: [0x59, 0xc3], mnemonic: "pop rcx ; ret" },
   { name: "pop_rdx_ret", bytes: [0x5a, 0xc3], mnemonic: "pop rdx ; ret" },

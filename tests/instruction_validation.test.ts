@@ -33,6 +33,12 @@ describe("instruction_validation", () => {
     expect(patterns.some((p) => p.mnemonic === "leave ; ret")).toBe(true);
   });
 
+  test("knownPatterns includes plain ret for RET-slide chains", () => {
+    const p = knownPatterns().find((p) => p.mnemonic === "ret");
+    expect(p).toBeDefined();
+    expect(p?.bytes).toEqual([0xc3]);
+  });
+
   test("knownPatterns includes xchg variants for all non-eax registers", () => {
     const patterns = knownPatterns();
     for (const reg of ["ecx", "edx", "ebx", "esi", "edi", "ebp"]) {

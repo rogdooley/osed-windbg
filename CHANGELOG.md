@@ -15,6 +15,10 @@ first appeared or materially changed; they are not package release dates.
 - Added `rop.chain()` to emit paste-ready register-setup chains from the loaded
   corpus using real gadget addresses, with support for xor-zero targets, pure
   multi-pop co-satisfaction, and single-pop fallback.
+- Added PUSHAD goal planners for DEP-bypass workflows. `rop.chain_vp()` now
+  defaults to the RET-slide VirtualProtect layout, while constrained
+  `rop.chain_wpm()` and `rop.chain_va()` report their saved-ESP argument
+  assumptions instead of presenting them as unconstrained complete chains.
 
 ### 2026-03-24 - Initial WinDbg exploit-development toolkit
 

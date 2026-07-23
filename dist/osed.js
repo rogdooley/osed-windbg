@@ -2152,6 +2152,8 @@ var osed_bundle = (() => {
 
   // src/logic/instruction_validation.ts
   var KNOWN_PATTERNS = [
+    // plain ret — useful as a RET-slide dispatcher in PUSHAD DEP-bypass chains
+    { name: "ret", bytes: [195], mnemonic: "ret" },
     // pop-register ; ret — all 8 general-purpose registers
     { name: "pop_eax_ret", bytes: [88, 195], mnemonic: "pop eax ; ret" },
     { name: "pop_ecx_ret", bytes: [89, 195], mnemonic: "pop ecx ; ret" },
@@ -2209,6 +2211,7 @@ var osed_bundle = (() => {
     { name: "pushad_ret", bytes: [96, 195], mnemonic: "pushad ; ret" }
   ];
   var X64_PATTERNS = [
+    { name: "ret", bytes: [195], mnemonic: "ret" },
     { name: "pop_rax_ret", bytes: [88, 195], mnemonic: "pop rax ; ret" },
     { name: "pop_rcx_ret", bytes: [89, 195], mnemonic: "pop rcx ; ret" },
     { name: "pop_rdx_ret", bytes: [90, 195], mnemonic: "pop rdx ; ret" },
@@ -3084,15 +3087,25 @@ var osed_bundle = (() => {
   function findPushadRet(index) {
     return index.gadgets.filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
   }
+  function isPlainRet(gadget) {
+    return gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0;
+  }
+  function findPlainRet(index) {
+    return index.gadgets.filter((gadget) => isPlainRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+  }
   function named(value, placeholder) {
     return value === void 0 ? { placeholder } : { value: value >>> 0 };
   }
-  function planPushadChain(index, specs, label) {
+  function planPushadChain(index, specs, label, mode, constraints = []) {
     const steps = [];
     const satisfied = [];
     const unsatisfied = [];
     const placeholders = /* @__PURE__ */ new Set();
     for (const spec of specs) {
+      if (spec.missingReason) {
+        unsatisfied.push({ register: spec.register, reason: spec.missingReason });
+        continue;
+      }
       const gadget = selectPopGadget(index, spec.register);
       if (!gadget) {
         const reason = index.loadRegister(spec.register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
@@ -3119,11 +3132,13 @@ var osed_bundle = (() => {
       satisfied,
       unsatisfied,
       placeholders: [...placeholders],
+      constraints,
       hasPushad: pushad !== void 0,
+      mode,
       stackBytes: steps.length * 4
     };
   }
-  function virtualProtectSpecs(params) {
+  function virtualProtectDirectSpecs(params) {
     var _a;
     const flNewProtect = ((_a = params.flNewProtect) != null ? _a : 64) >>> 0;
     return [
@@ -3136,8 +3151,37 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
     ];
   }
+  function virtualProtectRetSlideSpecs(params, retGadget) {
+    var _a, _b;
+    const retAddress = params.retGadget !== void 0 ? params.retGadget >>> 0 : retGadget ? Number(firstKnownAddress(retGadget)) : void 0;
+    const dwSize = ((_a = params.dwSize) != null ? _a : 513) >>> 0;
+    const flNewProtect = ((_b = params.flNewProtect) != null ? _b : 64) >>> 0;
+    return [
+      __spreadProps(__spreadValues({
+        register: "edi"
+      }, retAddress === void 0 ? {} : { value: retAddress }), {
+        missingReason: retAddress === void 0 ? "no plain ret gadget in corpus for RET-slide dispatch" : void 0,
+        meaning: "RET-slide gadget (first ret pops ESI into EIP)"
+      }),
+      __spreadProps(__spreadValues({ register: "esi" }, named(params.virtualProtect, "VIRTUALPROTECT")), { meaning: "VirtualProtect (called by RET-slide)" }),
+      __spreadProps(__spreadValues({ register: "ebp" }, named(params.returnAddress, "RETURN_ADDR")), { meaning: "return address after VirtualProtect (e.g. jmp esp)" }),
+      { register: "ebx", value: dwSize, meaning: "dwSize" },
+      { register: "edx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+      __spreadProps(__spreadValues({ register: "ecx" }, named(params.writable, "WRITABLE")), { meaning: "lpflOldProtect (writable dummy)" }),
+      { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
+    ];
+  }
   function planVirtualProtect(index, params = {}) {
-    return planPushadChain(index, virtualProtectSpecs(params), "VirtualProtect");
+    var _a;
+    const mode = (_a = params.mode) != null ? _a : "ret-slide";
+    if (mode === "direct") {
+      return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
+        "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain."
+      ]);
+    }
+    return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
+      "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes."
+    ]);
   }
   function writeProcessMemorySpecs(params) {
     return [
@@ -3151,7 +3195,9 @@ var osed_bundle = (() => {
     ];
   }
   function planWriteProcessMemory(index, params = {}) {
-    return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory");
+    return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
+      "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination."
+    ]);
   }
   function virtualAllocSpecs(params) {
     var _a, _b;
@@ -3168,7 +3214,9 @@ var osed_bundle = (() => {
     ];
   }
   function planVirtualAlloc(index, params = {}) {
-    return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc");
+    return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
+      "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
+    ]);
   }
 
   // src/semantics/types.ts
@@ -4762,6 +4810,12 @@ var osed_bundle = (() => {
       examples: ['dx @$osed().rop.scan("0x1000: pop eax ; ret ;")']
     },
     {
+      name: "rop.scan_live",
+      description: "Discovers live target gadgets and loads them into the semantic ROP corpus.",
+      usage: "dx @$osed().rop.scan_live({ module?, badchars?, maxPerPattern? })",
+      examples: ['dx @$osed().rop.scan_live({ module: "essfunc", badchars: [0, 10, 13] })']
+    },
+    {
       name: "rop.query",
       description: "Filters the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.query(query)",
@@ -4772,6 +4826,30 @@ var osed_bundle = (() => {
       description: "Summarizes capabilities in the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.capabilities()",
       examples: ["dx @$osed().rop.capabilities()"]
+    },
+    {
+      name: "rop.chain",
+      description: "Builds a register-setup chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })",
+      examples: ["dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })"]
+    },
+    {
+      name: "rop.chain_vp",
+      description: "Builds a VirtualProtect PUSHAD chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain_vp({ mode?, virtualProtect?, retGadget?, returnAddress?, dwSize?, writable?, flNewProtect? })",
+      examples: ["dx @$osed().rop.chain_vp({ virtualProtect: 0x7C801AD0, returnAddress: 0x625011AF })"]
+    },
+    {
+      name: "rop.chain_wpm",
+      description: "Builds a constrained WriteProcessMemory PUSHAD chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain_wpm({ writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable? })",
+      examples: ["dx @$osed().rop.chain_wpm({ writeProcessMemory: 0x7C802213, nSize: 0x200 })"]
+    },
+    {
+      name: "rop.chain_va",
+      description: "Builds a constrained VirtualAlloc PUSHAD chain from the loaded ROP corpus.",
+      usage: "dx @$osed().rop.chain_va({ virtualAlloc?, returnAddress?, lpAddress?, flAllocationType?, flProtect? })",
+      examples: ["dx @$osed().rop.chain_va({ virtualAlloc: 0x7C809AE1 })"]
     },
     {
       name: "sc.iat",
@@ -8293,9 +8371,9 @@ var osed_bundle = (() => {
   function getVersionInfo() {
     return {
       name: "osed-windbg",
-      version: "1.0.2",
-      buildTime: "2026-07-23T03:17:23.184Z",
-      gitCommit: "f5573aa2e608",
+      version: "1.0.3",
+      buildTime: "2026-07-23T03:22:27.337Z",
+      gitCommit: "2df5670eb6a1",
       gitDirty: true
     };
   }
@@ -8694,22 +8772,25 @@ var osed_bundle = (() => {
       const options = isPlainObject(args[0]) ? args[0] : {};
       const params = {
         virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
+        retGadget: options.retGadget !== void 0 ? Number(options.retGadget) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
         lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
+        dwSize: options.dwSize !== void 0 ? Number(options.dwSize) : void 0,
         writable: options.writable !== void 0 ? Number(options.writable) : void 0,
-        flNewProtect: options.flNewProtect !== void 0 ? Number(options.flNewProtect) : void 0
+        flNewProtect: options.flNewProtect !== void 0 ? Number(options.flNewProtect) : void 0,
+        mode: options.mode === "direct" ? "direct" : "ret-slide"
       };
       const plan = planVirtualProtect(currentRopCorpus, params);
       const python = formatChainPython(plan);
       section("ROP Chain \u2014 VirtualProtect (PUSHAD)");
-      info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) {
         info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
       }
       for (const line of python) {
         print(line);
       }
-      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
       for (const warning of warnings) {
         warn(warning);
       }
@@ -8752,14 +8833,14 @@ var osed_bundle = (() => {
       const plan = planWriteProcessMemory(currentRopCorpus, params);
       const python = formatChainPython(plan);
       section("ROP Chain \u2014 WriteProcessMemory (PUSHAD)");
-      info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) {
         info(`Define before use: ${plan.placeholders.join(", ")}`);
       }
       for (const line of python) {
         print(line);
       }
-      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
       for (const warning of warnings) {
         warn(warning);
       }
@@ -8802,14 +8883,14 @@ var osed_bundle = (() => {
       const plan = planVirtualAlloc(currentRopCorpus, params);
       const python = formatChainPython(plan);
       section("ROP Chain \u2014 VirtualAlloc (PUSHAD)");
-      info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+      info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) {
         info(`Define before use: ${plan.placeholders.join(", ")}`);
       }
       for (const line of python) {
         print(line);
       }
-      const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+      const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
       for (const warning of warnings) {
         warn(warning);
       }

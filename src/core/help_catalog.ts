@@ -55,6 +55,12 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().rop.scan(\"0x1000: pop eax ; ret ;\")"],
   },
   {
+    name: "rop.scan_live",
+    description: "Discovers live target gadgets and loads them into the semantic ROP corpus.",
+    usage: "dx @$osed().rop.scan_live({ module?, badchars?, maxPerPattern? })",
+    examples: ["dx @$osed().rop.scan_live({ module: \"essfunc\", badchars: [0, 10, 13] })"],
+  },
+  {
     name: "rop.query",
     description: "Filters the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.query(query)",
@@ -65,6 +71,30 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Summarizes capabilities in the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.capabilities()",
     examples: ["dx @$osed().rop.capabilities()"],
+  },
+  {
+    name: "rop.chain",
+    description: "Builds a register-setup chain from the loaded ROP corpus.",
+    usage: "dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })",
+    examples: ["dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })"],
+  },
+  {
+    name: "rop.chain_vp",
+    description: "Builds a VirtualProtect PUSHAD chain from the loaded ROP corpus.",
+    usage: "dx @$osed().rop.chain_vp({ mode?, virtualProtect?, retGadget?, returnAddress?, dwSize?, writable?, flNewProtect? })",
+    examples: ["dx @$osed().rop.chain_vp({ virtualProtect: 0x7C801AD0, returnAddress: 0x625011AF })"],
+  },
+  {
+    name: "rop.chain_wpm",
+    description: "Builds a constrained WriteProcessMemory PUSHAD chain from the loaded ROP corpus.",
+    usage: "dx @$osed().rop.chain_wpm({ writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable? })",
+    examples: ["dx @$osed().rop.chain_wpm({ writeProcessMemory: 0x7C802213, nSize: 0x200 })"],
+  },
+  {
+    name: "rop.chain_va",
+    description: "Builds a constrained VirtualAlloc PUSHAD chain from the loaded ROP corpus.",
+    usage: "dx @$osed().rop.chain_va({ virtualAlloc?, returnAddress?, lpAddress?, flAllocationType?, flProtect? })",
+    examples: ["dx @$osed().rop.chain_va({ virtualAlloc: 0x7C809AE1 })"],
   },
   {
     name: "sc.iat",

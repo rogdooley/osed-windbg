@@ -121,23 +121,28 @@ describe("VirtualProtect goal template (PUSHAD technique)", () => {
       { mnemonic: "pop ecx ; ret", address: BigInt(0x00401050), module: "vuln" },
       { mnemonic: "pop eax ; ret", address: BigInt(0x00401060), module: "vuln" },
       { mnemonic: "pushad ; ret", address: BigInt(0x00401070), module: "vuln" },
+      { mnemonic: "ret", address: BigInt(0x00401080), module: "vuln" },
     ]),
   );
 
-  test("resolves every gadget and constant when addresses are supplied", () => {
+  test("defaults to RET-slide mode and resolves every gadget when addresses are supplied", () => {
     const plan = planVirtualProtect(vpIndex, {
       virtualProtect: 0x7c801ad0,
       returnAddress: 0x080414d3,
-      lpAddress: 0x00110000,
+      dwSize: 0x201,
       writable: 0x0040a000,
     });
     expect(plan.satisfied).toEqual(["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]);
     expect(plan.unsatisfied).toEqual([]);
     expect(plan.placeholders).toEqual([]);
+    expect(plan.mode).toBe("ret-slide");
     expect(plan.hasPushad).toBe(true);
     expect(plan.stackBytes).toBe(60); // 7 pops + 7 values + pushad
-    // Constants are concrete; the frame terminates with the pushad gadget.
-    expect(plan.steps[7]).toEqual({ kind: "value", value: 0x40, comment: "ebx = 0x00000040 (flNewProtect = PAGE_EXECUTE_READWRITE)" });
+    expect(plan.constraints).toEqual([
+      "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes.",
+    ]);
+    expect(plan.steps[1]).toEqual({ kind: "value", value: 0x00401080, comment: "edi = 0x00401080 (RET-slide gadget (first ret pops ESI into EIP))" });
+    expect(plan.steps[7]).toEqual({ kind: "value", value: 0x201, comment: "ebx = 0x00000201 (dwSize)" });
     expect(plan.steps[plan.steps.length - 1]).toEqual({
       kind: "gadget",
       address: BigInt(0x00401070),
@@ -147,10 +152,20 @@ describe("VirtualProtect goal template (PUSHAD technique)", () => {
 
   test("emits named placeholders for runtime-dependent values", () => {
     const plan = planVirtualProtect(vpIndex, {});
-    expect(plan.placeholders).toEqual(["VIRTUALPROTECT", "RETURN_ADDR", "LP_ADDRESS", "WRITABLE"]);
+    expect(plan.placeholders).toEqual(["VIRTUALPROTECT", "RETURN_ADDR", "WRITABLE"]);
     const python = formatChainPython(plan);
-    expect(python).toContain('rop += pack("<I", VIRTUALPROTECT)  # edi = VIRTUALPROTECT (VirtualProtect (RET dispatches here))');
-    expect(python).toContain('rop += pack("<I", 0x00000040)  # ebx = 0x00000040 (flNewProtect = PAGE_EXECUTE_READWRITE)');
+    expect(python).toContain('rop += pack("<I", VIRTUALPROTECT)  # esi = VIRTUALPROTECT (VirtualProtect (called by RET-slide))');
+    expect(python).toContain('rop += pack("<I", 0x00000040)  # edx = 0x00000040 (flNewProtect = PAGE_EXECUTE_READWRITE)');
+  });
+
+  test("keeps direct mode explicit for the older dispatch layout", () => {
+    const plan = planVirtualProtect(vpIndex, { mode: "direct", virtualProtect: 0x7c801ad0 });
+    expect(plan.mode).toBe("direct");
+    expect(plan.steps[1]).toEqual({ kind: "value", value: 0x7c801ad0, comment: "edi = 0x7C801AD0 (VirtualProtect (RET dispatches here))" });
+    expect(plan.placeholders).toContain("LP_ADDRESS");
+    expect(plan.constraints).toEqual([
+      "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain.",
+    ]);
   });
 
   test("reports missing pushad and missing pop gadgets honestly", () => {
@@ -160,8 +175,9 @@ describe("VirtualProtect goal template (PUSHAD technique)", () => {
     const plan = planVirtualProtect(partial, { virtualProtect: 0x7c801ad0 });
     expect(plan.hasPushad).toBe(false);
     expect(plan.unsatisfied.some((entry) => entry.register === "pushad")).toBe(true);
+    expect(plan.unsatisfied.some((entry) => entry.register === "edi" && entry.reason.includes("plain ret"))).toBe(true);
     expect(plan.unsatisfied.some((entry) => entry.register === "esi")).toBe(true);
-    expect(plan.satisfied).toEqual(["edi"]);
+    expect(plan.satisfied).toEqual([]);
   });
 });
 
@@ -175,6 +191,7 @@ const fullCorpusHits = [
   { mnemonic: "pop ecx ; ret", address: BigInt(0x00401050), module: "vuln" },
   { mnemonic: "pop eax ; ret", address: BigInt(0x00401060), module: "vuln" },
   { mnemonic: "pushad ; ret", address: BigInt(0x00401070), module: "vuln" },
+  { mnemonic: "ret", address: BigInt(0x00401080), module: "vuln" },
 ];
 const fullIndex = buildCapabilityIndexFromSequences(sequencesFromLiveHits(fullCorpusHits));
 
@@ -190,6 +207,9 @@ describe("WriteProcessMemory goal template (PUSHAD technique)", () => {
     expect(plan.satisfied).toEqual(["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]);
     expect(plan.unsatisfied).toEqual([]);
     expect(plan.hasPushad).toBe(true);
+    expect(plan.constraints).toEqual([
+      "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination.",
+    ]);
     // EBP is always 0xFFFFFFFF (GetCurrentProcess pseudo-handle).
     const ebpValue = plan.steps.find((s) => s.comment.includes("hProcess"));
     expect(ebpValue?.value).toBe(0xFFFFFFFF >>> 0);
@@ -225,6 +245,9 @@ describe("VirtualAlloc goal template (PUSHAD technique)", () => {
     expect(plan.satisfied).toEqual(["edi", "esi", "ebp", "ebx", "edx", "ecx", "eax"]);
     expect(plan.unsatisfied).toEqual([]);
     expect(plan.hasPushad).toBe(true);
+    expect(plan.constraints).toEqual([
+      "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape.",
+    ]);
     // EBX = MEM_COMMIT (0x1000), EDX = PAGE_EXECUTE_READWRITE (0x40).
     const ebxValue = plan.steps.find((s) => s.comment.includes("flAllocationType"));
     expect(ebxValue?.value).toBe(0x1000);

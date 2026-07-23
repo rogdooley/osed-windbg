@@ -220,19 +220,28 @@ export function formatChainPython(plan: { steps: ChainStep[] }): string[] {
 // runtime-dependent values. They emit chains as evidence — never write target
 // memory.
 //
-// After `pushad ; ret`, the stack (low → high) is:
+// In direct mode, after `pushad ; ret`, the stack (low -> high) is:
 //   [EDI] [ESI] [EBP] [ESP] [EBX] [EDX] [ECX] [EAX]
 // `ret` pops EDI into EIP, so EDI = the API to call. The remaining 7 words
 // form [return_addr(ESI)][param1(EBP)][param2(ESP)][param3(EBX)][param4(EDX)]
 // [param5(ECX)][unused(EAX)]. ESP is the saved stack pointer — not directly
 // settable, but often "good enough" as a size or address argument.
+//
+// In RET-slide mode, EDI is a plain `ret` gadget and ESI is the API. That extra
+// hop shifts the stdcall frame to [return_addr(EBP)][param1(ESP)][param2(EBX)]
+// [param3(EDX)][param4(ECX)][param5(EAX)]. This is the common VirtualProtect
+// PUSHAD layout because saved ESP becomes lpAddress and EBX can carry dwSize.
+
+export type PushadDispatchMode = "direct" | "ret-slide";
 
 export interface PushadPlan {
   steps: ChainStep[];
   satisfied: string[];
   unsatisfied: Array<{ register: string; reason: string }>;
   placeholders: string[];
+  constraints: string[];
   hasPushad: boolean;
+  mode: PushadDispatchMode;
   stackBytes: number;
 }
 
@@ -240,6 +249,7 @@ interface RegisterSpec {
   register: string;
   value?: number;
   placeholder?: string;
+  missingReason?: string;
   meaning: string;
 }
 
@@ -257,17 +267,37 @@ function findPushadRet(index: CapabilityIndex): RopGadget | undefined {
     .sort((a, b) => b.score - a.score)[0];
 }
 
+function isPlainRet(gadget: RopGadget): boolean {
+  return gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0;
+}
+
+function findPlainRet(index: CapabilityIndex): RopGadget | undefined {
+  return index.gadgets
+    .filter((gadget) => isPlainRet(gadget) && firstKnownAddress(gadget) !== undefined)
+    .sort((a, b) => b.score - a.score)[0];
+}
+
 function named(value: number | undefined, placeholder: string): Pick<RegisterSpec, "value" | "placeholder"> {
   return value === undefined ? { placeholder } : { value: value >>> 0 };
 }
 
-function planPushadChain(index: CapabilityIndex, specs: RegisterSpec[], label: string): PushadPlan {
+function planPushadChain(
+  index: CapabilityIndex,
+  specs: RegisterSpec[],
+  label: string,
+  mode: PushadDispatchMode,
+  constraints: string[] = [],
+): PushadPlan {
   const steps: ChainStep[] = [];
   const satisfied: string[] = [];
   const unsatisfied: Array<{ register: string; reason: string }> = [];
   const placeholders = new Set<string>();
 
   for (const spec of specs) {
+    if (spec.missingReason) {
+      unsatisfied.push({ register: spec.register, reason: spec.missingReason });
+      continue;
+    }
     const gadget = selectPopGadget(index, spec.register);
     if (!gadget) {
       const reason = index.loadRegister(spec.register).length > 0
@@ -298,7 +328,9 @@ function planPushadChain(index: CapabilityIndex, specs: RegisterSpec[], label: s
     satisfied,
     unsatisfied,
     placeholders: [...placeholders],
+    constraints,
     hasPushad: pushad !== undefined,
+    mode,
     stackBytes: steps.length * 4,
   };
 }
@@ -307,15 +339,18 @@ function planPushadChain(index: CapabilityIndex, specs: RegisterSpec[], label: s
 
 export interface VirtualProtectParams {
   virtualProtect?: number;
+  retGadget?: number;
   returnAddress?: number;
   lpAddress?: number;
+  dwSize?: number;
   writable?: number;
   flNewProtect?: number;
+  mode?: PushadDispatchMode;
 }
 
 export type VirtualProtectPlan = PushadPlan;
 
-function virtualProtectSpecs(params: VirtualProtectParams): RegisterSpec[] {
+function virtualProtectDirectSpecs(params: VirtualProtectParams): RegisterSpec[] {
   const flNewProtect = (params.flNewProtect ?? 0x40) >>> 0;
   return [
     { register: "edi", ...named(params.virtualProtect, "VIRTUALPROTECT"), meaning: "VirtualProtect (RET dispatches here)" },
@@ -328,8 +363,36 @@ function virtualProtectSpecs(params: VirtualProtectParams): RegisterSpec[] {
   ];
 }
 
+function virtualProtectRetSlideSpecs(params: VirtualProtectParams, retGadget: RopGadget | undefined): RegisterSpec[] {
+  const retAddress = params.retGadget !== undefined ? params.retGadget >>> 0 : (retGadget ? Number(firstKnownAddress(retGadget)!) : undefined);
+  const dwSize = (params.dwSize ?? 0x201) >>> 0;
+  const flNewProtect = (params.flNewProtect ?? 0x40) >>> 0;
+  return [
+    {
+      register: "edi",
+      ...(retAddress === undefined ? {} : { value: retAddress }),
+      missingReason: retAddress === undefined ? "no plain ret gadget in corpus for RET-slide dispatch" : undefined,
+      meaning: "RET-slide gadget (first ret pops ESI into EIP)",
+    },
+    { register: "esi", ...named(params.virtualProtect, "VIRTUALPROTECT"), meaning: "VirtualProtect (called by RET-slide)" },
+    { register: "ebp", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after VirtualProtect (e.g. jmp esp)" },
+    { register: "ebx", value: dwSize, meaning: "dwSize" },
+    { register: "edx", value: flNewProtect, meaning: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+    { register: "ecx", ...named(params.writable, "WRITABLE"), meaning: "lpflOldProtect (writable dummy)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by VirtualProtect (junk)" },
+  ];
+}
+
 export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}): VirtualProtectPlan {
-  return planPushadChain(index, virtualProtectSpecs(params), "VirtualProtect");
+  const mode = params.mode ?? "ret-slide";
+  if (mode === "direct") {
+    return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
+      "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain.",
+    ]);
+  }
+  return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
+    "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes.",
+  ]);
 }
 
 // -- WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNBW) ------
@@ -359,7 +422,9 @@ function writeProcessMemorySpecs(params: WriteProcessMemoryParams): RegisterSpec
 }
 
 export function planWriteProcessMemory(index: CapabilityIndex, params: WriteProcessMemoryParams = {}): WriteProcessMemoryPlan {
-  return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory");
+  return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
+    "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination.",
+  ]);
 }
 
 // -- VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) -------------
@@ -391,5 +456,7 @@ function virtualAllocSpecs(params: VirtualAllocParams): RegisterSpec[] {
 }
 
 export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocParams = {}): VirtualAllocPlan {
-  return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc");
+  return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
+    "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape.",
+  ]);
 }

@@ -449,24 +449,27 @@ function bindApi(): OsedApi {
     const options = isPlainObject(args[0]) ? args[0] : {};
     const params: VirtualProtectParams = {
       virtualProtect: options.virtualProtect !== undefined ? Number(options.virtualProtect) : undefined,
+      retGadget: options.retGadget !== undefined ? Number(options.retGadget) : undefined,
       returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
       lpAddress: options.lpAddress !== undefined ? Number(options.lpAddress) : undefined,
+      dwSize: options.dwSize !== undefined ? Number(options.dwSize) : undefined,
       writable: options.writable !== undefined ? Number(options.writable) : undefined,
       flNewProtect: options.flNewProtect !== undefined ? Number(options.flNewProtect) : undefined,
+      mode: options.mode === "direct" ? "direct" : "ret-slide",
     };
 
     const plan = planVirtualProtect(currentRopCorpus, params);
     const python = formatChainPython(plan);
 
     out.section("ROP Chain — VirtualProtect (PUSHAD)");
-    out.info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    out.info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
     if (plan.placeholders.length > 0) {
       out.info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
     }
     for (const line of python) {
       out.print(line);
     }
-    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
     for (const warning of warnings) {
       out.warn(warning);
     }
@@ -513,14 +516,14 @@ function bindApi(): OsedApi {
     const python = formatChainPython(plan);
 
     out.section("ROP Chain — WriteProcessMemory (PUSHAD)");
-    out.info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    out.info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
     if (plan.placeholders.length > 0) {
       out.info(`Define before use: ${plan.placeholders.join(", ")}`);
     }
     for (const line of python) {
       out.print(line);
     }
-    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
     for (const warning of warnings) {
       out.warn(warning);
     }
@@ -567,14 +570,14 @@ function bindApi(): OsedApi {
     const python = formatChainPython(plan);
 
     out.section("ROP Chain — VirtualAlloc (PUSHAD)");
-    out.info(`Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
+    out.info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
     if (plan.placeholders.length > 0) {
       out.info(`Define before use: ${plan.placeholders.join(", ")}`);
     }
     for (const line of python) {
       out.print(line);
     }
-    const warnings = plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`);
+    const warnings = [...plan.unsatisfied.map((entry) => `${entry.register}: ${entry.reason}`), ...plan.constraints];
     for (const warning of warnings) {
       out.warn(warning);
     }
