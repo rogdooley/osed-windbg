@@ -1,9 +1,10 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
-import { getPointerSize, readPointer } from "../core/memory";
+import { getPointerSize } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
 import { decodeOffsetNeedle, generateCyclicPattern, generateMsfPattern } from "../logic/pattern_logic";
 import { LandingEvidence, landing } from "../analysis/landing";
+import { readSehRecords, resolveTeb32Address } from "../analysis/seh";
 import { findModuleByAddress, listModulesWithMitigations, ModuleMitigation } from "./modules";
 
 type RegisterSnapshot = {
@@ -272,16 +273,17 @@ function readSehPreview(pointerSize: 4 | 8): { overwritten: TriState; next?: big
     return { overwritten: "unknown", warning: "SEH overwrite analysis is x86-only." };
   }
 
-  const thread = host.currentThread as Record<string, unknown>;
-  const tebCandidate = toBigInt(safeGet(thread, "Teb") ?? safeGet(thread, "TebAddress"));
+  const tebCandidate = resolveTeb32Address(host.currentThread as Record<string, unknown>);
   if (!tebCandidate) {
     return { overwritten: "unknown", warning: "TEB unavailable for SEH walk." };
   }
 
   try {
-    const first = readPointer(tebCandidate, 4);
-    const next = readPointer(first, 4);
-    const handler = readPointer(first + BigInt(4), 4);
+    const first = readSehRecords(tebCandidate, 1)[0];
+    if (!first) {
+      return { overwritten: "no", warning: "SEH chain is empty." };
+    }
+    const { next, handler } = first;
     const mod = findModuleByAddress(handler);
     const overwritten: TriState = mod ? "no" : "yes";
     return { overwritten, next, handler };
@@ -375,6 +377,7 @@ export function createTriageCommand(): Command {
         out.print(`Overwritten: ${seh.overwritten}`);
         out.print(`Next SEH: ${seh.next !== undefined ? out.formatAddress(seh.next, 4) : "n/a"}`);
         out.print(`Handler: ${seh.handler !== undefined ? out.formatAddress(seh.handler, 4) : "n/a"}`);
+        if (seh.warning) out.print(`Status: ${seh.warning}`);
       }
 
       out.section("STACK");

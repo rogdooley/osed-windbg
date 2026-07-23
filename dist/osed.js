@@ -675,6 +675,124 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/analysis/seh.ts
+  function safeGet(value, key2) {
+    if (!value || typeof value !== "object") return void 0;
+    try {
+      return value[key2];
+    } catch (_error) {
+      return void 0;
+    }
+  }
+  function safeKeys(value) {
+    if (!value || typeof value !== "object") return [];
+    try {
+      return Object.keys(value);
+    } catch (_error) {
+      return [];
+    }
+  }
+  function toAddress(value) {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.max(0, Math.trunc(value)));
+    if (typeof value === "string") {
+      const text = value.trim();
+      const embeddedHex = text.match(/0x[0-9a-fA-F]+/);
+      if (embeddedHex) return BigInt(embeddedHex[0]);
+      if (/^[0-9a-fA-F]+$/.test(text)) return BigInt(`0x${text}`);
+    }
+    if (value && typeof value === "object") {
+      for (const key2 of ["targetLocation", "address", "Address", "Value", "value"]) {
+        const parsed = toAddress(safeGet(value, key2));
+        if (parsed !== BigInt(0)) return parsed;
+      }
+      try {
+        const valueOf = safeGet(value, "valueOf");
+        if (typeof valueOf === "function") {
+          const resolved = valueOf.call(value);
+          if (resolved !== value) {
+            const parsed = toAddress(resolved);
+            if (parsed !== BigInt(0)) return parsed;
+          }
+        }
+      } catch (_error) {
+      }
+      try {
+        const toString = safeGet(value, "toString");
+        if (typeof toString === "function") return toAddress(toString.call(value));
+      } catch (_error) {
+      }
+    }
+    return BigInt(0);
+  }
+  function signedInteger(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+    if (typeof value === "bigint") return Number(value);
+    const text = typeof value === "string" ? value : String(value != null ? value : "");
+    const match = text.match(/-?[0-9]+/);
+    return match ? parseInt(match[0], 10) : 0;
+  }
+  function environmentTeb(thread) {
+    for (const environment of [safeGet(thread, "Environment"), safeGet(thread, "NativeEnvironment")]) {
+      const block = safeGet(environment, "EnvironmentBlock");
+      if (!block || typeof block !== "object") continue;
+      const direct = toAddress(safeGet(block, "Self"));
+      if (direct !== BigInt(0)) return direct;
+      const ntTib = safeGet(block, "NtTib");
+      const nativeSelf = toAddress(safeGet(ntTib, "Self"));
+      const wowOffset = signedInteger(safeGet(block, "WowTebOffset"));
+      if (nativeSelf !== BigInt(0) && wowOffset !== 0) return nativeSelf + BigInt(wowOffset);
+      if (nativeSelf !== BigInt(0)) return nativeSelf;
+    }
+    return BigInt(0);
+  }
+  function candidates(value, depth = 0) {
+    if (depth > 2 || value === null || value === void 0) return [];
+    const found = /* @__PURE__ */ new Set();
+    const direct = toAddress(value);
+    if (direct !== BigInt(0)) found.add(direct);
+    if (typeof value === "object") {
+      for (const key2 of safeKeys(value)) {
+        for (const item of candidates(safeGet(value, key2), depth + 1)) found.add(item);
+      }
+    }
+    return [...found];
+  }
+  function looksLikeTeb32(address, reader) {
+    try {
+      if (address < BigInt(4096) || reader(address + BigInt(24), 4) !== address) return false;
+      const head = reader(address, 4);
+      return head !== BigInt(0) && head !== BigInt(4294967295);
+    } catch (_error) {
+      return false;
+    }
+  }
+  function resolveTeb32Address(thread, reader = readPointer) {
+    const fromEnvironment = environmentTeb(thread);
+    if (fromEnvironment !== BigInt(0)) return fromEnvironment;
+    for (const key2 of ["Teb", "Teb32", "TebAddress", "Wow64Teb", "Wow64Teb32"]) {
+      const parsed = toAddress(safeGet(thread, key2));
+      if (parsed !== BigInt(0)) return parsed;
+    }
+    for (const key2 of safeKeys(thread)) {
+      if (/teb/i.test(key2)) {
+        const parsed = toAddress(safeGet(thread, key2));
+        if (parsed !== BigInt(0)) return parsed;
+      }
+    }
+    return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
+  }
+  function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
+    const records = [];
+    let node = reader(teb, 4);
+    while (node !== BigInt(4294967295) && records.length < maxRecords) {
+      const next = reader(node, 4);
+      records.push({ node, next, handler: reader(node + BigInt(4), 4) });
+      node = next;
+    }
+    return records;
+  }
+
   // src/commands/modules.ts
   var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 64;
   var IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 256;
@@ -867,228 +985,6 @@ var osed_bundle = (() => {
   }
 
   // src/commands/seh.ts
-  function safeGet(objectValue, key2) {
-    if (!objectValue || typeof objectValue !== "object") {
-      return void 0;
-    }
-    try {
-      return objectValue[key2];
-    } catch (_error) {
-      return void 0;
-    }
-  }
-  function safeKeys(objectValue) {
-    if (!objectValue || typeof objectValue !== "object") {
-      return [];
-    }
-    try {
-      return Object.keys(objectValue);
-    } catch (_error) {
-      return [];
-    }
-  }
-  function toAddress(value) {
-    if (typeof value === "bigint") {
-      return value;
-    }
-    if (typeof value === "number") {
-      return BigInt(Math.max(0, Math.trunc(value)));
-    }
-    if (typeof value === "string") {
-      const text = value.trim();
-      const embeddedHex = text.match(/0x[0-9a-fA-F]+/);
-      if (embeddedHex) {
-        return BigInt(embeddedHex[0]);
-      }
-      if (/^[0-9a-fA-F]+$/.test(text)) {
-        return BigInt(`0x${text}`);
-      }
-      if (/^[0-9]+$/.test(text)) {
-        return BigInt(text);
-      }
-    }
-    if (value && typeof value === "object") {
-      const pointerFields = ["targetLocation", "address", "Address", "Value", "value"];
-      for (const field of pointerFields) {
-        const parsed = toAddress(safeGet(value, field));
-        if (parsed !== BigInt(0)) {
-          return parsed;
-        }
-      }
-      try {
-        const valueOfFn = safeGet(value, "valueOf");
-        if (typeof valueOfFn === "function") {
-          const resolved = valueOfFn.call(value);
-          if (resolved !== value) {
-            const parsed = toAddress(resolved);
-            if (parsed !== BigInt(0)) {
-              return parsed;
-            }
-          }
-        }
-      } catch (_error) {
-      }
-      try {
-        const toStringFn = safeGet(value, "toString");
-        if (typeof toStringFn === "function") {
-          const text = toStringFn.call(value);
-          const parsed = toAddress(text);
-          if (parsed !== BigInt(0)) {
-            return parsed;
-          }
-        }
-      } catch (_error) {
-      }
-    }
-    return BigInt(0);
-  }
-  function resolveTebAddress() {
-    const thread = host.currentThread;
-    const envTeb = resolveFromEnvironmentBlock(thread);
-    if (envTeb !== BigInt(0)) {
-      return envTeb;
-    }
-    const directCandidates = [
-      safeGet(thread, "Teb"),
-      safeGet(thread, "Teb32"),
-      safeGet(thread, "TebAddress"),
-      safeGet(thread, "Wow64Teb"),
-      safeGet(thread, "Wow64Teb32")
-    ];
-    for (const candidate of directCandidates) {
-      const parsed = toAddress(candidate);
-      if (parsed !== BigInt(0)) {
-        return parsed;
-      }
-    }
-    for (const key2 of safeKeys(thread)) {
-      if (!/teb/i.test(key2)) {
-        continue;
-      }
-      const parsed = toAddress(safeGet(thread, key2));
-      if (parsed !== BigInt(0)) {
-        return parsed;
-      }
-    }
-    const candidates = collectAddressCandidates(thread, 0, 2);
-    for (const candidate of candidates) {
-      if (looksLikeTeb32(candidate)) {
-        return candidate;
-      }
-    }
-    return BigInt(0);
-  }
-  function resolveFromEnvironmentBlock(thread) {
-    const env = safeGet(thread, "Environment");
-    const nativeEnv = safeGet(thread, "NativeEnvironment");
-    const blocks = [safeGet(env, "EnvironmentBlock"), safeGet(nativeEnv, "EnvironmentBlock")];
-    for (const block of blocks) {
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-      const directSelf = toAddress(safeGet(block, "Self"));
-      if (directSelf !== BigInt(0)) {
-        return directSelf;
-      }
-      const ntTib = safeGet(block, "NtTib");
-      const nestedSelf = toAddress(safeGet(ntTib, "Self"));
-      if (nestedSelf !== BigInt(0)) {
-        return nestedSelf;
-      }
-      const wowOffset = toSignedInteger(safeGet(block, "WowTebOffset"));
-      const nativeSelf = toAddress(safeGet(ntTib, "Self"));
-      if (nativeSelf !== BigInt(0) && wowOffset !== 0) {
-        const derived = nativeSelf + BigInt(wowOffset);
-        if (derived > BigInt(0)) {
-          return derived;
-        }
-      }
-    }
-    return BigInt(0);
-  }
-  function toSignedInteger(value) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return Math.trunc(value);
-    }
-    if (typeof value === "bigint") {
-      return Number(value);
-    }
-    if (typeof value === "string") {
-      const text = value.trim();
-      if (/^-?[0-9]+$/.test(text)) {
-        return parseInt(text, 10);
-      }
-    }
-    if (value && typeof value === "object") {
-      let valueOfResolved = void 0;
-      try {
-        const valueOf = value.valueOf;
-        if (typeof valueOf === "function") {
-          valueOfResolved = valueOf.call(value);
-        }
-      } catch (_error) {
-        valueOfResolved = void 0;
-      }
-      const parsed = toSignedInteger(valueOfResolved);
-      if (parsed !== 0) {
-        return parsed;
-      }
-      let text = void 0;
-      try {
-        const toStringFn = value.toString;
-        if (typeof toStringFn === "function") {
-          text = toStringFn.call(value);
-        }
-      } catch (_error) {
-        text = void 0;
-      }
-      if (typeof text === "string") {
-        const match = text.match(/-?[0-9]+/);
-        if (match) {
-          return parseInt(match[0], 10);
-        }
-      }
-    }
-    return 0;
-  }
-  function collectAddressCandidates(value, depth, maxDepth) {
-    if (depth > maxDepth || value === null || value === void 0) {
-      return [];
-    }
-    const found = /* @__PURE__ */ new Set();
-    const direct = toAddress(value);
-    if (direct !== BigInt(0)) {
-      found.add(direct);
-    }
-    if (typeof value !== "object") {
-      return [...found];
-    }
-    for (const key2 of safeKeys(value)) {
-      const nested = collectAddressCandidates(safeGet(value, key2), depth + 1, maxDepth);
-      for (const entry of nested) {
-        found.add(entry);
-      }
-    }
-    return [...found];
-  }
-  function looksLikeTeb32(address) {
-    try {
-      if (address < BigInt(4096)) {
-        return false;
-      }
-      const self2 = readPointer(address + BigInt(24), 4);
-      if (self2 !== address) {
-        return false;
-      }
-      const exceptionList = readPointer(address, 4);
-      if (exceptionList === BigInt(0) || exceptionList === BigInt(4294967295)) {
-        return false;
-      }
-      return true;
-    } catch (_error) {
-      return false;
-    }
-  }
   function createSehCommand() {
     return {
       name: "seh",
@@ -1109,17 +1005,14 @@ var osed_bundle = (() => {
             errors: ["Current pointer size is not x86."]
           };
         }
-        const teb = resolveTebAddress();
-        if (teb === BigInt(0)) {
+        const teb = resolveTeb32Address(host.currentThread);
+        if (teb === void 0) {
           throw new Error("Current thread TEB is unavailable.");
         }
         const rows = [];
         const findings = [];
-        let node = readPointer(teb, 4);
-        let guard = 0;
-        while (node !== BigInt(4294967295) && guard < 64) {
-          const next = readPointer(node, 4);
-          const handler = readPointer(node + BigInt(4), 4);
+        const records = readSehRecords(teb);
+        for (const { node, next, handler } of records) {
           const module = findModuleByAddress(handler);
           const safeSehRisk = module && module.safeseh !== "enabled" ? "risk" : "ok";
           const outsideModule = module === void 0;
@@ -1138,8 +1031,6 @@ var osed_bundle = (() => {
             outsideModule,
             safeSeh: (_a = module == null ? void 0 : module.safeseh) != null ? _a : "unknown"
           });
-          node = next;
-          guard += 1;
         }
         section("SEH Chain");
         table(
@@ -1158,7 +1049,7 @@ var osed_bundle = (() => {
           args: options,
           success: true,
           findings,
-          warnings: guard >= 64 ? ["SEH walk stopped at guard limit (64 entries)."] : [],
+          warnings: records.length >= 64 ? ["SEH walk stopped at guard limit (64 entries)."] : [],
           errors: []
         };
       }
@@ -4516,11 +4407,11 @@ var osed_bundle = (() => {
   function findPattern(bytes) {
     if (bytes.length < 8) return void 0;
     const text = String.fromCharCode(...bytes);
-    const candidates = [
+    const candidates2 = [
       { kind: "msf", value: generateMsfPattern(20280) },
       { kind: "cyclic", value: generateCyclicPattern(2e4) }
     ];
-    for (const candidate of candidates) {
+    for (const candidate of candidates2) {
       const length = Math.min(text.length, 32);
       for (let window = length; window >= 8; window -= 1) {
         for (let offset = 0; offset <= text.length - window; offset += 1) {
@@ -4750,11 +4641,11 @@ var osed_bundle = (() => {
       return void 0;
     }
     const low = Number(raw & BigInt(4294967295));
-    const candidates = [
+    const candidates2 = [
       { kind: "msf", haystack: generateMsfPattern(Math.min(maxLen, 20280)) },
       { kind: "cyclic", haystack: generateCyclicPattern(Math.max(maxLen, 2e4)) }
     ];
-    for (const candidate of candidates) {
+    for (const candidate of candidates2) {
       const needle = decodeOffsetNeedle(low);
       const offset = candidate.haystack.indexOf(needle);
       if (offset >= 0) {
@@ -4837,19 +4728,19 @@ var osed_bundle = (() => {
     };
   }
   function readSehPreview(pointerSize) {
-    var _a;
     if (pointerSize !== 4) {
       return { overwritten: "unknown", warning: "SEH overwrite analysis is x86-only." };
     }
-    const thread = host.currentThread;
-    const tebCandidate = toBigInt3((_a = safeGet2(thread, "Teb")) != null ? _a : safeGet2(thread, "TebAddress"));
+    const tebCandidate = resolveTeb32Address(host.currentThread);
     if (!tebCandidate) {
       return { overwritten: "unknown", warning: "TEB unavailable for SEH walk." };
     }
     try {
-      const first = readPointer(tebCandidate, 4);
-      const next = readPointer(first, 4);
-      const handler = readPointer(first + BigInt(4), 4);
+      const first = readSehRecords(tebCandidate, 1)[0];
+      if (!first) {
+        return { overwritten: "no", warning: "SEH chain is empty." };
+      }
+      const { next, handler } = first;
       const mod = findModuleByAddress(handler);
       const overwritten = mod ? "no" : "yes";
       return { overwritten, next, handler };
@@ -4930,6 +4821,7 @@ var osed_bundle = (() => {
           print(`Overwritten: ${seh.overwritten}`);
           print(`Next SEH: ${seh.next !== void 0 ? formatAddress(seh.next, 4) : "n/a"}`);
           print(`Handler: ${seh.handler !== void 0 ? formatAddress(seh.handler, 4) : "n/a"}`);
+          if (seh.warning) print(`Status: ${seh.warning}`);
         }
         section("STACK");
         print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
@@ -5112,8 +5004,8 @@ var osed_bundle = (() => {
     return shellcode.map((b) => (b ^ key2) & 255);
   }
   function findXorKey(shellcode, exclude, hint) {
-    const candidates = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
-    for (const key2 of candidates) {
+    const candidates2 = hint !== void 0 ? [hint & 255] : Array.from({ length: 255 }, (_, i) => i + 1);
+    for (const key2 of candidates2) {
       if (key2 === 0 || exclude.has(key2)) continue;
       if (xorEncode(shellcode, key2).every((b) => !exclude.has(b))) return key2;
     }
@@ -6964,11 +6856,11 @@ var osed_bundle = (() => {
         return { kind: "not_found", name };
       }
       const bestScore = Math.min(...scored.map((entry) => entry.score));
-      const candidates = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
-      if (candidates.length === 1) {
-        return { kind: "ok", module: candidates[0] };
+      const candidates2 = scored.filter((entry) => entry.score === bestScore).map((entry) => entry.module).sort((a, b) => a.base < b.base ? -1 : 1);
+      if (candidates2.length === 1) {
+        return { kind: "ok", module: candidates2[0] };
       }
-      return { kind: "ambiguous", candidates };
+      return { kind: "ambiguous", candidates: candidates2 };
     }
     findMainModule() {
       var _a, _b, _c, _d, _e, _f;
@@ -7058,8 +6950,8 @@ var osed_bundle = (() => {
     isExecutableProtect(protect) {
       return (protect & 255) === 16 || (protect & 255) === 32 || (protect & 255) === 64 || (protect & 255) === 128;
     }
-    moduleCandidatesRows(candidates) {
-      return candidates.map((module) => ({
+    moduleCandidatesRows(candidates2) {
+      return candidates2.map((module) => ({
         Base: toDmlAddress(module.base, "db"),
         End: toDmlAddress(module.end, "db"),
         Name: module.name,
@@ -7496,8 +7388,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "0.1.0",
-      buildTime: "2026-07-22T03:21:09.564Z",
-      gitCommit: "863a5b75fc18",
+      buildTime: "2026-07-23T00:54:58.630Z",
+      gitCommit: "61a0257ce68a",
       gitDirty: true
     };
   }

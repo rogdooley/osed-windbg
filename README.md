@@ -4,6 +4,9 @@ A WinDbg Preview JavaScript extension for Windows exploit development. Automates
 
 All commands run from the WinDbg `dx` evaluator. No Python, no external tools, no context switching.
 
+See [CHANGELOG.md](CHANGELOG.md) for the reconstructed functional timeline,
+including development before this project moved out of `OSED-Toolkit`.
+
 ---
 
 ![triage example](Images/triage.gif)
