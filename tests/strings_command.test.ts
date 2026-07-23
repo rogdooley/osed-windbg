@@ -78,6 +78,11 @@ function command(name: string) {
   return found;
 }
 
+function writePointer32(bytes: Uint8Array, offset: number, value: bigint): void {
+  const raw = Number(value & BigInt(0xffffffff));
+  writeUint32LE(bytes, offset, raw);
+}
+
 function installDiagnosticsHost(): void {
   (globalThis as unknown as { host: unknown }).host = {
     diagnostics: { debugLog: () => undefined },
@@ -158,6 +163,62 @@ describe("string commands", () => {
     expect(result.findings).toEqual([
       { address: dataStart + BigInt(0x80), encoding: "ascii", text: "cmd.exe" },
       { address: dataStart + BigInt(0x100), encoding: "utf16le", text: "cmd.exe" },
+    ]);
+  });
+
+  test("str_refs finds executable pointer references to string literals", () => {
+    const { image, base, textStart, dataStart } = makeImageWithSections();
+    const stringAddress = dataStart + BigInt(0x80);
+    const refAddress = textStart + BigInt(0x24);
+    image.set(Array.from("VirtualProtect").map((char) => char.charCodeAt(0)), Number(stringAddress - base));
+    writePointer32(image, Number(refAddress - base), stringAddress);
+    installHost(image, base);
+
+    const result = command("str_refs").execute({
+      target: "VirtualProtect",
+      module: "target",
+      encoding: "ascii",
+      maxResults: 10,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        refAddress,
+        stringAddress,
+        moduleOffset: "target.exe+0x1024",
+        encoding: "ascii",
+        text: "VirtualProtect",
+        pointerBytes: [0x80, 0x30, 0x40, 0x00],
+      }),
+    ]);
+    expect(result.findings[0]).toMatchObject({ contextBytes: expect.stringContaining("80 30 40 00") });
+    expect(result.stats).toEqual({ strings: 1, results: 1 });
+  });
+
+  test("str_refs accepts explicit addresses", () => {
+    const { image, base, textStart, dataStart } = makeImageWithSections();
+    const stringAddress = dataStart + BigInt(0x100);
+    const refAddress = textStart + BigInt(0x40);
+    writePointer32(image, Number(refAddress - base), stringAddress);
+    installHost(image, base);
+
+    const result = command("str_refs").execute({
+      target: `0x${stringAddress.toString(16)}`,
+      module: "target",
+      encoding: "ascii",
+      maxResults: 10,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        refAddress,
+        stringAddress,
+        moduleOffset: "target.exe+0x1040",
+        encoding: undefined,
+        text: undefined,
+      }),
     ]);
   });
 

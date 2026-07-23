@@ -49,6 +49,12 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().str.find(\"VirtualProtect\")", "dx @$osed().str.find(\"cmd.exe\", \"target\", \"ascii\", 25)"],
   },
   {
+    name: "str.refs",
+    description: "Finds executable absolute-pointer references to a string address or literal.",
+    usage: "dx @$osed().str.refs(target, module?, encoding?, maxResults?)",
+    examples: ["dx @$osed().str.refs(\"VirtualProtect\")", "dx @$osed().str.refs(0x00403080, \"target\", \"ascii\", 25)"],
+  },
+  {
     name: "str.bytes",
     description: "Encodes text as payload bytes and reports bad-character hits.",
     usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",

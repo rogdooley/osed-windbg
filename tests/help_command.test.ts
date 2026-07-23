@@ -23,6 +23,7 @@ describe("help command", () => {
       usage: "dx @$osed().str.read(address, max?, encoding?)",
     });
     expect(findHelpEntry("str.find")?.examples).toContain("dx @$osed().str.find(\"VirtualProtect\")");
+    expect(findHelpEntry("str.refs")?.usage).toBe("dx @$osed().str.refs(target, module?, encoding?, maxResults?)");
     expect(findHelpEntry("str.bytes")?.description).toContain("payload bytes");
   });
 

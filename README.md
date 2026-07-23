@@ -139,6 +139,7 @@ Read strings, search module sections, and convert text into payload bytes:
 ```
 dx @$osed().str.read(0x0019F920)
 dx @$osed().str.find("VirtualProtect", "target", "both", 25)
+dx @$osed().str.refs("VirtualProtect", "target", "both", 25)
 dx @$osed().str.bytes("cmd.exe", "ascii", true, "00 0A 0D")
 ```
 

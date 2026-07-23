@@ -170,9 +170,11 @@ The `str` namespace provides small string helpers for exploit workflow evidence 
 | --- | --- | --- | --- |
 | `str.read` | `dx @$osed().str.read(address, max?, encoding?)` | `dx @$osed().str.read(0x0019F920)` | Reads a null-terminated ASCII or UTF-16LE string from memory. |
 | `str.find` | `dx @$osed().str.find(text, module?, encoding?, maxResults?)` | `dx @$osed().str.find("VirtualProtect", "target", "both", 25)` | Searches loaded module sections for ASCII and/or UTF-16LE bytes. |
+| `str.refs` | `dx @$osed().str.refs(target, module?, encoding?, maxResults?)` | `dx @$osed().str.refs("VirtualProtect", "target", "both", 25)` | Finds executable absolute-pointer references to a string address or literal. |
 | `str.bytes` | `dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)` | `dx @$osed().str.bytes("cmd.exe", "ascii", true, "00 0A 0D")` | Converts text to payload bytes/Python bytes and reports excluded-byte hits. |
 
 `encoding` accepts `ascii` or `utf16le`; `str.find` also accepts `both`.
+`str.refs` scans absolute pointer bytes in executable sections and includes nearby bytes for context; it does not perform disassembly or x64 RIP-relative xref recovery.
 
 ## Semantic ROP Namespace
 

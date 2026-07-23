@@ -744,6 +744,13 @@ function bindApi(): OsedApi {
       invoke("str_find", args);
       return lastResult?.findings;
     },
+    refs: (...args: unknown[]) => {
+      const target = typeof args[0] === "string" && /^(0x)?[0-9a-f`]+$/i.test(args[0].trim())
+        ? commandAddress(args[0])
+        : args[0];
+      invoke("str_refs", args.length === 0 ? args : [target, ...args.slice(1)]);
+      return lastResult?.findings;
+    },
     bytes: (...args: unknown[]) => {
       invoke("str_bytes", args);
       return lastResult?.findings[0];
@@ -880,6 +887,8 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
       return { address: args[0], max: args[1], encoding: args[2] };
     case "str_find":
       return { text: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
+    case "str_refs":
+      return { target: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
     case "str_bytes":
       return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
     case "rop":

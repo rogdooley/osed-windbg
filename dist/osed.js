@@ -5152,6 +5152,12 @@ var osed_bundle = (() => {
       examples: ['dx @$osed().str.find("VirtualProtect")', 'dx @$osed().str.find("cmd.exe", "target", "ascii", 25)']
     },
     {
+      name: "str.refs",
+      description: "Finds executable absolute-pointer references to a string address or literal.",
+      usage: "dx @$osed().str.refs(target, module?, encoding?, maxResults?)",
+      examples: ['dx @$osed().str.refs("VirtualProtect")', 'dx @$osed().str.refs(0x00403080, "target", "ascii", 25)']
+    },
+    {
       name: "str.bytes",
       description: "Encodes text as payload bytes and reports bad-character hits.",
       usage: "dx @$osed().str.bytes(text, encoding?, terminator?, exclude?)",
@@ -5647,7 +5653,7 @@ var osed_bundle = (() => {
             }
             const moduleInfo = findModuleByAddress(hit);
             const moduleName = (_d = moduleInfo == null ? void 0 : moduleInfo.name) != null ? _d : "<outside module>";
-            const moduleOffset = moduleInfo ? `0x${(hit - moduleInfo.base).toString(16).toUpperCase()}` : "n/a";
+            const moduleOffset2 = moduleInfo ? `0x${(hit - moduleInfo.base).toString(16).toUpperCase()}` : "n/a";
             const aslr = (_e = moduleInfo == null ? void 0 : moduleInfo.aslr) != null ? _e : "unknown";
             const safeseh = (_f = moduleInfo == null ? void 0 : moduleInfo.safeseh) != null ? _f : "unknown";
             const badcharSafe = isBadcharSafe(hit, pointerSize, normalizedExclude.values);
@@ -5655,7 +5661,7 @@ var osed_bundle = (() => {
             findings.push({
               address: hit,
               module: moduleName,
-              module_offset: moduleOffset,
+              module_offset: moduleOffset2,
               instructions: (_g = validated.mnemonic) != null ? _g : "pop ? ; pop ? ; ret",
               badchar_safe: badcharSafe,
               aslr,
@@ -8756,9 +8762,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-23T14:27:57.928Z",
-      gitCommit: "5b31e961557b",
-      gitDirty: false
+      buildTime: "2026-07-23T14:37:45.595Z",
+      gitCommit: "b9e53e591487",
+      gitDirty: true
     };
   }
 
@@ -8833,6 +8839,13 @@ var osed_bundle = (() => {
   function bytesToHex2(bytes) {
     return bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
   }
+  function littleEndianPointer(address, pointerSize) {
+    const bytes = [];
+    for (let i = 0; i < pointerSize; i += 1) {
+      bytes.push(Number(address >> BigInt(i * 8) & BigInt(255)));
+    }
+    return bytes;
+  }
   function encodeText(text, encoding, terminator = false) {
     const bytes = [];
     if (encoding === "ascii") {
@@ -8877,6 +8890,66 @@ var osed_bundle = (() => {
   }
   function addressRow(address, pointerSize) {
     return formatAddress(address, pointerSize);
+  }
+  function moduleOffset(address) {
+    const moduleInfo = findModuleByAddress(address);
+    if (!moduleInfo) {
+      return "n/a";
+    }
+    return `${moduleInfo.name}+0x${(address - moduleInfo.base).toString(16).toUpperCase()}`;
+  }
+  function readContext(address, pointerSize) {
+    const before = BigInt(4);
+    const start = address >= before ? address - before : BigInt(0);
+    const bytes = tryReadMemory(start, pointerSize + 8);
+    return bytes ? bytesToHex2(Array.from(bytes)) : "unreadable";
+  }
+  function findStringOccurrences(text, module, encoding, maxResults) {
+    const encodings = encoding === "both" ? ["ascii", "utf16le"] : [encoding];
+    const findings = [];
+    const warnings = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const selected of encodings) {
+      const pattern = Uint8Array.from(encodeText(text, selected, false));
+      if (pattern.length === 0) {
+        throw new Error("text must not be empty.");
+      }
+      const scan = scanPattern(
+        {
+          module,
+          executableOnly: false,
+          maxResults: Math.max(0, maxResults - findings.length),
+          chunkSize: 16384
+        },
+        pattern
+      );
+      for (const address of scan.hits) {
+        const key2 = `${address.toString()}:${selected}`;
+        if (seen.has(key2)) {
+          continue;
+        }
+        seen.add(key2);
+        findings.push({ address, encoding: selected, text });
+      }
+      warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+      if (findings.length >= maxResults) {
+        break;
+      }
+    }
+    return { findings: findings.slice(0, maxResults), warnings };
+  }
+  function parseAddressCandidate(value) {
+    if (typeof value === "number") {
+      return normalizeAddress(value);
+    }
+    if (typeof value !== "string") {
+      return void 0;
+    }
+    const text = value.trim();
+    if (/^(0x)?[0-9a-f`]+$/i.test(text)) {
+      return normalizeAddress(text.replace(/`/g, ""));
+    }
+    return void 0;
   }
   function createStringCommands() {
     const readString = {
@@ -8945,29 +9018,7 @@ var osed_bundle = (() => {
         const encoding = normalizeFindEncoding(options.encoding);
         const maxResults = options.maxResults;
         const pointerSize = getPointerSize();
-        const encodings = encoding === "both" ? ["ascii", "utf16le"] : [encoding];
-        const findings = [];
-        const warnings = [];
-        for (const selected of encodings) {
-          const pattern = Uint8Array.from(encodeText(text, selected, false));
-          if (pattern.length === 0) {
-            throw new Error("text must not be empty.");
-          }
-          const scan = scanPattern(
-            {
-              module,
-              executableOnly: false,
-              maxResults: Math.max(0, maxResults - findings.length),
-              chunkSize: 16384
-            },
-            pattern
-          );
-          findings.push(...scan.hits.map((address) => ({ address, encoding: selected, text })));
-          warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
-          if (findings.length >= maxResults) {
-            break;
-          }
-        }
+        const { findings, warnings } = findStringOccurrences(text, module, encoding, maxResults);
         const rows = findings.slice(0, maxResults).map((finding) => ({
           address: addressRow(finding.address, pointerSize),
           encoding: finding.encoding,
@@ -8992,6 +9043,111 @@ var osed_bundle = (() => {
           warnings,
           errors: [],
           stats: { results: Math.min(findings.length, maxResults) }
+        };
+      }
+    };
+    const refsString = {
+      name: "str_refs",
+      description: "Find executable absolute-pointer references to a string address or literal.",
+      usage: "dx @$osed().str.refs(target, module?, encoding?, maxResults?)",
+      examples: [
+        'dx @$osed().str.refs("VirtualProtect")',
+        'dx @$osed().str.refs(0x00403080, "target", "ascii", 25)'
+      ],
+      schema: {
+        target: { type: ["number", "string"], required: true },
+        module: { type: "string" },
+        encoding: { type: "string", default: "both" },
+        maxResults: { type: "number", min: 1, max: 200, default: DEFAULT_MAX_RESULTS }
+      },
+      execute(options) {
+        const target = options.target;
+        const module = options.module;
+        const encoding = normalizeFindEncoding(options.encoding);
+        const maxResults = options.maxResults;
+        const pointerSize = getPointerSize();
+        const warnings = [];
+        const strings = [];
+        const explicitAddress = parseAddressCandidate(target);
+        if (pointerSize === 8) {
+          warnings.push("str.refs scans absolute 64-bit pointer bytes on x64; RIP-relative references are not covered.");
+        }
+        if (explicitAddress !== void 0) {
+          strings.push({ address: explicitAddress });
+        } else if (typeof target === "string") {
+          const found = findStringOccurrences(target, module, encoding, maxResults);
+          strings.push(...found.findings);
+          warnings.push(...found.warnings);
+        } else {
+          throw new Error("target must be an address or string literal.");
+        }
+        const findings = [];
+        const seenRefs = /* @__PURE__ */ new Set();
+        for (const stringHit of strings) {
+          if (findings.length >= maxResults) {
+            break;
+          }
+          const pointerBytes = littleEndianPointer(stringHit.address, pointerSize);
+          const scan = scanPattern(
+            {
+              module,
+              executableOnly: true,
+              maxResults: Math.max(0, maxResults - findings.length),
+              chunkSize: 16384
+            },
+            Uint8Array.from(pointerBytes)
+          );
+          warnings.push(...scan.warnings.map((warning) => `${warning.region}: ${warning.message}`));
+          for (const refAddress of scan.hits) {
+            const key2 = `${refAddress.toString()}:${stringHit.address.toString()}`;
+            if (seenRefs.has(key2)) {
+              continue;
+            }
+            seenRefs.add(key2);
+            findings.push({
+              refAddress,
+              stringAddress: stringHit.address,
+              moduleOffset: moduleOffset(refAddress),
+              encoding: stringHit.encoding,
+              text: stringHit.text,
+              pointerBytes,
+              contextBytes: readContext(refAddress, pointerSize)
+            });
+            if (findings.length >= maxResults) {
+              break;
+            }
+          }
+        }
+        const rows = findings.map((finding) => {
+          var _a;
+          return {
+            ref: addressRow(finding.refAddress, pointerSize),
+            string: addressRow(finding.stringAddress, pointerSize),
+            module: finding.moduleOffset,
+            encoding: (_a = finding.encoding) != null ? _a : "address",
+            context: finding.contextBytes
+          };
+        });
+        section("String References");
+        info(`Target: ${String(target)}`);
+        table(
+          [
+            { key: "ref", header: "Ref", width: 18 },
+            { key: "string", header: "String", width: 18 },
+            { key: "module", header: "Module+Offset", width: 22 },
+            { key: "encoding", header: "Encoding", width: 9 },
+            { key: "context", header: "Context" }
+          ],
+          rows
+        );
+        return {
+          command: "str_refs",
+          args: options,
+          success: true,
+          findings,
+          warnings,
+          errors: [],
+          stats: { strings: strings.length, results: findings.length }
         };
       }
     };
@@ -9038,7 +9194,7 @@ var osed_bundle = (() => {
         };
       }
     };
-    return [readString, findString, stringBytes];
+    return [readString, findString, refsString, stringBytes];
   }
 
   // src/index.ts
@@ -9671,6 +9827,11 @@ var osed_bundle = (() => {
         invoke("str_find", args);
         return lastResult == null ? void 0 : lastResult.findings;
       },
+      refs: (...args) => {
+        const target = typeof args[0] === "string" && /^(0x)?[0-9a-f`]+$/i.test(args[0].trim()) ? commandAddress(args[0]) : args[0];
+        invoke("str_refs", args.length === 0 ? args : [target, ...args.slice(1)]);
+        return lastResult == null ? void 0 : lastResult.findings;
+      },
       bytes: (...args) => {
         invoke("str_bytes", args);
         return lastResult == null ? void 0 : lastResult.findings[0];
@@ -9796,6 +9957,8 @@ var osed_bundle = (() => {
         return { address: args[0], max: args[1], encoding: args[2] };
       case "str_find":
         return { text: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
+      case "str_refs":
+        return { target: args[0], module: args[1], encoding: args[2], maxResults: args[3] };
       case "str_bytes":
         return { text: args[0], encoding: args[1], terminator: args[2], exclude: parseHexByteList(args[3]) };
       case "rop":
