@@ -26,6 +26,7 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `modules` | `dx @$osed().modules(filter?)` | `dx @$osed().modules("essfunc")` | Lists modules and mitigation state. |
 | `rop_find` | `dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop_find("essfunc")` | Flat alias for legacy ROP exploration and module triage. |
 | `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("essfunc", "FF E4")` | Finds byte sequences in executable sections. |
+| `find_ptr` | `dx @$osed().find_ptr(instruction?, bytes?, module?, executableOnly?, badchars?, maxResults?)` | `dx @$osed().find_ptr({ instruction: 'jmp esp', badchars: [0, 10, 13] })` | Searches for an instruction (`jmp/call/pushret <reg>`) or byte pattern and filters surviving pointers whose address contains no bad characters. Composable filter stack; the live-memory feed for the ROP layer. |
 | `rop_suggest` | `dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)` | `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")` | Suggests validated gadget patterns. |
 | `retn` | `dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().retn("essfunc")` | Finds `retn N` gadgets for stdcall chain adjustment. |
 | `add_esp` | `dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().add_esp("essfunc")` | Finds `add esp, N ; ret` gadgets. |

@@ -38,6 +38,7 @@ import { createSehPprCommand } from "./commands/seh_ppr";
 import { createExploitCommand } from "./commands/exploit";
 import { createTriageCommand } from "./commands/triage";
 import { createFindMspCommand } from "./commands/findmsp";
+import { createFindPtrCommand } from "./commands/find_ptr";
 import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
@@ -98,6 +99,7 @@ function registerAll(): void {
     createSehPprCommand(),
     createTriageCommand(),
     createFindMspCommand(),
+    createFindPtrCommand(),
     createMemoryCommand(),
     createLandingCommand(),
     createMathCommand(),

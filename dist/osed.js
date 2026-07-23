@@ -5340,6 +5340,198 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/logic/pointer_filter_logic.ts
+  var REGISTER_CODE = {
+    eax: 0,
+    ecx: 1,
+    edx: 2,
+    ebx: 3,
+    esp: 4,
+    ebp: 5,
+    esi: 6,
+    edi: 7,
+    rax: 0,
+    rcx: 1,
+    rdx: 2,
+    rbx: 3,
+    rsp: 4,
+    rbp: 5,
+    rsi: 6,
+    rdi: 7
+  };
+  function encodeJumpToRegister(kind, register) {
+    const code = REGISTER_CODE[register.trim().toLowerCase()];
+    if (code === void 0) {
+      return void 0;
+    }
+    switch (kind) {
+      case "jmp":
+        return [255, 224 + code];
+      case "call":
+        return [255, 208 + code];
+      case "pushret":
+        return [80 + code, 195];
+      default:
+        return void 0;
+    }
+  }
+  function encodeInstructionSearch(text) {
+    const parts = text.trim().toLowerCase().split(/\s+/);
+    if (parts.length !== 2) {
+      return void 0;
+    }
+    const [mnemonic, register] = parts;
+    if (mnemonic === "jmp" || mnemonic === "call") {
+      return encodeJumpToRegister(mnemonic, register);
+    }
+    if (mnemonic === "pushret" || mnemonic === "push+ret") {
+      return encodeJumpToRegister("pushret", register);
+    }
+    return void 0;
+  }
+  function addressToBytes(address, pointerSize) {
+    const bytes = [];
+    let value = address;
+    for (let index = 0; index < pointerSize; index += 1) {
+      bytes.push(Number(value & BigInt(255)));
+      value >>= BigInt(8);
+    }
+    return bytes;
+  }
+  function addressHasBadchar(address, pointerSize, badchars) {
+    if (badchars.length === 0) {
+      return false;
+    }
+    const bad = new Set(badchars.map((value) => value & 255));
+    return addressToBytes(address, pointerSize).some((byte) => bad.has(byte));
+  }
+  function badcharAddressFilter(badchars, pointerSize) {
+    return {
+      name: "badchar-free-address",
+      predicate: (candidate) => !addressHasBadchar(candidate.address, pointerSize, badchars)
+    };
+  }
+  function applyFilters(addresses, filters) {
+    const kept = [];
+    const rejected = [];
+    for (const address of addresses) {
+      const failing = filters.find((filter) => !filter.predicate({ address }));
+      if (failing) {
+        rejected.push({ address, failed: failing.name });
+      } else {
+        kept.push(address);
+      }
+    }
+    return { kept, rejected };
+  }
+
+  // src/commands/find_ptr.ts
+  function annotate(address, pointerSize) {
+    const module = findModuleByAddress(address);
+    if (!module) {
+      return formatAddress(address, pointerSize);
+    }
+    return `${module.name}+0x${(address - module.base).toString(16).toUpperCase()}`;
+  }
+  function resolvePattern(options) {
+    var _a;
+    if (typeof options.instruction === "string" && options.instruction.trim().length > 0) {
+      const encoded = encodeInstructionSearch(options.instruction);
+      if (!encoded) {
+        throw new Error(`Unrecognized instruction search '${options.instruction}'. Use e.g. 'jmp esp', 'call eax', 'pushret esp'.`);
+      }
+      return encoded;
+    }
+    const bytes = (_a = options.bytes) != null ? _a : [];
+    if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+      throw new Error("Provide an 'instruction' (e.g. 'jmp esp') or a non-empty 'bytes' array of 0x00..0xFF integers.");
+    }
+    return bytes;
+  }
+  function createFindPtrCommand() {
+    return {
+      name: "find_ptr",
+      description: "Search executable memory for an instruction or byte pattern and filter surviving pointers by bad characters.",
+      usage: "dx @$osed().find_ptr({ instruction: 'jmp esp', badchars: [0, 10, 13] })",
+      examples: [
+        "dx @$osed().find_ptr({ instruction: 'jmp esp' })",
+        "dx @$osed().find_ptr({ instruction: 'call eax', module: 'essfunc', badchars: [0, 10, 13] })",
+        "dx @$osed().find_ptr({ bytes: [0x58, 0x5b, 0xc3], badchars: [0] })"
+      ],
+      schema: {
+        instruction: { type: "string" },
+        bytes: { type: "array", elementType: "number", default: [] },
+        module: { type: "string" },
+        executableOnly: { type: "boolean", default: true },
+        badchars: { type: "array", elementType: "number", default: [] },
+        maxResults: { type: "number", min: 1, max: 200, default: 20 }
+      },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        const pattern = resolvePattern(options);
+        const normalizedExclude = normalizeByteArray((_a = options.badchars) != null ? _a : []);
+        const maxResults = options.maxResults;
+        const executableOnly = options.executableOnly !== false;
+        const scanCap = Math.min(Math.max(maxResults * 5, maxResults), 200);
+        const scan = scanPattern(
+          {
+            module: options.module,
+            executableOnly,
+            maxResults: scanCap,
+            chunkSize: 16384
+          },
+          Uint8Array.from(pattern)
+        );
+        const filters = [badcharAddressFilter(normalizedExclude.values, pointerSize)];
+        const outcome = applyFilters(scan.hits, filters);
+        const kept = outcome.kept.slice(0, maxResults);
+        section("Pointer Search");
+        info(`Pattern: ${pattern.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ")}`);
+        info(`Hits: ${scan.hits.length} scanned, ${outcome.rejected.length} rejected by bad chars, ${outcome.kept.length} surviving.`);
+        if (kept.length === 0) {
+          warn("No pointers survived the filter stack.");
+        } else {
+          table(
+            [
+              { key: "address", header: "Address", width: 18 },
+              { key: "location", header: "Location", width: 24 },
+              { key: "python", header: "Python", width: 14 }
+            ],
+            kept.map((hit) => ({
+              address: formatAddress(hit, pointerSize),
+              location: annotate(hit, pointerSize),
+              python: `0x${hit.toString(16).toUpperCase()}`
+            }))
+          );
+        }
+        whyItMatters("Filtering pointers by bad characters up front prevents choosing an address the target will corrupt.");
+        const warnings = scan.warnings.map((warning) => `${warning.region}: ${warning.message}`);
+        if (normalizedExclude.warning) {
+          warnings.push(normalizedExclude.warning);
+        }
+        return {
+          command: "find_ptr",
+          args: __spreadProps(__spreadValues({}, options), { badchars: normalizedExclude.values }),
+          success: true,
+          findings: [
+            {
+              pattern,
+              badchars: normalizedExclude.values,
+              filters: filters.map((filter) => filter.name),
+              scanned: scan.hits.length,
+              rejected: outcome.rejected.length,
+              surviving: kept
+            }
+          ],
+          warnings,
+          errors: [],
+          stats: scan.stats
+        };
+      }
+    };
+  }
+
   // src/commands/encode.ts
   var MAX_SHELLCODE_LEN = 65535;
   function buildXorStub(key2, payloadLen) {
@@ -7806,8 +7998,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.1",
-      buildTime: "2026-07-23T02:23:59.072Z",
-      gitCommit: "8f212a7dad41",
+      buildTime: "2026-07-23T02:33:08.537Z",
+      gitCommit: "dee783bdaa06",
       gitDirty: true
     };
   }
@@ -7883,6 +8075,7 @@ var osed_bundle = (() => {
       createSehPprCommand(),
       createTriageCommand(),
       createFindMspCommand(),
+      createFindPtrCommand(),
       createMemoryCommand(),
       createLandingCommand(),
       createMathCommand(),
