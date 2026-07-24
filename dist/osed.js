@@ -2344,6 +2344,20 @@ var osed_bundle = (() => {
   }
 
   // src/commands/seh.ts
+  function shortModuleName(name) {
+    var _a;
+    return (_a = name.replace(/\//g, "\\").split("\\").pop()) != null ? _a : name;
+  }
+  function formatEspDelta(node, esp) {
+    if (esp === void 0) return "unknown";
+    const delta = node - esp;
+    const sign = delta < BigInt(0) ? "-" : "+";
+    const magnitude = delta < BigInt(0) ? -delta : delta;
+    return `${sign}0x${magnitude.toString(16).toUpperCase()}`;
+  }
+  function triStateFlag(value) {
+    return value === null ? "unknown" : value ? "yes" : "no";
+  }
   function createSehCommand() {
     return {
       name: "seh",
@@ -2352,7 +2366,7 @@ var osed_bundle = (() => {
       examples: ["dx @$osed().seh.visualize()"],
       schema: {},
       execute(options) {
-        var _a;
+        var _a, _b;
         const pointerSize = getPointerSize();
         if (pointerSize !== 4) {
           return {
@@ -2372,34 +2386,64 @@ var osed_bundle = (() => {
         const findings = [];
         const walk = walkSehRecords(teb);
         const records = walk.records;
-        for (const { node, next, handler } of records) {
+        const esp = readRegisters(4).sp;
+        for (const [depth, { node, next, handler }] of records.entries()) {
           const module = findModuleByAddress(handler);
-          const safeSehRisk = module && module.safeseh !== "enabled" ? "risk" : "ok";
-          const outsideModule = module === void 0;
+          const executable = memoryRegion(handler).executable;
+          const brokenNext = depth === records.length - 1 && walk.warning !== void 0;
+          const end = next === BigInt(4294967295);
+          const status = [];
+          if (!module || executable === false) status.push("CORRUPT?");
+          if (brokenNext) status.push("BROKEN NEXT");
+          if ((module == null ? void 0 : module.safeseh) === "enabled") status.push("SafeSEH");
+          if ((module == null ? void 0 : module.aslr) === "enabled") status.push("ASLR");
+          if (module && executable === true && module.safeseh === "disabled" && module.aslr === "disabled") {
+            status.push("CANDIDATE");
+          }
+          if (status.length === 0) status.push("review");
+          const moduleName = module ? shortModuleName(module.name) : "<unmapped>";
+          const target = module ? `${moduleName}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<unmapped>";
           rows.push({
+            depth: `${depth}`,
             node: formatAddress(node, 4),
+            next: end ? "END" : formatAddress(next, 4),
             handler: formatAddress(handler, 4),
-            target: module ? `${module.name}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<outside module>",
+            target,
             safeseh: module ? module.safeseh : "unknown",
-            status: outsideModule || safeSehRisk === "risk" ? "flag" : "ok"
+            aslr: module ? module.aslr : "unknown",
+            executable: triStateFlag(executable),
+            espDelta: formatEspDelta(node, esp),
+            status: status.join(", ")
           });
           findings.push({
+            depth,
             node,
             next,
             handler,
-            module: module == null ? void 0 : module.name,
-            outsideModule,
-            safeSeh: (_a = module == null ? void 0 : module.safeseh) != null ? _a : "unknown"
+            module: moduleName,
+            moduleOffset: module ? handler - module.base : void 0,
+            espDelta: esp === void 0 ? void 0 : node - esp,
+            executable,
+            aslr: (_a = module == null ? void 0 : module.aslr) != null ? _a : "unknown",
+            safeSeh: (_b = module == null ? void 0 : module.safeseh) != null ? _b : "unknown",
+            end,
+            brokenNext,
+            status
           });
         }
         section("SEH Chain");
         table(
           [
+            { key: "depth", header: "#", width: 2 },
             { key: "node", header: "Node", width: 10 },
+            { key: "next", header: "Next", width: 10 },
             { key: "handler", header: "Handler", width: 10 },
             { key: "target", header: "Module+Offset", width: 24 },
             { key: "safeseh", header: "SafeSEH", width: 8 },
-            { key: "status", header: "Status", width: 6 }
+            { key: "aslr", header: "ASLR", width: 8 },
+            { key: "executable", header: "Exec", width: 7 },
+            { key: "espDelta", header: "ESP Delta", width: 10 },
+            { key: "status", header: "Status", width: 10 }
           ],
           rows
         );
@@ -2409,7 +2453,7 @@ var osed_bundle = (() => {
         if (walk.stoppedAtGuard) {
           warn("SEH walk stopped at guard limit (64 entries).");
         }
-        whyItMatters("SEH handler control is a classic exploit path when stack overwrite is constrained.");
+        whyItMatters("The chain identifies overwritten frames, ESP-relative offsets, and handlers protected by SafeSEH or ASLR.");
         return {
           command: "seh",
           args: options,
@@ -8826,8 +8870,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-24T03:18:34.868Z",
-      gitCommit: "62e2ac71e0b5",
+      buildTime: "2026-07-24T03:30:16.034Z",
+      gitCommit: "621c98663f1a",
       gitDirty: true
     };
   }
