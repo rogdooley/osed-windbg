@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { readSehRecords, resolveTeb32Address } from "../src/analysis/seh";
+import { readSehRecords, resolveTeb32Address, walkSehRecords } from "../src/analysis/seh";
 
 describe("x86 SEH analysis", () => {
   test("resolves the TEB from the WinDbg environment block shape", () => {
@@ -44,5 +44,29 @@ describe("x86 SEH analysis", () => {
         handler: BigInt("0x43434343"),
       },
     ]);
+  });
+
+  test("preserves readable records and reports a corrupted next link", () => {
+    const memory = new Map<string, bigint>([
+      ["0x7ffde000", BigInt("0x9fec80")],
+      ["0x9fec80", BigInt("0x909008eb")],
+      ["0x9fec84", BigInt("0x625011b4")],
+    ]);
+    const reader = (address: bigint): bigint => {
+      const value = memory.get(`0x${address.toString(16)}`);
+      if (value === undefined) throw new Error("unmapped");
+      return value;
+    };
+
+    const result = walkSehRecords(BigInt("0x7ffde000"), 64, reader);
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({
+      node: BigInt("0x9fec80"),
+      next: BigInt("0x909008eb"),
+      handler: BigInt("0x625011b4"),
+    });
+    expect(result.warning).toContain("unreadable record 0x909008EB");
+    expect(result.stoppedAtGuard).toBe(false);
   });
 });

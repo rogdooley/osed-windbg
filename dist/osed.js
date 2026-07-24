@@ -41,77 +41,6 @@ var osed_bundle = (() => {
     initializeScript: () => initializeScript
   });
 
-  // src/core/output.ts
-  function write(line = "") {
-    host.diagnostics.debugLog(`${line}
-`);
-  }
-  function pad(value, width) {
-    return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
-  }
-  function stripDml(value) {
-    return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
-  }
-  function visibleLength(value) {
-    return stripDml(value).length;
-  }
-  function print(message) {
-    write(message);
-  }
-  function section(title) {
-    write();
-    write(`=== ${title} ===`);
-  }
-  function info(message) {
-    write(`[+] ${message}`);
-  }
-  function warn(message) {
-    write(`[!] ${message}`);
-  }
-  function error(message) {
-    write(`[-] ${message}`);
-  }
-  function whyItMatters(line) {
-    write(`Why this matters for exploitation: ${line}`);
-  }
-  function formatAddress(address, pointerSize) {
-    const width = pointerSize === 8 ? 16 : 8;
-    return `0x${address.toString(16).toUpperCase().padStart(width, "0")}`;
-  }
-  function formatHexByte(byte) {
-    return `0x${(byte & 255).toString(16).toUpperCase().padStart(2, "0")}`;
-  }
-  function table(columns, rows) {
-    const hasVisibleValues = rows.some(
-      (row) => columns.some((column) => {
-        const value = row[column.key];
-        return value !== void 0 && value !== "";
-      })
-    );
-    if (rows.length === 0 || !hasVisibleValues) {
-      write("(no rows)");
-      return;
-    }
-    const widths = columns.map((column) => {
-      var _a;
-      const maxValueWidth = rows.reduce((max, row) => {
-        var _a2;
-        const value = (_a2 = row[column.key]) != null ? _a2 : "";
-        return Math.max(max, visibleLength(value));
-      }, 0);
-      return Math.max((_a = column.width) != null ? _a : 0, column.header.length, maxValueWidth);
-    });
-    const render = (values) => values.map((value, i) => pad(stripDml(value), widths[i])).join("  ");
-    write(render(columns.map((column) => column.header)));
-    write(render(widths.map((width) => "-".repeat(width))));
-    for (const row of rows) {
-      write(render(columns.map((column) => {
-        var _a;
-        return (_a = row[column.key]) != null ? _a : "";
-      })));
-    }
-  }
-
   // src/core/validation.ts
   function kindOf(value) {
     if (Array.isArray(value)) {
@@ -296,7 +225,6 @@ var osed_bundle = (() => {
         return result3;
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : String(caught);
-        error(`Command failed: ${message}`);
         return this.failure(name, checked.value, message);
       }
     }
@@ -311,6 +239,77 @@ var osed_bundle = (() => {
       };
     }
   };
+
+  // src/core/output.ts
+  function write(line = "") {
+    host.diagnostics.debugLog(`${line}
+`);
+  }
+  function pad(value, width) {
+    return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
+  }
+  function stripDml(value) {
+    return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+  }
+  function visibleLength(value) {
+    return stripDml(value).length;
+  }
+  function print(message) {
+    write(message);
+  }
+  function section(title) {
+    write();
+    write(`=== ${title} ===`);
+  }
+  function info(message) {
+    write(`[+] ${message}`);
+  }
+  function warn(message) {
+    write(`[!] ${message}`);
+  }
+  function error(message) {
+    write(`[-] ${message}`);
+  }
+  function whyItMatters(line) {
+    write(`Why this matters for exploitation: ${line}`);
+  }
+  function formatAddress(address, pointerSize) {
+    const width = pointerSize === 8 ? 16 : 8;
+    return `0x${address.toString(16).toUpperCase().padStart(width, "0")}`;
+  }
+  function formatHexByte(byte) {
+    return `0x${(byte & 255).toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  function table(columns, rows) {
+    const hasVisibleValues = rows.some(
+      (row) => columns.some((column) => {
+        const value = row[column.key];
+        return value !== void 0 && value !== "";
+      })
+    );
+    if (rows.length === 0 || !hasVisibleValues) {
+      write("(no rows)");
+      return;
+    }
+    const widths = columns.map((column) => {
+      var _a;
+      const maxValueWidth = rows.reduce((max, row) => {
+        var _a2;
+        const value = (_a2 = row[column.key]) != null ? _a2 : "";
+        return Math.max(max, visibleLength(value));
+      }, 0);
+      return Math.max((_a = column.width) != null ? _a : 0, column.header.length, maxValueWidth);
+    });
+    const render = (values) => values.map((value, i) => pad(stripDml(value), widths[i])).join("  ");
+    write(render(columns.map((column) => column.header)));
+    write(render(widths.map((width) => "-".repeat(width))));
+    for (const row of rows) {
+      write(render(columns.map((column) => {
+        var _a;
+        return (_a = row[column.key]) != null ? _a : "";
+      })));
+    }
+  }
 
   // src/logic/pattern_logic.ts
   var UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -1244,15 +1243,41 @@ var osed_bundle = (() => {
     }
     return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
   }
-  function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
+  function walkSehRecords(teb, maxRecords = 64, reader = readPointer) {
     const records = [];
-    let node = reader(teb, 4);
-    while (node !== BigInt(4294967295) && records.length < maxRecords) {
-      const next = reader(node, 4);
-      records.push({ node, next, handler: reader(node + BigInt(4), 4) });
-      node = next;
+    let node;
+    try {
+      node = reader(teb, 4);
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      return {
+        records,
+        warning: `Could not read the SEH chain head at 0x${teb.toString(16).toUpperCase()}: ${message}`,
+        stoppedAtGuard: false
+      };
     }
-    return records;
+    while (node !== BigInt(4294967295) && records.length < maxRecords) {
+      try {
+        const next = reader(node, 4);
+        const handler = reader(node + BigInt(4), 4);
+        records.push({ node, next, handler });
+        node = next;
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        return {
+          records,
+          warning: `SEH walk stopped at unreadable record 0x${node.toString(16).toUpperCase()}: ${message}`,
+          stoppedAtGuard: false
+        };
+      }
+    }
+    return {
+      records,
+      stoppedAtGuard: node !== BigInt(4294967295)
+    };
+  }
+  function readSehRecords(teb, maxRecords = 64, reader = readPointer) {
+    return walkSehRecords(teb, maxRecords, reader).records;
   }
 
   // src/commands/modules.ts
@@ -2323,8 +2348,8 @@ var osed_bundle = (() => {
     return {
       name: "seh",
       description: "Walk current thread SEH chain.",
-      usage: "dx @$osed().seh()",
-      examples: ["dx @$osed().seh()"],
+      usage: "dx @$osed().seh.visualize()",
+      examples: ["dx @$osed().seh.visualize()"],
       schema: {},
       execute(options) {
         var _a;
@@ -2345,7 +2370,8 @@ var osed_bundle = (() => {
         }
         const rows = [];
         const findings = [];
-        const records = readSehRecords(teb);
+        const walk = walkSehRecords(teb);
+        const records = walk.records;
         for (const { node, next, handler } of records) {
           const module = findModuleByAddress(handler);
           const safeSehRisk = module && module.safeseh !== "enabled" ? "risk" : "ok";
@@ -2377,13 +2403,22 @@ var osed_bundle = (() => {
           ],
           rows
         );
+        if (walk.warning) {
+          warn(walk.warning);
+        }
+        if (walk.stoppedAtGuard) {
+          warn("SEH walk stopped at guard limit (64 entries).");
+        }
         whyItMatters("SEH handler control is a classic exploit path when stack overwrite is constrained.");
         return {
           command: "seh",
           args: options,
           success: true,
           findings,
-          warnings: records.length >= 64 ? ["SEH walk stopped at guard limit (64 entries)."] : [],
+          warnings: [
+            ...walk.warning ? [walk.warning] : [],
+            ...walk.stoppedAtGuard ? ["SEH walk stopped at guard limit (64 entries)."] : []
+          ],
           errors: []
         };
       }
@@ -8625,6 +8660,17 @@ var osed_bundle = (() => {
   }
 
   // src/commands/landing.ts
+  function landingDxRows(evidence) {
+    return evidence.observations.map((item) => {
+      var _a, _b, _c;
+      return {
+        Observation: item.kind,
+        Address: (_a = item.address) != null ? _a : "",
+        Length: (_c = (_b = item.length) == null ? void 0 : _b.toString()) != null ? _c : "",
+        Confidence: item.confidence.toFixed(2)
+      };
+    });
+  }
   function createLandingCommand() {
     return {
       name: "landing",
@@ -8780,8 +8826,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-24T03:09:24.628Z",
-      gitCommit: "aa1956ec744e",
+      buildTime: "2026-07-24T03:18:34.868Z",
+      gitCommit: "62e2ac71e0b5",
       gitDirty: true
     };
   }
@@ -10001,7 +10047,8 @@ var osed_bundle = (() => {
     };
     api.landing = (address) => {
       invoke("landing", address === void 0 ? [] : [commandAddress(address)]);
-      return lastResult == null ? void 0 : lastResult.findings[0];
+      const evidence = lastResult == null ? void 0 : lastResult.findings[0];
+      return evidence ? toDxResult("Landing Evidence", landingDxRows(evidence)) : void 0;
     };
     api.math = (...args) => {
       invoke("math", args);

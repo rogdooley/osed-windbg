@@ -98,7 +98,7 @@ dx @$osed().math(0xFFFFFFD6, 32)  ; hex/signed/unsigned/LE bytes
 ### SEH
 
 ```
-dx @$osed().seh()             ; walk the current SEH chain
+dx @$osed().seh.visualize()   ; walk the current SEH chain
 dx @$osed().seh_ppr("essfunc", "00 0A 0D")   ; find pop;pop;ret gadgets
 ```
 
@@ -182,7 +182,7 @@ dx @$osed().last_result()
 dx @$osed().last_summary()
 ```
 
-`memory()` and `landing()` also return their evidence objects directly. `can_execute()` returns `true`, `false`, or `null`; it does not issue an independent query path beyond normalized memory evidence.
+`memory()` returns its evidence object directly. `landing()` returns debugger-friendly observation rows; its complete evidence remains available through `last_result()`. `can_execute()` returns `true`, `false`, or `null`; it does not issue an independent query path beyond normalized memory evidence.
 
 ---
 

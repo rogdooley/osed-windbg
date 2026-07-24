@@ -1,10 +1,27 @@
 import { describe, expect, test } from "vitest";
-import { analyzeLandingBytes, calculateLandingConfidence, observationIdentity, type Observation } from "../src/analysis/landing";
+import { analyzeLandingBytes, calculateLandingConfidence, observationIdentity, serializeLandingEvidence, type Observation } from "../src/analysis/landing";
 import { normalizeMemoryRegion } from "../src/analysis/memory";
+import { landingDxRows } from "../src/commands/landing";
 
 const address = BigInt("0x12f800");
 
 describe("landing analysis", () => {
+  test("formats observations as debugger-friendly flat rows", () => {
+    const memory = normalizeMemoryRegion(address, { protection: 0x04 });
+    const evidence = analyzeLandingBytes(address, Uint8Array.from([0x41, 0x41, 0x41, 0x41]), memory);
+
+    expect(landingDxRows(serializeLandingEvidence(evidence))).toEqual(
+      expect.arrayContaining([
+        {
+          Observation: "repeated_marker_bytes",
+          Address: "0x000000000012F800",
+          Length: "4",
+          Confidence: "0.80",
+        },
+      ]),
+    );
+  });
+
   test("emits NOP provenance and normalized memory observations", () => {
     const memory = normalizeMemoryRegion(address, { state: 0x1000, protection: 0x20, type: 0x20000 });
     const bytes = Uint8Array.from([...Array(12).fill(0x90), 0xcc, 0xcc]);

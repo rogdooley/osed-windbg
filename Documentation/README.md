@@ -49,7 +49,6 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().pattern_create(300, "msf")`
 - `dx @$osed().pattern.create(300, "msf")`
 - `dx @$osed().exploit("offset")`
-- `dx @$osed().seh()`
 - `dx @$osed().seh.visualize()`
 - `dx @$osed().triage()`
 - `dx @$osed().memory(0x0012F800)`

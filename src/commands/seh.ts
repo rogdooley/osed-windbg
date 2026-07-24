@@ -1,15 +1,15 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize } from "../core/memory";
-import { readSehRecords, resolveTeb32Address } from "../analysis/seh";
+import { resolveTeb32Address, walkSehRecords } from "../analysis/seh";
 import { findModuleByAddress } from "./modules";
 
 export function createSehCommand(): Command {
   return {
     name: "seh",
     description: "Walk current thread SEH chain.",
-    usage: "dx @$osed().seh()",
-    examples: ["dx @$osed().seh()"],
+    usage: "dx @$osed().seh.visualize()",
+    examples: ["dx @$osed().seh.visualize()"],
     schema: {},
     execute(options: Record<string, unknown>): CommandResult {
       const pointerSize = getPointerSize();
@@ -32,7 +32,8 @@ export function createSehCommand(): Command {
       const rows: Array<Record<string, string>> = [];
       const findings: unknown[] = [];
 
-      const records = readSehRecords(teb);
+      const walk = walkSehRecords(teb);
+      const records = walk.records;
 
       for (const { node, next, handler } of records) {
         const module = findModuleByAddress(handler);
@@ -70,6 +71,12 @@ export function createSehCommand(): Command {
         ],
         rows,
       );
+      if (walk.warning) {
+        out.warn(walk.warning);
+      }
+      if (walk.stoppedAtGuard) {
+        out.warn("SEH walk stopped at guard limit (64 entries).");
+      }
       out.whyItMatters("SEH handler control is a classic exploit path when stack overwrite is constrained.");
 
       return {
@@ -77,7 +84,10 @@ export function createSehCommand(): Command {
         args: options,
         success: true,
         findings,
-        warnings: records.length >= 64 ? ["SEH walk stopped at guard limit (64 entries)."] : [],
+        warnings: [
+          ...(walk.warning ? [walk.warning] : []),
+          ...(walk.stoppedAtGuard ? ["SEH walk stopped at guard limit (64 entries)."] : []),
+        ],
         errors: [],
       };
     },

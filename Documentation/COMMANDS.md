@@ -1,7 +1,7 @@
 # Command Reference
 
 All user-facing entry points are invoked via `dx @$osed().<name>(...)`.
-Most command calls return `true`/`false` for concise `dx` output. `memory()`, `landing()`, and `math()` return their structured evidence directly, while `can_execute()` returns `true`, `false`, or `null`.
+Most command calls return `true`/`false` for concise `dx` output. `memory()` and `math()` return their structured evidence directly, `landing()` returns debugger-friendly observation rows, and `can_execute()` returns `true`, `false`, or `null`.
 Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 
 ## Top-Level Commands
@@ -17,7 +17,7 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `badchar_find` | `dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)` | `dx @$osed().badchar_find()` | Auto-locates the sent test array near an address or the stack pointer, reports the landing address, the first corrupted byte, and the suggested next exclude set. |
 | `egghunter` | `dx @$osed().egghunter(tag?, mode?, wow64?, badchars?)` | `dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A")` | Generates egghunter shellcode (hex + Python). Mode `ntaccess` (32 bytes, INT 0x2E syscall) or `seh` (70 bytes, SEH-based — no syscall dependency, contains null bytes). Reports any stub byte that collides with the supplied bad-character list. |
 | `exploit` | `dx @$osed().exploit(mode, tag?, offset?, address?)` | `dx @$osed().exploit("offset")` | Emits deterministic exploit-workflow command strings. |
-| `seh` | `dx @$osed().seh()` | `dx @$osed().seh()` | Walks the current thread SEH chain. x86-only in v1. |
+| `seh.visualize` | `dx @$osed().seh.visualize()` | `dx @$osed().seh.visualize()` | Walks the current thread SEH chain. x86-only in v1. |
 | `triage` | `dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)` | `dx @$osed().triage(8000, "00 0A 0D", "essfunc", 2048)` | Fast crash triage for control, stack, and gadget context. Uses EIP/ESP on x86 and RIP/RSP on x64; SEH/PPR evidence is x86-only. |
 | `findmsp` | `dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)` | `dx @$osed().findmsp(20000, 4096)` | Comprehensive cyclic-pattern offset scan across all registers, dword-aligned stack slots, SEH record fields, and pointer targets. Reports pattern offset and a confidence per hit (EXACT = unique offset, CONSERVATIVE = repeats). |
 | `memory` | `dx @$osed().memory(address)` | `dx @$osed().memory(0x0012F800)` | Returns normalized region evidence. Unknown semantic flags are `null`; raw numeric metadata is preserved. |

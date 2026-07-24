@@ -1,4 +1,3 @@
-import { error as printError } from "./output";
 import { ObjectSchema, validateOptions } from "./validation";
 
 export type ValidationFlags = {
@@ -101,7 +100,6 @@ export class CommandRegistry {
       return result;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
-      printError(`Command failed: ${message}`);
       return this.failure(name, checked.value, message);
     }
   }

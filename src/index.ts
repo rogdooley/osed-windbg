@@ -54,11 +54,12 @@ import { DxResult, toDxResult } from "./core/dx_result";
 import { getPointerSize } from "./core/memory";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
-import { createLandingCommand } from "./commands/landing";
+import { createLandingCommand, landingDxRows } from "./commands/landing";
 import { createMathCommand } from "./commands/math";
 import { createVersionCommand } from "./commands/version";
 import { getVersionInfo } from "./core/version";
 import { createStringCommands } from "./commands/strings";
+import type { SerializedLandingEvidence } from "./analysis/landing";
 
 declare const self: Record<string, unknown> | undefined;
 
@@ -921,7 +922,8 @@ function bindApi(): OsedApi {
   };
   api.landing = (address?: unknown) => {
     invoke("landing", address === undefined ? [] : [commandAddress(address)]);
-    return lastResult?.findings[0];
+    const evidence = lastResult?.findings[0] as SerializedLandingEvidence | undefined;
+    return evidence ? toDxResult("Landing Evidence", landingDxRows(evidence)) : undefined;
   };
   api.math = (...args: unknown[]) => {
     invoke("math", args);

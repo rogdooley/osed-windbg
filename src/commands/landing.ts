@@ -1,7 +1,16 @@
-import { landing, serializeLandingEvidence } from "../analysis/landing";
+import { landing, serializeLandingEvidence, SerializedLandingEvidence } from "../analysis/landing";
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { normalizeAddress } from "../core/validation";
+
+export function landingDxRows(evidence: SerializedLandingEvidence): Array<Record<string, string>> {
+  return evidence.observations.map((item) => ({
+    Observation: item.kind,
+    Address: item.address ?? "",
+    Length: item.length?.toString() ?? "",
+    Confidence: item.confidence.toFixed(2),
+  }));
+}
 
 export function createLandingCommand(): Command {
   return {

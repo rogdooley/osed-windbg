@@ -8,6 +8,12 @@ export interface SehRecordEvidence {
   handler: bigint;
 }
 
+export interface SehWalkResult {
+  records: SehRecordEvidence[];
+  warning?: string;
+  stoppedAtGuard: boolean;
+}
+
 function safeGet(value: unknown, key: string): unknown {
   if (!value || typeof value !== "object") return undefined;
   try {
@@ -125,13 +131,42 @@ export function resolveTeb32Address(thread: Record<string, unknown>, reader: Poi
   return candidates(thread).find((candidate) => looksLikeTeb32(candidate, reader));
 }
 
-export function readSehRecords(teb: bigint, maxRecords = 64, reader: PointerReader = readPointer): SehRecordEvidence[] {
+export function walkSehRecords(teb: bigint, maxRecords = 64, reader: PointerReader = readPointer): SehWalkResult {
   const records: SehRecordEvidence[] = [];
-  let node = reader(teb, 4);
-  while (node !== BigInt(0xffffffff) && records.length < maxRecords) {
-    const next = reader(node, 4);
-    records.push({ node, next, handler: reader(node + BigInt(4), 4) });
-    node = next;
+  let node: bigint;
+  try {
+    node = reader(teb, 4);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      records,
+      warning: `Could not read the SEH chain head at 0x${teb.toString(16).toUpperCase()}: ${message}`,
+      stoppedAtGuard: false,
+    };
   }
-  return records;
+
+  while (node !== BigInt(0xffffffff) && records.length < maxRecords) {
+    try {
+      const next = reader(node, 4);
+      const handler = reader(node + BigInt(4), 4);
+      records.push({ node, next, handler });
+      node = next;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        records,
+        warning: `SEH walk stopped at unreadable record 0x${node.toString(16).toUpperCase()}: ${message}`,
+        stoppedAtGuard: false,
+      };
+    }
+  }
+
+  return {
+    records,
+    stoppedAtGuard: node !== BigInt(0xffffffff),
+  };
+}
+
+export function readSehRecords(teb: bigint, maxRecords = 64, reader: PointerReader = readPointer): SehRecordEvidence[] {
+  return walkSehRecords(teb, maxRecords, reader).records;
 }
