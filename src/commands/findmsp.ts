@@ -150,8 +150,8 @@ export function createFindMspCommand(): Command {
   return {
     name: "findmsp",
     description: "Comprehensive cyclic-pattern offset scan across registers, the stack, SEH, and pointer targets.",
-    usage: "dx @$osed().findmsp({ patternLength: 10000 })",
-    examples: ["dx @$osed().findmsp()", "dx @$osed().findmsp({ patternLength: 20000, stackBytes: 4096 })"],
+    usage: "dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)",
+    examples: ["dx @$osed().findmsp()", "dx @$osed().findmsp(20000, 4096)"],
     schema: {
       patternLength: { type: "number", min: 256, max: 100000, default: 10000 },
       stackBytes: { type: "number", min: 128, max: 8192, default: 2048 },

@@ -110,7 +110,7 @@ dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")  ; semantic eng
 dx @$osed().retn("essfunc")                                  ; retn N gadgets
 dx @$osed().add_esp("essfunc")                               ; add esp, N ; ret
 dx @$osed().pivots("essfunc")                                ; stack pivots
-dx @$osed().find_bytes("essfunc", "FF E4")                   ; raw byte search
+dx @$osed().find_bytes("vulnserver", "FF E4")                ; raw byte search
 dx @$osed().rop_template("VirtualProtect", "essfunc")        ; PUSHAD skeleton
 ```
 
@@ -120,7 +120,7 @@ Paste RP++ output into `rop.scan`, then query by effect:
 
 ```
 dx @$osed().rop.scan("0x10014872: pop eax ; ret ;")
-dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })
+dx @$osed().rop.query("capability", "LOAD_REGISTER")
 dx @$osed().rop.capabilities()
 ```
 

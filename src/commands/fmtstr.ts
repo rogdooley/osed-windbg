@@ -48,10 +48,10 @@ function createFmtBuildCommand(): Command {
   return {
     name: "fmt_build",
     description: "Build a format-string %n write-what-where payload.",
-    usage: `dx @$osed().fmt.build({ writes: [{ addr: 0x00402118, value: 0x625011AF }], argIndex: 6 })`,
+    usage: "dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?, prefix?)",
     examples: [
-      `dx @$osed().fmt.build({ writes: [{ addr: 0x00402118, value: 0x625011AF }], argIndex: 6 })`,
-      `dx @$osed().fmt.build({ writes: [{ addr: 0x00402118, value: 0x625011AF }], argIndex: 6, width: "word", exclude: [0,10,13] })`,
+      "dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)",
+      'dx @$osed().fmt.build(0x00402118, 0x625011AF, 6, "word", "00 0A 0D")',
     ],
     schema: {
       writes: { type: ["array", "object"], required: true },
@@ -241,7 +241,7 @@ function createFmtOffsetCommand(): Command {
     examples: [
       "dx @$osed().fmt.offset()",
       "dx @$osed().fmt.offset(0x41414141, 40)",
-      "dx @$osed().fmt.offset({ marker: 0x41414141, count: 40, firstArg: 8 })",
+      "dx @$osed().fmt.offset(0x41414141, 40, 8)",
     ],
     schema: {
       marker: { type: "number", default: 0x41414141 },

@@ -21,7 +21,7 @@ If you only want to see the built JavaScript do something useful, use this path:
 7. Inspect the semantic capability catalog:
    - `dx @$osed().rop.capabilities()`
 8. Query the loaded corpus:
-   - `dx @$osed().rop.query({ writes: ["eax"], capability: "LOAD_REGISTER" })`
+   - `dx @$osed().rop.query("capability", "LOAD_REGISTER")`
 
 That sequence shows the script’s value without requiring any prior setup beyond a live debug target.
 
@@ -56,9 +56,9 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().can_execute(0x0012F800)`
 - `dx @$osed().landing()`
 - `dx @$osed().math(0xFFFFFFD6, 32)`
-- `dx @$osed().rop_suggest({ module: "essfunc", engine: "semantic" })`
+- `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")`
 - `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")`
-- `dx @$osed().rop.query({ capability: "STACK_PIVOT", executableOnly: true })`
+- `dx @$osed().rop.query("capability", "STACK_PIVOT", true)`
 - `dx @$osed().rop.capabilities()`
 - `dx @$osed().sc.peb()`
 - `dx @$osed().sc.modules()`

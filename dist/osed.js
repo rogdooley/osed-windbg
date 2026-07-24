@@ -396,10 +396,10 @@ var osed_bundle = (() => {
     const patternCreate = {
       name: "pattern_create",
       description: "Generate cyclic pattern strings.",
-      usage: "dx @$osed().pattern_create({ length: 300, type: 'msf' })",
+      usage: "dx @$osed().pattern_create(length, type?)",
       examples: [
-        "dx @$osed().pattern_create({ length: 300, type: 'msf' })",
-        "dx @$osed().pattern_create({ length: 800, type: 'cyclic' })"
+        'dx @$osed().pattern_create(300, "msf")',
+        'dx @$osed().pattern_create(800, "cyclic")'
       ],
       schema: {
         length: { type: "number", required: true, min: 1, max: 1e5 },
@@ -423,10 +423,10 @@ var osed_bundle = (() => {
     const patternOffset = {
       name: "pattern_offset",
       description: "Locate value offset inside a generated pattern.",
-      usage: "dx @$osed().pattern_offset({ value: 0x39654138, type: 'msf' })",
+      usage: "dx @$osed().pattern_offset(value, type?)",
       examples: [
-        "dx @$osed().pattern_offset({ value: 0x39654138, type: 'msf' })",
-        "dx @$osed().pattern_offset({ value: '41326341', type: 'cyclic' })"
+        'dx @$osed().pattern_offset(0x39654138, "msf")',
+        'dx @$osed().pattern_offset("41326341", "cyclic")'
       ],
       schema: {
         value: { type: ["number", "string"], required: true },
@@ -709,7 +709,13 @@ var osed_bundle = (() => {
   function forEachSection(options) {
     const warnings = [];
     const sections = [];
-    for (const module of getModules().filter((item) => matchesModuleFilter(item, options.module))) {
+    const matchingModules = getModules().filter((item) => matchesModuleFilter(item, options.module));
+    if (matchingModules.length === 0) {
+      warnings.push(
+        options.module ? `No loaded modules matched '${options.module}'.` : "No loaded modules were available to scan."
+      );
+    }
+    for (const module of matchingModules) {
       const parsed = parseSections(module);
       if (parsed.length === 0) {
         warnings.push(`Could not parse PE sections for module ${module.name}.`);
@@ -720,6 +726,11 @@ var osed_bundle = (() => {
           sections.push(section2);
         }
       }
+    }
+    if (matchingModules.length > 0 && sections.length === 0 && warnings.length === 0) {
+      warnings.push(
+        options.executableOnly ? "Matched modules contained no executable PE sections." : "Matched modules contained no scannable PE sections."
+      );
     }
     sections.sort((a, b) => a.start < b.start ? -1 : 1);
     return { sections, warnings };
@@ -1393,8 +1404,8 @@ var osed_bundle = (() => {
     return {
       name: "modules",
       description: "Enumerate modules and mitigation states.",
-      usage: "dx @$osed().modules({ filter: 'essfunc' })",
-      examples: ["dx @$osed().modules({})", "dx @$osed().modules({ filter: 'kernel32' })"],
+      usage: "dx @$osed().modules(filter?)",
+      examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
       schema: {
         filter: { type: "string" }
       },
@@ -1677,8 +1688,8 @@ var osed_bundle = (() => {
     return {
       name: "triage",
       description: "Fast crash triage for exploit-development workflows.",
-      usage: "dx @$osed().triage({ patternLength: 10000, badchars: [0,10,13], module: 'essfunc' })",
-      examples: ["dx @$osed().triage()", "dx @$osed().triage({ module: 'vuln' })"],
+      usage: "dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)",
+      examples: ["dx @$osed().triage()", 'dx @$osed().triage(10000, "00 0A 0D", "vulnserver")'],
       schema: {
         patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
         badchars: { type: "array", elementType: "number", default: [0, 10, 13] },
@@ -1836,10 +1847,10 @@ var osed_bundle = (() => {
     return {
       name: "badchars",
       description: "Identify bad characters from a memory byte sequence.",
-      usage: "dx @$osed().badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
+      usage: "dx @$osed().badchars(address, exclude?)",
       examples: [
-        "dx @$osed().badchars({ address: 0x00B8F900 })",
-        "dx @$osed().badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })"
+        "dx @$osed().badchars(0x00B8F900)",
+        'dx @$osed().badchars("00B8F900", "00 0A 0D")'
       ],
       schema: {
         address: { type: ["number", "string"], required: true },
@@ -1900,8 +1911,8 @@ var osed_bundle = (() => {
     return {
       name: "badchar_array",
       description: "Generate a bad-character test byte array (0x00-0xFF minus excludes) in paste-ready forms.",
-      usage: "dx @$osed().badchar_array({ exclude: [0, 10, 13] })",
-      examples: ["dx @$osed().badchar_array()", "dx @$osed().badchar_array({ exclude: [0, 10, 13] })"],
+      usage: "dx @$osed().badchar_array(exclude?)",
+      examples: ["dx @$osed().badchar_array()", 'dx @$osed().badchar_array("00 0A 0D")'],
       schema: {
         exclude: { type: "array", elementType: "number", default: [] }
       },
@@ -1932,8 +1943,8 @@ var osed_bundle = (() => {
     return {
       name: "badchar_find",
       description: "Locate a sent bad-character array in memory (near an address or the stack pointer) and report the first corrupted byte.",
-      usage: "dx @$osed().badchar_find({ address: 0x0012F800, exclude: [0, 10, 13] })",
-      examples: ["dx @$osed().badchar_find()", "dx @$osed().badchar_find({ address: '0012F800', exclude: [0, 10, 13] })"],
+      usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)",
+      examples: ["dx @$osed().badchar_find()", 'dx @$osed().badchar_find("0012F800", "00 0A 0D")'],
       schema: {
         address: { type: ["number", "string"] },
         exclude: { type: "array", elementType: "number", default: [] },
@@ -2264,12 +2275,12 @@ var osed_bundle = (() => {
     return {
       name: "egghunter",
       description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
-      usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false, badchars: [0, 0x0a] })",
+      usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?)",
       examples: [
-        "dx @$osed().egghunter({ tag: 'W00T' })",
-        "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh' })",
-        "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: true })",
-        "dx @$osed().egghunter({ tag: 'W00T', badchars: [0, 0x0a, 0x0d] })"
+        'dx @$osed().egghunter("W00T")',
+        'dx @$osed().egghunter("B33F", "seh")',
+        'dx @$osed().egghunter("W00T", "ntaccess", true)',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")'
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
@@ -2312,8 +2323,8 @@ var osed_bundle = (() => {
     return {
       name: "seh",
       description: "Walk current thread SEH chain.",
-      usage: "dx @$osed().seh({})",
-      examples: ["dx @$osed().seh({})", "dx @$osed().seh({})"],
+      usage: "dx @$osed().seh()",
+      examples: ["dx @$osed().seh()"],
       schema: {},
       execute(options) {
         var _a;
@@ -4683,8 +4694,8 @@ var osed_bundle = (() => {
     const rop = {
       name: "rop",
       description: "ROP helper entrypoint and module triage.",
-      usage: "dx @$osed().rop.find({ module: 'essfunc', maxResults: 50 })",
-      examples: ["dx @$osed().rop.find({})", "dx @$osed().rop.find({ module: 'essfunc' })"],
+      usage: "dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)",
+      examples: ["dx @$osed().rop.find()", 'dx @$osed().rop.find("essfunc")'],
       schema: {
         module: { type: "string" },
         executableOnly: { type: "boolean", default: true },
@@ -4721,10 +4732,10 @@ var osed_bundle = (() => {
     const findBytes = {
       name: "find_bytes",
       description: "Find byte sequence hits in executable sections.",
-      usage: "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0xFF,0xE4] })",
+      usage: "dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)",
       examples: [
-        "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0xFF, 0xE4] })",
-        "dx @$osed().find_bytes({ module: 'essfunc', bytes: [0x58, 0xC3], maxResults: 25 })"
+        'dx @$osed().find_bytes("vulnserver", "FF E4")',
+        'dx @$osed().find_bytes("essfunc", "58 C3", 25)'
       ],
       schema: {
         module: { type: "string", required: true },
@@ -4761,6 +4772,14 @@ var osed_bundle = (() => {
           ],
           rows
         );
+        for (const warning of scan.warnings) {
+          warn(`${warning.region}: ${warning.message}`);
+        }
+        if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
+          info(
+            `Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`
+          );
+        }
         whyItMatters("Targeted byte matches accelerate practical gadget and pivot discovery.");
         return {
           command: "find_bytes",
@@ -4776,11 +4795,11 @@ var osed_bundle = (() => {
     const ropSuggest = {
       name: "rop_suggest",
       description: "Suggest common exploit-friendly gadget patterns.",
-      usage: "dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })",
+      usage: "dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)",
       examples: [
-        "dx @$osed().rop_suggest({ module: 'essfunc' })",
-        "dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })",
-        "dx @$osed().rop_suggest({ mode: 'thorough', engine: 'legacy' })"
+        'dx @$osed().rop_suggest("essfunc")',
+        'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
+        'dx @$osed().rop_suggest("", 50, true, "thorough", "legacy")'
       ],
       schema: {
         module: { type: "string" },
@@ -4803,10 +4822,10 @@ var osed_bundle = (() => {
     const retnGadgets = {
       name: "retn",
       description: "Scan for retn N gadgets that pop N bytes before returning.",
-      usage: "dx @$osed().retn({ module: 'essfunc', maxResults: 50 })",
+      usage: "dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)",
       examples: [
-        "dx @$osed().retn({ module: 'essfunc' })",
-        "dx @$osed().retn({ module: 'essfunc', maxResults: 100 })"
+        'dx @$osed().retn("essfunc")',
+        'dx @$osed().retn("essfunc", 100)'
       ],
       schema: {
         module: { type: "string" },
@@ -4878,10 +4897,10 @@ var osed_bundle = (() => {
     const addEsp = {
       name: "add_esp",
       description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
-      usage: "dx @$osed().add_esp({ module: 'essfunc', maxResults: 50 })",
+      usage: "dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)",
       examples: [
-        "dx @$osed().add_esp({ module: 'essfunc' })",
-        "dx @$osed().add_esp({ module: 'essfunc', maxResults: 100 })"
+        'dx @$osed().add_esp("essfunc")',
+        'dx @$osed().add_esp("essfunc", 100)'
       ],
       schema: {
         module: { type: "string" },
@@ -5023,8 +5042,8 @@ var osed_bundle = (() => {
     return {
       name: "pivots",
       description: "Scan for stack pivot candidates.",
-      usage: "dx @$osed().pivots({ module: 'essfunc', maxResults: 50 })",
-      examples: ["dx @$osed().pivots({ module: 'essfunc' })", "dx @$osed().pivots({ mode: 'thorough' })"],
+      usage: "dx @$osed().pivots(module?, maxResults?, executableOnly?, mode?)",
+      examples: ['dx @$osed().pivots("essfunc")', 'dx @$osed().pivots("", 50, true, "thorough")'],
       schema: {
         module: { type: "string" },
         executableOnly: { type: "boolean", default: true },
@@ -5184,14 +5203,14 @@ var osed_bundle = (() => {
     {
       name: "rop.scan_live",
       description: "Discovers live target gadgets and loads them into the semantic ROP corpus.",
-      usage: "dx @$osed().rop.scan_live({ module?, badchars?, maxPerPattern? })",
-      examples: ['dx @$osed().rop.scan_live({ module: "essfunc", badchars: [0, 10, 13] })']
+      usage: "dx @$osed().rop.scan_live(module?, badchars?, maxPerPattern?)",
+      examples: ['dx @$osed().rop.scan_live("essfunc", "00 0A 0D")']
     },
     {
       name: "rop.query",
       description: "Filters the loaded semantic ROP corpus.",
-      usage: "dx @$osed().rop.query(query)",
-      examples: ['dx @$osed().rop.query({ transforms: [{ register: "esi", base: "esi", offset: 4 }] })']
+      usage: "dx @$osed().rop.query(field, value, executableOnly?)",
+      examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("writes", "eax")']
     },
     {
       name: "rop.capabilities",
@@ -5202,44 +5221,44 @@ var osed_bundle = (() => {
     {
       name: "rop.chain",
       description: "Builds a register-setup chain from the loaded ROP corpus.",
-      usage: "dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF } })",
-      examples: ["dx @$osed().rop.chain({ set: { eax: 0xDEADBEEF, ebx: 0x1000 } })"]
+      usage: "dx @$osed().rop.chain(register, value, register2?, value2?, ...)",
+      examples: ['dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)']
     },
     {
       name: "rop.chain_vp",
       description: "Builds a VirtualProtect PUSHAD chain from the loaded ROP corpus.",
-      usage: "dx @$osed().rop.chain_vp({ mode?, virtualProtect?, retGadget?, returnAddress?, dwSize?, writable?, flNewProtect? })",
-      examples: ["dx @$osed().rop.chain_vp({ virtualProtect: 0x7C801AD0, returnAddress: 0x625011AF })"]
+      usage: "dx @$osed().rop.chain_vp(virtualProtect?, retGadget?, returnAddress?, lpAddress?, dwSize?, writable?, flNewProtect?, mode?)",
+      examples: ["dx @$osed().rop.chain_vp(0x7C801AD0, 0x62501010, 0x625011AF)"]
     },
     {
       name: "rop.chain_wpm",
       description: "Builds a constrained WriteProcessMemory PUSHAD chain from the loaded ROP corpus.",
-      usage: "dx @$osed().rop.chain_wpm({ writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable? })",
-      examples: ["dx @$osed().rop.chain_wpm({ writeProcessMemory: 0x7C802213, nSize: 0x200 })"]
+      usage: "dx @$osed().rop.chain_wpm(writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable?)",
+      examples: ["dx @$osed().rop.chain_wpm(0x7C802213, 0x625011AF, 0x0012F800, 0x200)"]
     },
     {
       name: "rop.chain_va",
       description: "Builds a constrained VirtualAlloc PUSHAD chain from the loaded ROP corpus.",
-      usage: "dx @$osed().rop.chain_va({ virtualAlloc?, returnAddress?, lpAddress?, flAllocationType?, flProtect? })",
-      examples: ["dx @$osed().rop.chain_va({ virtualAlloc: 0x7C809AE1 })"]
+      usage: "dx @$osed().rop.chain_va(virtualAlloc?, returnAddress?, lpAddress?, flAllocationType?, flProtect?)",
+      examples: ["dx @$osed().rop.chain_va(0x7C809AE1)"]
     },
     {
       name: "rop.frame_vp",
       description: "Builds a flat VirtualProtect stdcall frame without requiring ROP gadgets.",
-      usage: "dx @$osed().rop.frame_vp({ virtualProtect?, returnAddress?, lpAddress?, dwSize?, flNewProtect?, writable?, badchars? })",
-      examples: ["dx @$osed().rop.frame_vp({ virtualProtect: 0x7C801AD0, badchars: [0, 10, 13] })"]
+      usage: "dx @$osed().rop.frame_vp(virtualProtect?, returnAddress?, lpAddress?, dwSize?, flNewProtect?, writable?, badchars?)",
+      examples: ['dx @$osed().rop.frame_vp(0x7C801AD0, 0x625011AF, 0x0012F800, 0x201, 0x40, 0x62506000, "00 0A 0D")']
     },
     {
       name: "rop.frame_wpm",
       description: "Builds a flat WriteProcessMemory stdcall frame without requiring ROP gadgets.",
-      usage: "dx @$osed().rop.frame_wpm({ writeProcessMemory?, returnAddress?, hProcess?, lpBaseAddress?, lpBuffer?, nSize?, writable?, badchars? })",
-      examples: ["dx @$osed().rop.frame_wpm({ writeProcessMemory: 0x7C802213, badchars: [0] })"]
+      usage: "dx @$osed().rop.frame_wpm(writeProcessMemory?, returnAddress?, hProcess?, lpBaseAddress?, lpBuffer?, nSize?, writable?, badchars?)",
+      examples: ['dx @$osed().rop.frame_wpm(0x7C802213, 0x625011AF, 0xFFFFFFFF, 0x62502000, 0x0012F800, 0x200, 0x62506000, "00")']
     },
     {
       name: "rop.frame_va",
       description: "Builds a flat VirtualAlloc stdcall frame without requiring ROP gadgets.",
-      usage: "dx @$osed().rop.frame_va({ virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars? })",
-      examples: ["dx @$osed().rop.frame_va({ virtualAlloc: 0x7C809AE1, badchars: [0, 10, 13] })"]
+      usage: "dx @$osed().rop.frame_va(virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars?)",
+      examples: ['dx @$osed().rop.frame_va(0x7C809AE1, 0x625011AF, 0, 0x201, 0x1000, 0x40, "00 0A 0D")']
     },
     {
       name: "sc.iat",
@@ -5523,8 +5542,8 @@ var osed_bundle = (() => {
     return {
       name: "reload",
       description: "Clear and re-register command registry.",
-      usage: "dx @$osed().reload({})",
-      examples: ["dx @$osed().reload({})", "dx @$osed().reload({})"],
+      usage: "dx @$osed().reload()",
+      examples: ["dx @$osed().reload()"],
       schema: {},
       execute(options) {
         var _a, _b;
@@ -5738,11 +5757,11 @@ var osed_bundle = (() => {
     return {
       name: "exploit",
       description: "Emit deterministic exploit-development command workflows.",
-      usage: "dx @$osed().exploit({ mode: 'egghunter', tag: 'W00T', offset: 260 })",
+      usage: "dx @$osed().exploit(mode, tag?, offset?, address?)",
       examples: [
-        "dx @$osed().exploit({ mode: 'egghunter', tag: 'W00T', offset: 260 })",
-        "dx @$osed().exploit({ mode: 'offset' })",
-        "dx @$osed().exploit({ mode: 'badchars', address: 0x00B8F900 })"
+        'dx @$osed().exploit("egghunter", "W00T", 260)',
+        'dx @$osed().exploit("offset")',
+        'dx @$osed().exploit("badchars", "", 0, 0x00B8F900)'
       ],
       schema: {
         mode: { type: "string", enum: ["egghunter", "offset", "badchars"], required: true },
@@ -5947,8 +5966,8 @@ var osed_bundle = (() => {
     return {
       name: "findmsp",
       description: "Comprehensive cyclic-pattern offset scan across registers, the stack, SEH, and pointer targets.",
-      usage: "dx @$osed().findmsp({ patternLength: 10000 })",
-      examples: ["dx @$osed().findmsp()", "dx @$osed().findmsp({ patternLength: 20000, stackBytes: 4096 })"],
+      usage: "dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)",
+      examples: ["dx @$osed().findmsp()", "dx @$osed().findmsp(20000, 4096)"],
       schema: {
         patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 },
         stackBytes: { type: "number", min: 128, max: 8192, default: 2048 },
@@ -6149,11 +6168,10 @@ var osed_bundle = (() => {
     return {
       name: "find_ptr",
       description: "Search executable memory for an instruction or byte pattern and filter surviving pointers by bad characters.",
-      usage: "dx @$osed().find_ptr({ instruction: 'jmp esp', badchars: [0, 10, 13] })",
+      usage: "dx @$osed().find_ptr(instruction, module?, badchars?, maxResults?, executableOnly?)",
       examples: [
-        "dx @$osed().find_ptr({ instruction: 'jmp esp' })",
-        "dx @$osed().find_ptr({ instruction: 'call eax', module: 'essfunc', badchars: [0, 10, 13] })",
-        "dx @$osed().find_ptr({ bytes: [0x58, 0x5b, 0xc3], badchars: [0] })"
+        'dx @$osed().find_ptr("jmp esp")',
+        'dx @$osed().find_ptr("call eax", "essfunc", "00 0A 0D")'
       ],
       schema: {
         instruction: { type: "string" },
@@ -6345,10 +6363,10 @@ var osed_bundle = (() => {
     return {
       name: "encode",
       description: "XOR-encode shellcode to eliminate bad characters.",
-      usage: `dx @$osed().encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0, 10, 13] })`,
+      usage: "dx @$osed().encode(shellcode, exclude?, key?)",
       examples: [
-        `dx @$osed().encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0x00, 0x0a, 0x0d] })`,
-        `dx @$osed().encode({ shellcode: "fc e8...", exclude: [0, 10, 13], key: 0x41 })`
+        'dx @$osed().encode("FC E8 82 00 00 00 60", "00 0A 0D")',
+        'dx @$osed().encode("FC E8", "00 0A 0D", 0x41)'
       ],
       schema: {
         shellcode: { type: "string", required: true },
@@ -6436,8 +6454,8 @@ var osed_bundle = (() => {
       usage: "dx @$osed().nop(16)",
       examples: [
         "dx @$osed().nop(16)",
-        "dx @$osed().nop({ length: 32 })",
-        "dx @$osed().nop({ length: 16, byte: 0x90 })"
+        "dx @$osed().nop(32)",
+        "dx @$osed().nop(16, 0x90)"
       ],
       schema: {
         length: { type: "number", min: 1, max: 4096, required: true },
@@ -6474,10 +6492,10 @@ var osed_bundle = (() => {
     print("Goal:      mark shellcode region PAGE_EXECUTE_READWRITE (flNewProtect = 0x40)");
     section("Step 1 \u2014 find addresses");
     print(`  VirtualProtect addr:   dx @$osed().sc.iat_find("VirtualProtect")`);
-    print(`  jmp esp (dispatch):    dx @$osed().find_bytes({ module: "${mod}", bytes: [0xFF, 0xE4] })`);
-    print(`  pushad ; ret:          dx @$osed().find_bytes({ module: "${mod}", bytes: [0x60, 0xC3] })`);
-    print(`  Gadgets (pop/inc/neg): dx @$osed().rop_suggest({ module: "${mod}", engine: "semantic" })`);
-    print(`  Stack adjustments:     dx @$osed().add_esp({ module: "${mod}" })`);
+    print(`  jmp esp (dispatch):    dx @$osed().find_bytes("${mod}", "FF E4")`);
+    print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print(`  Gadgets (pop/inc/neg): dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    print(`  Stack adjustments:     dx @$osed().add_esp("${mod}")`);
     print(`  Writable addr:         dx @$osed().modules()  -- pick a .data section address`);
     section("Step 2 \u2014 PUSHAD technique register map");
     print("  After PUSHAD ; RET, the stack looks like:");
@@ -6495,7 +6513,7 @@ var osed_bundle = (() => {
     print("");
     print("OFFSET   = ???           # bytes from buffer start to EIP control");
     print('VP       = 0x????????    # VirtualProtect  dx @$osed().sc.iat_find("VirtualProtect")');
-    print("JMP_ESP  = 0x????????    # jmp esp         dx @$osed().find_bytes({bytes:[0xFF,0xE4]})");
+    print(`JMP_ESP  = 0x????????    # jmp esp         dx @$osed().find_bytes("${mod}", "FF E4")`);
     print("WRITABLE = 0x????????    # writable addr   dx @$osed().modules() -> .data section");
     print("LP_ADDR  = 0x????????    # shellcode addr  compute from ESP (see step 4)");
     print("");
@@ -6524,12 +6542,12 @@ var osed_bundle = (() => {
     print("rop_chain += p32(0x90909090)");
     print("");
     print("rop_chain += p32(0x????????)  # pushad ; ret");
-    print("                               #   dx @$osed().find_bytes({bytes:[0x60,0xC3]})");
+    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
     print("");
     print("# \u2500\u2500 NOP sled + shellcode \u2500\u2500");
     print('nop_sled  = b"\\x90" * 16    # dx @$osed().nop(16)');
     print('shellcode = nop_sled + b"\\xfc\\xe8..."  # your payload');
-    print('                               # dx @$osed().encode({shellcode:"...",exclude:[0,10,13]})');
+    print('                               # dx @$osed().encode("FC E8 ...", "00 0A 0D")');
     print("");
     print('payload = b"A" * OFFSET + rop_chain + shellcode');
     section("Step 4 \u2014 compute LP_ADDR (shellcode stack address)");
@@ -6549,7 +6567,7 @@ var osed_bundle = (() => {
     print(`  WriteProcessMemory:  dx @$osed().sc.iat_find("WriteProcessMemory")`);
     print(`  Writable addr:       dx @$osed().modules()  -- any .data section`);
     print(`  Executable target:   dx @$osed().modules()  -- any .text section address`);
-    print(`  Gadgets:             dx @$osed().rop_suggest({ module: "${mod}", engine: "semantic" })`);
+    print(`  Gadgets:             dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
     section("Python skeleton");
     print("import struct");
     print("def p32(v): return struct.pack('<I', v)");
@@ -6588,10 +6606,10 @@ var osed_bundle = (() => {
     return {
       name: "rop_template",
       description: "Print a commented VirtualProtect or WriteProcessMemory ROP chain skeleton.",
-      usage: "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
+      usage: "dx @$osed().rop_template(api?, module?)",
       examples: [
-        "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
-        "dx @$osed().rop_template({ api: 'WriteProcessMemory', module: 'essfunc' })"
+        'dx @$osed().rop_template("VirtualProtect", "essfunc")',
+        'dx @$osed().rop_template("WriteProcessMemory", "essfunc")'
       ],
       schema: {
         api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory"], default: "VirtualProtect" },
@@ -6765,10 +6783,10 @@ var osed_bundle = (() => {
     return {
       name: "fmt_build",
       description: "Build a format-string %n write-what-where payload.",
-      usage: `dx @$osed().fmt.build({ writes: [{ addr: 0x00402118, value: 0x625011AF }], argIndex: 6 })`,
+      usage: "dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?, prefix?)",
       examples: [
-        `dx @$osed().fmt.build({ writes: [{ addr: 0x00402118, value: 0x625011AF }], argIndex: 6 })`,
-        `dx @$osed().fmt.build({ writes: [{ addr: 0x00402118, value: 0x625011AF }], argIndex: 6, width: "word", exclude: [0,10,13] })`
+        "dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)",
+        'dx @$osed().fmt.build(0x00402118, 0x625011AF, 6, "word", "00 0A 0D")'
       ],
       schema: {
         writes: { type: ["array", "object"], required: true },
@@ -6945,7 +6963,7 @@ var osed_bundle = (() => {
       examples: [
         "dx @$osed().fmt.offset()",
         "dx @$osed().fmt.offset(0x41414141, 40)",
-        "dx @$osed().fmt.offset({ marker: 0x41414141, count: 40, firstArg: 8 })"
+        "dx @$osed().fmt.offset(0x41414141, 40, 8)"
       ],
       schema: {
         marker: { type: "number", default: 1094795585 },
@@ -8762,8 +8780,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-23T14:37:45.595Z",
-      gitCommit: "b9e53e591487",
+      buildTime: "2026-07-24T03:09:24.628Z",
+      gitCommit: "aa1956ec744e",
       gitDirty: true
     };
   }
@@ -9260,6 +9278,15 @@ var osed_bundle = (() => {
       }
       const result3 = registry.execute(commandName, normalizeInvocation(commandName, args));
       lastResult = result3;
+      if (!result3.success) {
+        for (const error2 of result3.errors) {
+          error(error2);
+        }
+        const command = registry.get(commandName);
+        if (command) {
+          info(`Usage: ${command.usage}`);
+        }
+      }
       return result3.success;
     };
     const setResult = (result3) => {
@@ -9378,7 +9405,7 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.scan_live");
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : { module: args[0], badchars: parseHexByteList(args[1]), maxPerPattern: args[2] };
       return scanLiveCorpus({
         module: options.module,
         badchars: options.badchars,
@@ -9429,9 +9456,38 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.query");
       }
-      const query = isPlainObject(args[0]) ? args[0] : void 0;
+      let query;
+      if (isPlainObject(args[0])) {
+        query = args[0];
+      } else if (typeof args[0] === "string" && args[1] !== void 0) {
+        const field = args[0];
+        const listFields = [
+          "reads",
+          "writes",
+          "preserves",
+          "preservesThroughout",
+          "capability",
+          "terminator"
+        ];
+        const scalarFields = [
+          "stackDelta",
+          "memoryReads",
+          "memoryWrites",
+          "memoryRead",
+          "memoryWrite",
+          "executableOnly"
+        ];
+        if (listFields.includes(field)) {
+          query = { [field]: [args[1]] };
+        } else if (scalarFields.includes(field)) {
+          query = { [field]: args[1] };
+        }
+        if (query && args[2] !== void 0) {
+          query.executableOnly = Boolean(args[2]);
+        }
+      }
       if (!query) {
-        const rows2 = [{ Error: "rop.query requires a query object." }];
+        const rows2 = [{ Error: "rop.query requires a supported field and value." }];
         renderRows("ROP Query", rows2);
         setResult({
           command: "rop.query",
@@ -9439,7 +9495,7 @@ var osed_bundle = (() => {
           success: false,
           findings: [],
           warnings: [],
-          errors: ["Query object is required."]
+          errors: ["Use rop.query(field, value, executableOnly?)."]
         });
         return toDxResult("ROP Query", rows2);
       }
@@ -9547,9 +9603,17 @@ var osed_bundle = (() => {
         return toDxResult("ROP Chain", rows2);
       }
       const options = isPlainObject(args[0]) ? args[0] : {};
-      const targets = parseChainTargets((_b = (_a = options.set) != null ? _a : options.targets) != null ? _b : options);
+      const positionalTargets = [];
+      if (!isPlainObject(args[0])) {
+        for (let i = 0; i + 1 < args.length; i += 2) {
+          if (typeof args[i] === "string") {
+            positionalTargets.push({ register: args[i], value: Number(args[i + 1]) });
+          }
+        }
+      }
+      const targets = positionalTargets.length > 0 ? positionalTargets : parseChainTargets((_b = (_a = options.set) != null ? _a : options.targets) != null ? _b : options);
       if (targets.length === 0) {
-        const rows2 = [{ Error: "rop.chain requires a register->value map, e.g. { set: { eax: 0xDEADBEEF } }." }];
+        const rows2 = [{ Error: 'rop.chain requires register/value pairs, e.g. rop.chain("eax", 0xDEADBEEF).' }];
         renderRows("ROP Chain", rows2);
         setResult({ command: "rop.chain", args: options, success: false, findings: [], warnings: [], errors: ["No chain targets provided."] });
         return toDxResult("ROP Chain", rows2);
@@ -9590,7 +9654,16 @@ var osed_bundle = (() => {
         setResult({ command: "rop.chain_vp", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP VirtualProtect Chain", rows2);
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualProtect: args[0],
+        retGadget: args[1],
+        returnAddress: args[2],
+        lpAddress: args[3],
+        dwSize: args[4],
+        writable: args[5],
+        flNewProtect: args[6],
+        mode: args[7]
+      };
       const params = {
         virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
         retGadget: options.retGadget !== void 0 ? Number(options.retGadget) : void 0,
@@ -9643,7 +9716,13 @@ var osed_bundle = (() => {
         setResult({ command: "rop.chain_wpm", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP WriteProcessMemory Chain", rows2);
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : {
+        writeProcessMemory: args[0],
+        returnAddress: args[1],
+        lpBuffer: args[2],
+        nSize: args[3],
+        writable: args[4]
+      };
       const params = {
         writeProcessMemory: options.writeProcessMemory !== void 0 ? Number(options.writeProcessMemory) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
@@ -9693,7 +9772,13 @@ var osed_bundle = (() => {
         setResult({ command: "rop.chain_va", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP VirtualAlloc Chain", rows2);
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualAlloc: args[0],
+        returnAddress: args[1],
+        lpAddress: args[2],
+        flAllocationType: args[3],
+        flProtect: args[4]
+      };
       const params = {
         virtualAlloc: options.virtualAlloc !== void 0 ? Number(options.virtualAlloc) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
@@ -9737,7 +9822,15 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.frame_vp");
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualProtect: args[0],
+        returnAddress: args[1],
+        lpAddress: args[2],
+        dwSize: args[3],
+        flNewProtect: args[4],
+        writable: args[5],
+        badchars: parseHexByteList(args[6])
+      };
       const params = {
         virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
@@ -9753,7 +9846,16 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.frame_wpm");
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : {
+        writeProcessMemory: args[0],
+        returnAddress: args[1],
+        hProcess: args[2],
+        lpBaseAddress: args[3],
+        lpBuffer: args[4],
+        nSize: args[5],
+        writable: args[6],
+        badchars: parseHexByteList(args[7])
+      };
       const params = {
         writeProcessMemory: options.writeProcessMemory !== void 0 ? Number(options.writeProcessMemory) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
@@ -9770,7 +9872,15 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.frame_va");
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : {
+        virtualAlloc: args[0],
+        returnAddress: args[1],
+        lpAddress: args[2],
+        dwSize: args[3],
+        flAllocationType: args[4],
+        flProtect: args[5],
+        badchars: parseHexByteList(args[6])
+      };
       const params = {
         virtualAlloc: options.virtualAlloc !== void 0 ? Number(options.virtualAlloc) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
@@ -9945,8 +10055,17 @@ var osed_bundle = (() => {
         return { value: args[0], type: args[1] };
       case "badchars":
         return { address: args[0], exclude: parseHexByteList(args[1]) };
+      case "badchar_array":
+        return { exclude: parseHexByteList(args[0]) };
+      case "badchar_find":
+        return {
+          address: args[0],
+          exclude: parseHexByteList(args[1]),
+          windowBytes: args[2],
+          minRun: args[3]
+        };
       case "egghunter":
-        return { tag: args[0], mode: args[1], wow64: args[2] };
+        return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]) };
       case "exploit":
         return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
       case "modules":
@@ -10005,6 +10124,14 @@ var osed_bundle = (() => {
           maxResults: args[2],
           executableOnly: args[3],
           mode: args[4]
+        };
+      case "find_ptr":
+        return {
+          instruction: args[0],
+          module: args[1],
+          badchars: parseHexByteList(args[2]),
+          maxResults: args[3],
+          executableOnly: args[4]
         };
       case "reload":
       case "seh":

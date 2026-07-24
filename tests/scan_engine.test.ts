@@ -59,6 +59,22 @@ function makeImageWithTextSection(): { image: Uint8Array; base: bigint; textStar
 }
 
 describe("scanPattern", () => {
+  test("warns when the module filter matches no loaded module", () => {
+    const { image, base } = makeImageWithTextSection();
+    installPeBackedHost(image, base);
+
+    const result = scanPattern(
+      { module: "missing", executableOnly: true, maxResults: 10, chunkSize: 0x1000 },
+      Uint8Array.from([0xff, 0xe4]),
+    );
+
+    expect(result.hits).toEqual([]);
+    expect(result.stats.sectionsScanned).toBe(0);
+    expect(result.warnings).toEqual([
+      { region: "module", message: "No loaded modules matched 'missing'." },
+    ]);
+  });
+
   test("deduplicates matches visible in overlapping chunk reads", () => {
     const { image, base, textStart } = makeImageWithTextSection();
     const pattern = Uint8Array.from([0xff, 0xe4, 0xcc, 0xc3]);

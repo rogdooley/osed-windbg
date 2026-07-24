@@ -203,8 +203,17 @@ function matchesModuleFilter(module: ModuleInfo, filter?: string): boolean {
 export function forEachSection(options: ScanOptions): { sections: ModuleSection[]; warnings: string[] } {
   const warnings: string[] = [];
   const sections: ModuleSection[] = [];
+  const matchingModules = getModules().filter((item) => matchesModuleFilter(item, options.module));
 
-  for (const module of getModules().filter((item) => matchesModuleFilter(item, options.module))) {
+  if (matchingModules.length === 0) {
+    warnings.push(
+      options.module
+        ? `No loaded modules matched '${options.module}'.`
+        : "No loaded modules were available to scan.",
+    );
+  }
+
+  for (const module of matchingModules) {
     const parsed = parseSections(module);
     if (parsed.length === 0) {
       warnings.push(`Could not parse PE sections for module ${module.name}.`);
@@ -216,6 +225,14 @@ export function forEachSection(options: ScanOptions): { sections: ModuleSection[
         sections.push(section);
       }
     }
+  }
+
+  if (matchingModules.length > 0 && sections.length === 0 && warnings.length === 0) {
+    warnings.push(
+      options.executableOnly
+        ? "Matched modules contained no executable PE sections."
+        : "Matched modules contained no scannable PE sections.",
+    );
   }
 
   sections.sort((a, b) => (a.start < b.start ? -1 : 1));

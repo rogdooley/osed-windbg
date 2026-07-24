@@ -13,10 +13,10 @@ export function createBadcharsCommand(): Command {
   return {
     name: "badchars",
     description: "Identify bad characters from a memory byte sequence.",
-    usage: "dx @$osed().badchars({ address: 0x41414141, exclude: [0, 10, 13] })",
+    usage: "dx @$osed().badchars(address, exclude?)",
     examples: [
-      "dx @$osed().badchars({ address: 0x00B8F900 })",
-      "dx @$osed().badchars({ address: '00B8F900', exclude: [0, 10, 13, 0] })",
+      "dx @$osed().badchars(0x00B8F900)",
+      'dx @$osed().badchars("00B8F900", "00 0A 0D")',
     ],
     schema: {
       address: { type: ["number", "string"], required: true },
@@ -85,8 +85,8 @@ export function createBadcharArrayCommand(): Command {
   return {
     name: "badchar_array",
     description: "Generate a bad-character test byte array (0x00-0xFF minus excludes) in paste-ready forms.",
-    usage: "dx @$osed().badchar_array({ exclude: [0, 10, 13] })",
-    examples: ["dx @$osed().badchar_array()", "dx @$osed().badchar_array({ exclude: [0, 10, 13] })"],
+    usage: "dx @$osed().badchar_array(exclude?)",
+    examples: ["dx @$osed().badchar_array()", 'dx @$osed().badchar_array("00 0A 0D")'],
     schema: {
       exclude: { type: "array", elementType: "number", default: [] },
     },
@@ -119,8 +119,8 @@ export function createBadcharFindCommand(): Command {
   return {
     name: "badchar_find",
     description: "Locate a sent bad-character array in memory (near an address or the stack pointer) and report the first corrupted byte.",
-    usage: "dx @$osed().badchar_find({ address: 0x0012F800, exclude: [0, 10, 13] })",
-    examples: ["dx @$osed().badchar_find()", "dx @$osed().badchar_find({ address: '0012F800', exclude: [0, 10, 13] })"],
+    usage: "dx @$osed().badchar_find(address?, exclude?, windowBytes?, minRun?)",
+    examples: ["dx @$osed().badchar_find()", 'dx @$osed().badchar_find("0012F800", "00 0A 0D")'],
     schema: {
       address: { type: ["number", "string"] },
       exclude: { type: "array", elementType: "number", default: [] },

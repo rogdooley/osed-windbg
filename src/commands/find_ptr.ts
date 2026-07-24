@@ -33,11 +33,10 @@ export function createFindPtrCommand(): Command {
   return {
     name: "find_ptr",
     description: "Search executable memory for an instruction or byte pattern and filter surviving pointers by bad characters.",
-    usage: "dx @$osed().find_ptr({ instruction: 'jmp esp', badchars: [0, 10, 13] })",
+    usage: "dx @$osed().find_ptr(instruction, module?, badchars?, maxResults?, executableOnly?)",
     examples: [
-      "dx @$osed().find_ptr({ instruction: 'jmp esp' })",
-      "dx @$osed().find_ptr({ instruction: 'call eax', module: 'essfunc', badchars: [0, 10, 13] })",
-      "dx @$osed().find_ptr({ bytes: [0x58, 0x5b, 0xc3], badchars: [0] })",
+      'dx @$osed().find_ptr("jmp esp")',
+      'dx @$osed().find_ptr("call eax", "essfunc", "00 0A 0D")',
     ],
     schema: {
       instruction: { type: "string" },

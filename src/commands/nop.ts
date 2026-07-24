@@ -8,8 +8,8 @@ export function createNopCommand(): Command {
     usage: "dx @$osed().nop(16)",
     examples: [
       "dx @$osed().nop(16)",
-      "dx @$osed().nop({ length: 32 })",
-      "dx @$osed().nop({ length: 16, byte: 0x90 })",
+      "dx @$osed().nop(32)",
+      "dx @$osed().nop(16, 0x90)",
     ],
     schema: {
       length: { type: "number", min: 1, max: 4096, required: true },

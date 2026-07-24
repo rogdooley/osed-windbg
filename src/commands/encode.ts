@@ -109,10 +109,10 @@ export function createEncodeCommand(): Command {
   return {
     name: "encode",
     description: "XOR-encode shellcode to eliminate bad characters.",
-    usage: `dx @$osed().encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0, 10, 13] })`,
+    usage: "dx @$osed().encode(shellcode, exclude?, key?)",
     examples: [
-      `dx @$osed().encode({ shellcode: "fc e8 82 00 00 00 60...", exclude: [0x00, 0x0a, 0x0d] })`,
-      `dx @$osed().encode({ shellcode: "fc e8...", exclude: [0, 10, 13], key: 0x41 })`,
+      'dx @$osed().encode("FC E8 82 00 00 00 60", "00 0A 0D")',
+      'dx @$osed().encode("FC E8", "00 0A 0D", 0x41)',
     ],
     schema: {
       shellcode: { type: "string", required: true },

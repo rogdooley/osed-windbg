@@ -317,8 +317,8 @@ export function createTriageCommand(): Command {
   return {
     name: "triage",
     description: "Fast crash triage for exploit-development workflows.",
-    usage: "dx @$osed().triage({ patternLength: 10000, badchars: [0,10,13], module: 'essfunc' })",
-    examples: ["dx @$osed().triage()", "dx @$osed().triage({ module: 'vuln' })"],
+    usage: "dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)",
+    examples: ["dx @$osed().triage()", 'dx @$osed().triage(10000, "00 0A 0D", "vulnserver")'],
     schema: {
       patternLength: { type: "number", min: 256, max: 100000, default: 10000 },
       badchars: { type: "array", elementType: "number", default: [0, 10, 13] },

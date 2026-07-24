@@ -8,10 +8,10 @@ function vpTemplate(mod: string): void {
 
   out.section("Step 1 — find addresses");
   out.print(`  VirtualProtect addr:   dx @$osed().sc.iat_find("VirtualProtect")`);
-  out.print(`  jmp esp (dispatch):    dx @$osed().find_bytes({ module: "${mod}", bytes: [0xFF, 0xE4] })`);
-  out.print(`  pushad ; ret:          dx @$osed().find_bytes({ module: "${mod}", bytes: [0x60, 0xC3] })`);
-  out.print(`  Gadgets (pop/inc/neg): dx @$osed().rop_suggest({ module: "${mod}", engine: "semantic" })`);
-  out.print(`  Stack adjustments:     dx @$osed().add_esp({ module: "${mod}" })`);
+  out.print(`  jmp esp (dispatch):    dx @$osed().find_bytes("${mod}", "FF E4")`);
+  out.print(`  pushad ; ret:          dx @$osed().find_bytes("${mod}", "60 C3")`);
+  out.print(`  Gadgets (pop/inc/neg): dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+  out.print(`  Stack adjustments:     dx @$osed().add_esp("${mod}")`);
   out.print(`  Writable addr:         dx @$osed().modules()  -- pick a .data section address`);
 
   out.section("Step 2 — PUSHAD technique register map");
@@ -31,7 +31,7 @@ function vpTemplate(mod: string): void {
   out.print("");
   out.print("OFFSET   = ???           # bytes from buffer start to EIP control");
   out.print("VP       = 0x????????    # VirtualProtect  dx @$osed().sc.iat_find(\"VirtualProtect\")");
-  out.print("JMP_ESP  = 0x????????    # jmp esp         dx @$osed().find_bytes({bytes:[0xFF,0xE4]})");
+  out.print(`JMP_ESP  = 0x????????    # jmp esp         dx @$osed().find_bytes("${mod}", "FF E4")`);
   out.print("WRITABLE = 0x????????    # writable addr   dx @$osed().modules() -> .data section");
   out.print("LP_ADDR  = 0x????????    # shellcode addr  compute from ESP (see step 4)");
   out.print("");
@@ -60,12 +60,12 @@ function vpTemplate(mod: string): void {
   out.print("rop_chain += p32(0x90909090)");
   out.print("");
   out.print("rop_chain += p32(0x????????)  # pushad ; ret");
-  out.print("                               #   dx @$osed().find_bytes({bytes:[0x60,0xC3]})");
+  out.print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
   out.print("");
   out.print("# ── NOP sled + shellcode ──");
   out.print("nop_sled  = b\"\\x90\" * 16    # dx @$osed().nop(16)");
   out.print("shellcode = nop_sled + b\"\\xfc\\xe8...\"  # your payload");
-  out.print("                               # dx @$osed().encode({shellcode:\"...\",exclude:[0,10,13]})");
+  out.print('                               # dx @$osed().encode("FC E8 ...", "00 0A 0D")');
   out.print("");
   out.print("payload = b\"A\" * OFFSET + rop_chain + shellcode");
 
@@ -88,7 +88,7 @@ function wpmTemplate(mod: string): void {
   out.print(`  WriteProcessMemory:  dx @$osed().sc.iat_find("WriteProcessMemory")`);
   out.print(`  Writable addr:       dx @$osed().modules()  -- any .data section`);
   out.print(`  Executable target:   dx @$osed().modules()  -- any .text section address`);
-  out.print(`  Gadgets:             dx @$osed().rop_suggest({ module: "${mod}", engine: "semantic" })`);
+  out.print(`  Gadgets:             dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
 
   out.section("Python skeleton");
   out.print("import struct");
@@ -129,10 +129,10 @@ export function createRopTemplateCommand(): Command {
   return {
     name: "rop_template",
     description: "Print a commented VirtualProtect or WriteProcessMemory ROP chain skeleton.",
-    usage: "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
+    usage: "dx @$osed().rop_template(api?, module?)",
     examples: [
-      "dx @$osed().rop_template({ api: 'VirtualProtect', module: 'essfunc' })",
-      "dx @$osed().rop_template({ api: 'WriteProcessMemory', module: 'essfunc' })",
+      'dx @$osed().rop_template("VirtualProtect", "essfunc")',
+      'dx @$osed().rop_template("WriteProcessMemory", "essfunc")',
     ],
     schema: {
       api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory"], default: "VirtualProtect" },

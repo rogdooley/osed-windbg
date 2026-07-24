@@ -169,12 +169,12 @@ export function createEgghunterCommand(): Command {
   return {
     name: "egghunter",
     description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
-    usage: "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: false, badchars: [0, 0x0a] })",
+    usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?)",
     examples: [
-      "dx @$osed().egghunter({ tag: 'W00T' })",
-      "dx @$osed().egghunter({ tag: 'B33F', mode: 'seh' })",
-      "dx @$osed().egghunter({ tag: 'W00T', mode: 'ntaccess', wow64: true })",
-      "dx @$osed().egghunter({ tag: 'W00T', badchars: [0, 0x0a, 0x0d] })",
+      'dx @$osed().egghunter("W00T")',
+      'dx @$osed().egghunter("B33F", "seh")',
+      'dx @$osed().egghunter("W00T", "ntaccess", true)',
+      'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
     ],
     schema: {
       tag: { type: "string", default: "W00T" },

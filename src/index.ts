@@ -133,6 +133,15 @@ function bindApi(): OsedApi {
     }
     const result = registry.execute(commandName, normalizeInvocation(commandName, args));
     lastResult = result;
+    if (!result.success) {
+      for (const error of result.errors) {
+        out.error(error);
+      }
+      const command = registry.get(commandName);
+      if (command) {
+        out.info(`Usage: ${command.usage}`);
+      }
+    }
     return result.success;
   };
   const setResult = (result: CommandResult): void => {
@@ -261,7 +270,9 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.scan_live");
     }
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { module: args[0], badchars: parseHexByteList(args[1]), maxPerPattern: args[2] };
     return scanLiveCorpus({
       module: options.module as string | undefined,
       badchars: options.badchars as number[] | undefined,
@@ -316,9 +327,38 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.query");
     }
-    const query = isPlainObject(args[0]) ? (args[0] as RopQuery) : undefined;
+    let query: RopQuery | undefined;
+    if (isPlainObject(args[0])) {
+      query = args[0] as RopQuery;
+    } else if (typeof args[0] === "string" && args[1] !== undefined) {
+      const field = args[0] as keyof RopQuery;
+      const listFields: Array<keyof RopQuery> = [
+        "reads",
+        "writes",
+        "preserves",
+        "preservesThroughout",
+        "capability",
+        "terminator",
+      ];
+      const scalarFields: Array<keyof RopQuery> = [
+        "stackDelta",
+        "memoryReads",
+        "memoryWrites",
+        "memoryRead",
+        "memoryWrite",
+        "executableOnly",
+      ];
+      if (listFields.includes(field)) {
+        query = { [field]: [args[1]] } as RopQuery;
+      } else if (scalarFields.includes(field)) {
+        query = { [field]: args[1] } as RopQuery;
+      }
+      if (query && args[2] !== undefined) {
+        query.executableOnly = Boolean(args[2]);
+      }
+    }
     if (!query) {
-      const rows = [{ Error: "rop.query requires a query object." }];
+      const rows = [{ Error: "rop.query requires a supported field and value." }];
       renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
@@ -326,7 +366,7 @@ function bindApi(): OsedApi {
         success: false,
         findings: [],
         warnings: [],
-        errors: ["Query object is required."],
+        errors: ["Use rop.query(field, value, executableOnly?)."],
       });
       return toDxResult("ROP Query", rows);
     }
@@ -443,9 +483,19 @@ function bindApi(): OsedApi {
     }
 
     const options = isPlainObject(args[0]) ? args[0] : {};
-    const targets = parseChainTargets(options.set ?? options.targets ?? options);
+    const positionalTargets: ChainTarget[] = [];
+    if (!isPlainObject(args[0])) {
+      for (let i = 0; i + 1 < args.length; i += 2) {
+        if (typeof args[i] === "string") {
+          positionalTargets.push({ register: args[i] as string, value: Number(args[i + 1]) });
+        }
+      }
+    }
+    const targets = positionalTargets.length > 0
+      ? positionalTargets
+      : parseChainTargets(options.set ?? options.targets ?? options);
     if (targets.length === 0) {
-      const rows = [{ Error: "rop.chain requires a register->value map, e.g. { set: { eax: 0xDEADBEEF } }." }];
+      const rows = [{ Error: 'rop.chain requires register/value pairs, e.g. rop.chain("eax", 0xDEADBEEF).' }];
       renderRows("ROP Chain", rows);
       setResult({ command: "rop.chain", args: options, success: false, findings: [], warnings: [], errors: ["No chain targets provided."] });
       return toDxResult("ROP Chain", rows);
@@ -491,7 +541,18 @@ function bindApi(): OsedApi {
       return toDxResult("ROP VirtualProtect Chain", rows);
     }
 
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : {
+          virtualProtect: args[0],
+          retGadget: args[1],
+          returnAddress: args[2],
+          lpAddress: args[3],
+          dwSize: args[4],
+          writable: args[5],
+          flNewProtect: args[6],
+          mode: args[7],
+        };
     const params: VirtualProtectParams = {
       virtualProtect: options.virtualProtect !== undefined ? Number(options.virtualProtect) : undefined,
       retGadget: options.retGadget !== undefined ? Number(options.retGadget) : undefined,
@@ -548,7 +609,15 @@ function bindApi(): OsedApi {
       return toDxResult("ROP WriteProcessMemory Chain", rows);
     }
 
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : {
+          writeProcessMemory: args[0],
+          returnAddress: args[1],
+          lpBuffer: args[2],
+          nSize: args[3],
+          writable: args[4],
+        };
     const params: WriteProcessMemoryParams = {
       writeProcessMemory: options.writeProcessMemory !== undefined ? Number(options.writeProcessMemory) : undefined,
       returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
@@ -602,7 +671,15 @@ function bindApi(): OsedApi {
       return toDxResult("ROP VirtualAlloc Chain", rows);
     }
 
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : {
+          virtualAlloc: args[0],
+          returnAddress: args[1],
+          lpAddress: args[2],
+          flAllocationType: args[3],
+          flProtect: args[4],
+        };
     const params: VirtualAllocParams = {
       virtualAlloc: options.virtualAlloc !== undefined ? Number(options.virtualAlloc) : undefined,
       returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
@@ -649,7 +726,17 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.frame_vp");
     }
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : {
+          virtualProtect: args[0],
+          returnAddress: args[1],
+          lpAddress: args[2],
+          dwSize: args[3],
+          flNewProtect: args[4],
+          writable: args[5],
+          badchars: parseHexByteList(args[6]),
+        };
     const params: VirtualProtectFrameParams = {
       virtualProtect: options.virtualProtect !== undefined ? Number(options.virtualProtect) : undefined,
       returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
@@ -666,7 +753,18 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.frame_wpm");
     }
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : {
+          writeProcessMemory: args[0],
+          returnAddress: args[1],
+          hProcess: args[2],
+          lpBaseAddress: args[3],
+          lpBuffer: args[4],
+          nSize: args[5],
+          writable: args[6],
+          badchars: parseHexByteList(args[7]),
+        };
     const params: WriteProcessMemoryFrameParams = {
       writeProcessMemory: options.writeProcessMemory !== undefined ? Number(options.writeProcessMemory) : undefined,
       returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
@@ -684,7 +782,17 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.frame_va");
     }
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : {
+          virtualAlloc: args[0],
+          returnAddress: args[1],
+          lpAddress: args[2],
+          dwSize: args[3],
+          flAllocationType: args[4],
+          flProtect: args[5],
+          badchars: parseHexByteList(args[6]),
+        };
     const params: VirtualAllocFrameParams = {
       virtualAlloc: options.virtualAlloc !== undefined ? Number(options.virtualAlloc) : undefined,
       returnAddress: options.returnAddress !== undefined ? Number(options.returnAddress) : undefined,
@@ -875,8 +983,17 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
       return { value: args[0], type: args[1] };
     case "badchars":
       return { address: args[0], exclude: parseHexByteList(args[1]) };
+    case "badchar_array":
+      return { exclude: parseHexByteList(args[0]) };
+    case "badchar_find":
+      return {
+        address: args[0],
+        exclude: parseHexByteList(args[1]),
+        windowBytes: args[2],
+        minRun: args[3],
+      };
     case "egghunter":
-      return { tag: args[0], mode: args[1], wow64: args[2] };
+      return { tag: args[0], mode: args[1], wow64: args[2], badchars: parseHexByteList(args[3]) };
     case "exploit":
       return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
     case "modules":
@@ -939,6 +1056,14 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
         maxResults: args[2],
         executableOnly: args[3],
         mode: args[4],
+      };
+    case "find_ptr":
+      return {
+        instruction: args[0],
+        module: args[1],
+        badchars: parseHexByteList(args[2]),
+        maxResults: args[3],
+        executableOnly: args[4],
       };
     case "reload":
     case "seh":

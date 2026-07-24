@@ -206,8 +206,8 @@ export function createModulesCommand(): Command {
   return {
     name: "modules",
     description: "Enumerate modules and mitigation states.",
-    usage: "dx @$osed().modules({ filter: 'essfunc' })",
-    examples: ["dx @$osed().modules({})", "dx @$osed().modules({ filter: 'kernel32' })"],
+    usage: "dx @$osed().modules(filter?)",
+    examples: ["dx @$osed().modules()", 'dx @$osed().modules("kernel32")'],
     schema: {
       filter: { type: "string" },
     },

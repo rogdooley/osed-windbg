@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createFindMspCommand } from "../src/commands/findmsp";
 import { createRopCommands } from "../src/commands/rop";
 
 function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
@@ -60,6 +61,18 @@ function makeImageWithTextSection(): { image: Uint8Array; base: bigint; textStar
 }
 
 describe("rop_suggest command", () => {
+  test("publishes WinDbg-compatible positional examples", () => {
+    const findMsp = createFindMspCommand();
+    const findBytes = createRopCommands().find((command) => command.name === "find_bytes");
+
+    expect(findMsp.usage).toBe("dx @$osed().findmsp(patternLength?, stackBytes?, probeBytes?)");
+    expect(findMsp.examples).toContain("dx @$osed().findmsp(20000, 4096)");
+    expect(findBytes?.usage).toBe(
+      "dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)",
+    );
+    expect(findBytes?.examples).toContain('dx @$osed().find_bytes("vulnserver", "FF E4")');
+  });
+
   test("exposes an engine option with legacy and semantic modes", () => {
     const ropSuggest = createRopCommands().find((command) => command.name === "rop_suggest");
 
@@ -69,7 +82,9 @@ describe("rop_suggest command", () => {
       enum: ["legacy", "semantic"],
       default: "legacy",
     });
-    expect(ropSuggest?.examples).toContain("dx @$osed().rop_suggest({ module: 'essfunc', engine: 'semantic' })");
+    expect(ropSuggest?.examples).toContain(
+      'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
+    );
   });
 
   test("find_bytes executes through the command adapter and returns unique hits", () => {
