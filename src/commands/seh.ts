@@ -59,20 +59,28 @@ export function createSehCommand(): Command {
         const executable = memoryRegion(handler).executable;
         const brokenNext = depth === records.length - 1 && walk.warning !== undefined;
         const end = next === BigInt(0xffffffff);
-        const status: string[] = [];
-        if (!module || executable === false) status.push("CORRUPT?");
-        if (brokenNext) status.push("BROKEN NEXT");
-        if (module?.safeseh === "enabled") status.push("SafeSEH");
-        if (module?.aslr === "enabled") status.push("ASLR");
-        if (
+        const integrity = brokenNext
+          ? "BROKEN NEXT"
+          : !module || executable === false
+            ? "BAD HANDLER"
+            : end
+              ? "END"
+              : "OK";
+        const candidate = Boolean(
           module
           && executable === true
           && module.safeseh === "disabled"
           && module.aslr === "disabled"
-        ) {
-          status.push("CANDIDATE");
-        }
-        if (status.length === 0) status.push("review");
+        );
+        const assessment = candidate
+          ? "CANDIDATE"
+          : !module || executable === false
+            ? "INVALID"
+            : module.safeseh === "enabled"
+              ? "PROTECTED"
+              : module.aslr === "enabled"
+                ? "ASLR"
+                : "REVIEW";
 
         const moduleName = module ? shortModuleName(module.name) : "<unmapped>";
         const target = module
@@ -89,7 +97,8 @@ export function createSehCommand(): Command {
           aslr: module ? module.aslr : "unknown",
           executable: triStateFlag(executable),
           espDelta: formatEspDelta(node, esp),
-          status: status.join(", "),
+          integrity,
+          assessment,
         });
 
         findings.push({
@@ -105,7 +114,9 @@ export function createSehCommand(): Command {
           safeSeh: module?.safeseh ?? "unknown",
           end,
           brokenNext,
-          status,
+          integrity,
+          candidate,
+          assessment,
         });
 
       }
@@ -122,7 +133,8 @@ export function createSehCommand(): Command {
           { key: "aslr", header: "ASLR", width: 8 },
           { key: "executable", header: "Exec", width: 7 },
           { key: "espDelta", header: "ESP Delta", width: 10 },
-          { key: "status", header: "Status", width: 10 },
+          { key: "integrity", header: "Integrity", width: 11 },
+          { key: "assessment", header: "Assessment", width: 10 },
         ],
         rows,
       );

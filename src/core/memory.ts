@@ -18,7 +18,7 @@ export function readMemory(address: bigint, length: number): Uint8Array {
   }
 
   const suffix = lastError instanceof Error && lastError.message ? ` (${lastError.message})` : "";
-  throw new Error(`Memory read failed at ${formatAddress(address, 8)}${suffix}.`);
+  throw new Error(`Memory read failed at ${formatAddress(address, getPointerSize())}${suffix}.`);
 }
 
 export function tryReadMemory(address: bigint, length: number): Uint8Array | undefined {

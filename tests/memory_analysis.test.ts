@@ -1,8 +1,37 @@
 import { describe, expect, test } from "vitest";
 import { normalizeMemoryRegion, parseVprot, serializeMemoryRegionEvidence } from "../src/analysis/memory";
+import { readMemory } from "../src/core/memory";
 import { initializeScript } from "../src";
 
 describe("memory analysis", () => {
+  test("formats failed reads using the target pointer width", () => {
+    (globalThis as unknown as { host: unknown }).host = {
+      currentProcess: { Is64Bit: false },
+      memory: {
+        readMemoryValues() {
+          throw new Error("unmapped");
+        },
+      },
+    };
+
+    expect(() => readMemory(BigInt("0x909008eb"), 4)).toThrow(
+      "Memory read failed at 0x909008EB (unmapped).",
+    );
+
+    (globalThis as unknown as { host: unknown }).host = {
+      currentProcess: { Is64Bit: true },
+      memory: {
+        readMemoryValues() {
+          throw new Error("unmapped");
+        },
+      },
+    };
+
+    expect(() => readMemory(BigInt("0x909008eb"), 4)).toThrow(
+      "Memory read failed at 0x00000000909008EB (unmapped).",
+    );
+  });
+
   test("normalizes Win32 protection, state, and type flags", () => {
     const evidence = normalizeMemoryRegion(BigInt("0x401000"), {
       state: 0x1000,
