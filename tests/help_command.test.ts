@@ -117,6 +117,18 @@ describe("help command", () => {
     expect(result.rows.toString()).toBe("sc.exports: 1 row; expand rows[N] for details");
   });
 
+  test("Dx result rows decode escaped DML labels for plain-text rendering", () => {
+    const result = toDxResult("sc.iat", [
+      {
+        Module: '<link cmd="lmv m test">C:\\A&amp;B\\test.dll</link>',
+        Symbol: '<link cmd="x test!operator&lt;">operator&lt;</link>',
+      },
+    ]);
+
+    expect(result.rows[0].toString()).toContain("Module: C:\\A&B\\test.dll");
+    expect(result.rows[0].toString()).toContain("Symbol: operator<");
+  });
+
   test("table width calculation ignores DML markup", () => {
     const logs: string[] = [];
     (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {

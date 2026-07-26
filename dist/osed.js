@@ -249,7 +249,7 @@ var osed_bundle = (() => {
     return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
   }
   function stripDml(value) {
-    return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+    return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&amp;/gi, "&");
   }
   function visibleLength(value) {
     return stripDml(value).length;
@@ -471,7 +471,7 @@ var osed_bundle = (() => {
       }
     }
     const suffix = lastError instanceof Error && lastError.message ? ` (${lastError.message})` : "";
-    throw new Error(`Memory read failed at ${formatAddress(address, 8)}${suffix}.`);
+    throw new Error(`Memory read failed at ${formatAddress(address, getPointerSize())}${suffix}.`);
   }
   function tryReadMemory(address, length) {
     try {
@@ -2392,15 +2392,11 @@ var osed_bundle = (() => {
           const executable = memoryRegion(handler).executable;
           const brokenNext = depth === records.length - 1 && walk.warning !== void 0;
           const end = next === BigInt(4294967295);
-          const status = [];
-          if (!module || executable === false) status.push("CORRUPT?");
-          if (brokenNext) status.push("BROKEN NEXT");
-          if ((module == null ? void 0 : module.safeseh) === "enabled") status.push("SafeSEH");
-          if ((module == null ? void 0 : module.aslr) === "enabled") status.push("ASLR");
-          if (module && executable === true && module.safeseh === "disabled" && module.aslr === "disabled") {
-            status.push("CANDIDATE");
-          }
-          if (status.length === 0) status.push("review");
+          const integrity = brokenNext ? "BROKEN NEXT" : !module || executable === false ? "BAD HANDLER" : end ? "END" : "OK";
+          const candidate = Boolean(
+            module && executable === true && module.safeseh === "disabled" && module.aslr === "disabled"
+          );
+          const assessment = candidate ? "CANDIDATE" : !module || executable === false ? "INVALID" : module.safeseh === "enabled" ? "PROTECTED" : module.aslr === "enabled" ? "ASLR" : "REVIEW";
           const moduleName = module ? shortModuleName(module.name) : "<unmapped>";
           const target = module ? `${moduleName}+0x${(handler - module.base).toString(16).toUpperCase()}` : "<unmapped>";
           rows.push({
@@ -2413,7 +2409,8 @@ var osed_bundle = (() => {
             aslr: module ? module.aslr : "unknown",
             executable: triStateFlag(executable),
             espDelta: formatEspDelta(node, esp),
-            status: status.join(", ")
+            integrity,
+            assessment
           });
           findings.push({
             depth,
@@ -2428,7 +2425,9 @@ var osed_bundle = (() => {
             safeSeh: (_b = module == null ? void 0 : module.safeseh) != null ? _b : "unknown",
             end,
             brokenNext,
-            status
+            integrity,
+            candidate,
+            assessment
           });
         }
         section("SEH Chain");
@@ -2443,7 +2442,8 @@ var osed_bundle = (() => {
             { key: "aslr", header: "ASLR", width: 8 },
             { key: "executable", header: "Exec", width: 7 },
             { key: "espDelta", header: "ESP Delta", width: 10 },
-            { key: "status", header: "Status", width: 10 }
+            { key: "integrity", header: "Integrity", width: 11 },
+            { key: "assessment", header: "Assessment", width: 10 }
           ],
           rows
         );
@@ -8149,18 +8149,18 @@ var osed_bundle = (() => {
           if (!needle) return true;
           return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
         }).map((entry) => {
-          var _a, _b, _c;
+          var _a;
           return {
-            Owner: entry.ownerModule,
-            DLL: entry.importDll,
-            Symbol: entry.symbol,
+            Owner: toDmlModule(entry.ownerModule),
+            DLL: toDmlModule(entry.importDll),
+            Symbol: toDmlSymbol(entry.importDll, entry.symbol),
             Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
             Slot: toDmlAddress(entry.slot, "dps"),
             Target: toDmlAddress(entry.target, "u"),
-            Module: (_b = (_a = entry.actualModule) == null ? void 0 : _a.name) != null ? _b : "unknown",
-            "Symbol+Offset": entry.nearest ? `${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}` : "",
+            Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
+            "Symbol+Offset": entry.nearest ? toDmlText(`${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}`, `u ${formatAddress(entry.target, this.pointerSize)}`) : "",
             Status: entry.status,
-            Note: (_c = entry.nameWarning) != null ? _c : ""
+            Note: (_a = entry.nameWarning) != null ? _a : ""
           };
         });
         if (rows.length === 0) {
@@ -8172,7 +8172,7 @@ var osed_bundle = (() => {
       }
     }
     iat_find(symbol) {
-      var _a, _b, _c;
+      var _a;
       const needle = symbol.trim().toLowerCase();
       if (!needle) {
         return this.errorRows("Symbol substring is required.");
@@ -8184,14 +8184,14 @@ var osed_bundle = (() => {
           for (const entry of entries) {
             if (entry.symbol.toLowerCase().includes(needle)) {
               rows.push({
-                Owner: entry.ownerModule,
-                DLL: entry.importDll,
-                Symbol: entry.symbol,
+                Owner: toDmlModule(entry.ownerModule),
+                DLL: toDmlModule(entry.importDll),
+                Symbol: toDmlSymbol(entry.importDll, entry.symbol),
                 Slot: toDmlAddress(entry.slot, "dps"),
                 Target: toDmlAddress(entry.target, "u"),
-                Module: (_b = (_a = entry.actualModule) == null ? void 0 : _a.name) != null ? _b : "unknown",
+                Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
                 Status: entry.status,
-                Note: (_c = entry.nameWarning) != null ? _c : ""
+                Note: (_a = entry.nameWarning) != null ? _a : ""
               });
             }
           }
@@ -8204,7 +8204,7 @@ var osed_bundle = (() => {
       return rows;
     }
     iat_ptr(moduleName, symbol) {
-      var _a, _b, _c;
+      var _a;
       const lookup = this.findModule(moduleName);
       if (lookup.kind !== "ok") {
         return this.lookupFailureRows(lookup);
@@ -8220,12 +8220,12 @@ var osed_bundle = (() => {
         }
         return [
           {
-            slot: formatAddress(match.slot, this.pointerSize),
-            target: formatAddress(match.target, this.pointerSize),
-            module: (_b = (_a = match.actualModule) == null ? void 0 : _a.name) != null ? _b : "unknown",
-            symbol: match.symbol,
+            slot: toDmlAddress(match.slot, "dps"),
+            target: toDmlAddress(match.target, "u"),
+            module: match.actualModule ? toDmlModule(match.actualModule.name) : "unknown",
+            symbol: toDmlSymbol(match.importDll, match.symbol),
             status: match.status,
-            note: (_c = match.nameWarning) != null ? _c : ""
+            note: (_a = match.nameWarning) != null ? _a : ""
           }
         ];
       } catch (error2) {
@@ -8501,6 +8501,31 @@ var osed_bundle = (() => {
   function toDmlAddress(address, command) {
     const hex = `0x${address.toString(16).toUpperCase()}`;
     return `<link cmd="${command} ${hex}">${hex}</link>`;
+  }
+  function toDmlModule(name) {
+    var _a;
+    const fileName = (_a = name.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const moduleName = fileName.replace(/\.[^.]+$/, "");
+    if (!moduleName || !/^[A-Za-z0-9_.$?-]+$/.test(moduleName)) {
+      return name;
+    }
+    return toDmlText(name, `lmv m ${moduleName}`);
+  }
+  function toDmlSymbol(moduleName, symbol) {
+    var _a;
+    if (symbol === "<ordinal>" || !/^[A-Za-z0-9_?$@.]+$/.test(symbol)) {
+      return symbol;
+    }
+    const fileName = (_a = moduleName.replace(/\\/g, "/").split("/").pop()) != null ? _a : "";
+    const moduleToken = fileName.replace(/\.[^.]+$/, "");
+    if (!moduleToken || !/^[A-Za-z0-9_.$?-]+$/.test(moduleToken)) {
+      return symbol;
+    }
+    return toDmlText(symbol, `x ${moduleToken}!${symbol}`);
+  }
+  function toDmlText(label, command) {
+    const escapedLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<link cmd="${command}">${escapedLabel}</link>`;
   }
   function machineToString(machine) {
     switch (machine) {
@@ -8870,8 +8895,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-24T03:30:16.034Z",
-      gitCommit: "621c98663f1a",
+      buildTime: "2026-07-26T19:10:01.527Z",
+      gitCommit: "3cc4c1dff463",
       gitDirty: true
     };
   }

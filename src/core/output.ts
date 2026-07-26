@@ -13,7 +13,12 @@ function pad(value: string, width: number): string {
 }
 
 export function stripDml(value: string): string {
-  return value.replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1");
+  return value
+    .replace(/<link\b[^>]*>(.*?)<\/link>/gi, "$1")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&");
 }
 
 function visibleLength(value: string): number {

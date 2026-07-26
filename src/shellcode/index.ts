@@ -1183,14 +1183,16 @@ class ShellcodeHelper {
           return entry.symbol.toLowerCase().includes(needle) || entry.importDll.toLowerCase().includes(needle);
         })
         .map((entry) => ({
-          Owner: entry.ownerModule,
-          DLL: entry.importDll,
-          Symbol: entry.symbol,
+          Owner: toDmlModule(entry.ownerModule),
+          DLL: toDmlModule(entry.importDll),
+          Symbol: toDmlSymbol(entry.importDll, entry.symbol),
           Ordinal: entry.ordinal ? entry.ordinal.toString() : "",
           Slot: toDmlAddress(entry.slot, "dps"),
           Target: toDmlAddress(entry.target, "u"),
-          Module: entry.actualModule?.name ?? "unknown",
-          "Symbol+Offset": entry.nearest ? `${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}` : "",
+          Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
+          "Symbol+Offset": entry.nearest
+            ? toDmlText(`${entry.nearest.name}+0x${entry.nearest.offset.toString(16).toUpperCase()}`, `u ${formatAddress(entry.target, this.pointerSize)}`)
+            : "",
           Status: entry.status,
           Note: entry.nameWarning ?? "",
         }));
@@ -1216,12 +1218,12 @@ class ShellcodeHelper {
         for (const entry of entries) {
           if (entry.symbol.toLowerCase().includes(needle)) {
             rows.push({
-              Owner: entry.ownerModule,
-              DLL: entry.importDll,
-              Symbol: entry.symbol,
+              Owner: toDmlModule(entry.ownerModule),
+              DLL: toDmlModule(entry.importDll),
+              Symbol: toDmlSymbol(entry.importDll, entry.symbol),
               Slot: toDmlAddress(entry.slot, "dps"),
               Target: toDmlAddress(entry.target, "u"),
-              Module: entry.actualModule?.name ?? "unknown",
+              Module: entry.actualModule ? toDmlModule(entry.actualModule.name) : "unknown",
               Status: entry.status,
               Note: entry.nameWarning ?? "",
             });
@@ -1257,10 +1259,10 @@ class ShellcodeHelper {
       }
       return [
         {
-          slot: formatAddress(match.slot, this.pointerSize),
-          target: formatAddress(match.target, this.pointerSize),
-          module: match.actualModule?.name ?? "unknown",
-          symbol: match.symbol,
+          slot: toDmlAddress(match.slot, "dps"),
+          target: toDmlAddress(match.target, "u"),
+          module: match.actualModule ? toDmlModule(match.actualModule.name) : "unknown",
+          symbol: toDmlSymbol(match.importDll, match.symbol),
           status: match.status,
           note: match.nameWarning ?? "",
         },
@@ -1622,6 +1624,32 @@ function readAsciiString(address: bigint, maxLength: number): string {
 function toDmlAddress(address: bigint, command: string): string {
   const hex = `0x${address.toString(16).toUpperCase()}`;
   return `<link cmd="${command} ${hex}">${hex}</link>`;
+}
+
+function toDmlModule(name: string): string {
+  const fileName = name.replace(/\\/g, "/").split("/").pop() ?? "";
+  const moduleName = fileName.replace(/\.[^.]+$/, "");
+  if (!moduleName || !/^[A-Za-z0-9_.$?-]+$/.test(moduleName)) {
+    return name;
+  }
+  return toDmlText(name, `lmv m ${moduleName}`);
+}
+
+function toDmlSymbol(moduleName: string, symbol: string): string {
+  if (symbol === "<ordinal>" || !/^[A-Za-z0-9_?$@.]+$/.test(symbol)) {
+    return symbol;
+  }
+  const fileName = moduleName.replace(/\\/g, "/").split("/").pop() ?? "";
+  const moduleToken = fileName.replace(/\.[^.]+$/, "");
+  if (!moduleToken || !/^[A-Za-z0-9_.$?-]+$/.test(moduleToken)) {
+    return symbol;
+  }
+  return toDmlText(symbol, `x ${moduleToken}!${symbol}`);
+}
+
+function toDmlText(label: string, command: string): string {
+  const escapedLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<link cmd="${command}">${escapedLabel}</link>`;
 }
 
 function machineToString(machine: number): string {
