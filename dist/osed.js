@@ -9341,8 +9341,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T20:50:50.465Z",
-      gitCommit: "61e60361f107",
+      buildTime: "2026-07-26T20:56:54.033Z",
+      gitCommit: "f27087c2dae2",
       gitDirty: true
     };
   }
@@ -9784,9 +9784,11 @@ var osed_bundle = (() => {
   var corpusGeneration = 0;
   var nextRopPlanId = 1;
   var ropPlans = /* @__PURE__ */ new Map();
+  var corpusModules = [];
   var ropEmitter = new RankedSemanticEmitter();
   var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
   function diagnoseModuleBadchars(moduleName, badchars) {
+    var _a;
     try {
       const modules = listModulesWithMitigations(moduleName);
       const mod = modules.find((m) => m.name.toLowerCase().includes(moduleName.toLowerCase()));
@@ -9801,8 +9803,19 @@ var osed_bundle = (() => {
       const offending = baseBytes.map((b, i) => ({ byte: b, position: i })).filter((entry) => badSet.has(entry.byte));
       if (offending.length === 0) return void 0;
       const baseHex = `0x${base.toString(16).toUpperCase().padStart(pointerSize * 2, "0")}`;
-      const byteList2 = offending.map((entry) => `0x${entry.byte.toString(16).toUpperCase().padStart(2, "0")} at byte ${entry.position}`).join(", ");
-      return `${mod.name} base ${baseHex} contains bad chars (${byteList2}). Every address in this module is unusable under the current charset.`;
+      const packed = baseBytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+      const byByte = /* @__PURE__ */ new Map();
+      for (const entry of offending) {
+        const list = (_a = byByte.get(entry.byte)) != null ? _a : [];
+        list.push(entry.position);
+        byByte.set(entry.byte, list);
+      }
+      const badSummary = [...byByte.entries()].map(([byte, positions]) => {
+        const hex = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
+        return `${hex} (${posStr})`;
+      }).join(", ");
+      return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
       return void 0;
     }
@@ -9811,6 +9824,9 @@ var osed_bundle = (() => {
     corpusGeneration++;
     ropPlans.clear();
     nextRopPlanId = 1;
+  }
+  function resetCorpusModules() {
+    corpusModules = [];
   }
   function getGlobalObject() {
     if (typeof globalThis !== "undefined") {
@@ -9957,6 +9973,7 @@ var osed_bundle = (() => {
     };
     const scanCorpus = (text, options = {}) => {
       invalidateCorpusPlans();
+      resetCorpusModules();
       currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
       const rows = summarizeCapabilities(currentRopCorpus);
       section("ROP Corpus Loaded");
@@ -9975,12 +9992,14 @@ var osed_bundle = (() => {
       ]);
     };
     const scanLiveCorpus = (modules, options, append) => {
+      var _a;
       const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
       const discoveredIndexes = discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
       invalidateCorpusPlans();
+      if (!append) resetCorpusModules();
       const indexes = append && currentRopCorpus ? [currentRopCorpus, ...discoveredIndexes] : discoveredIndexes;
       currentRopCorpus = mergeCapabilityIndexes(indexes);
-      const rows = summarizeCapabilities(currentRopCorpus);
+      const capRows = summarizeCapabilities(currentRopCorpus);
       const stats = discoveries.reduce(
         (total, discovery) => ({
           patterns: total.patterns + discovery.stats.patterns,
@@ -9995,19 +10014,34 @@ var osed_bundle = (() => {
       for (let i = 0; i < modules.length; i++) {
         const mod = modules[i];
         const disc = discoveries[i];
-        if (mod && disc.stats.scanned > 0 && disc.stats.discovered === 0 && badcharsArray.length > 0) {
-          const baseWarning = diagnoseModuleBadchars(mod, badcharsArray);
-          if (baseWarning) warnings.push(baseWarning);
+        const accepted = disc.stats.discovered;
+        const rejected = disc.stats.scanned - accepted;
+        let reason;
+        if (mod && disc.stats.scanned > 0 && accepted === 0 && badcharsArray.length > 0) {
+          reason = diagnoseModuleBadchars(mod, badcharsArray);
+          if (reason) warnings.push(reason);
         }
+        corpusModules.push({
+          name: mod != null ? mod : "<all>",
+          accepted,
+          rejected,
+          usable: accepted > 0,
+          reason
+        });
       }
-      section("Live ROP Corpus Loaded");
-      info(`Modules: ${modules.map((module) => module != null ? module : "<all>").join(", ")}`);
+      section("Scan Results");
+      for (let i = 0; i < modules.length; i++) {
+        const mod = (_a = modules[i]) != null ? _a : "<all>";
+        const disc = discoveries[i];
+        const accepted = disc.stats.discovered;
+        const rejected = disc.stats.scanned - accepted;
+        info(`${mod}: ${accepted} accepted, ${rejected} rejected`);
+      }
+      section("Corpus");
       info(`Mode: ${append ? "append" : "replace"}`);
-      info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${stats.discovered} live hits)`);
-      info(`Capabilities: ${rows.length}`);
-      if (stats.rejected > 0) {
-        info(`Rejected by bad chars: ${stats.rejected}`);
-      }
+      info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
+      info(`Total gadgets: ${currentRopCorpus.gadgets.length}`);
+      info(`Total capabilities: ${capRows.length}`);
       for (const warning of warnings) {
         warn(warning);
       }
@@ -10015,17 +10049,25 @@ var osed_bundle = (() => {
         command: "rop.scan_live",
         args: __spreadValues({ modules, append }, options),
         success: true,
-        findings: [__spreadValues({ modules: modules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length }, stats)],
+        findings: [__spreadValues({ modules: corpusModules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: capRows.length }, stats)],
         warnings,
         errors: []
       });
-      return toDxResult("Live ROP Corpus Loaded", [
+      return toDxResult("Live ROP Corpus", [
+        ...modules.map((mod, i) => {
+          const disc = discoveries[i];
+          return {
+            Section: "Scan",
+            Module: mod != null ? mod : "<all>",
+            Accepted: disc.stats.discovered.toString(),
+            Rejected: (disc.stats.scanned - disc.stats.discovered).toString()
+          };
+        }),
         {
-          Corpus: "live",
-          Mode: append ? "append" : "replace",
-          Modules: modules.map((module) => module != null ? module : "<all>").join(", "),
-          Gadgets: currentRopCorpus.gadgets.length.toString(),
-          Capabilities: rows.length.toString()
+          Section: "Corpus",
+          Module: corpusModules.map((m) => m.name).join(", "),
+          Accepted: currentRopCorpus.gadgets.length.toString(),
+          Rejected: capRows.length.toString()
         }
       ]);
     };
@@ -10897,9 +10939,11 @@ var osed_bundle = (() => {
   function initialize() {
     currentRopCorpus = void 0;
     invalidateCorpusPlans();
+    resetCorpusModules();
     registry.setReloader(() => {
       currentRopCorpus = void 0;
       invalidateCorpusPlans();
+      resetCorpusModules();
       registerAll();
       osed = bindApi();
       publishOsed();

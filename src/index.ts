@@ -75,6 +75,14 @@ let currentRopCorpus: CapabilityIndex | undefined;
 let corpusGeneration = 0;
 let nextRopPlanId = 1;
 const ropPlans = new Map<number, { plan: RopStrategyPlan; generation: number }>();
+interface CorpusModuleEntry {
+  name: string;
+  accepted: number;
+  rejected: number;
+  usable: boolean;
+  reason?: string;
+}
+let corpusModules: CorpusModuleEntry[] = [];
 const ropEmitter = new RankedSemanticEmitter();
 const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
 
@@ -95,10 +103,25 @@ function diagnoseModuleBadchars(moduleName: string, badchars: number[]): string 
       .filter((entry) => badSet.has(entry.byte));
     if (offending.length === 0) return undefined;
     const baseHex = `0x${base.toString(16).toUpperCase().padStart(pointerSize * 2, "0")}`;
-    const byteList = offending
-      .map((entry) => `0x${entry.byte.toString(16).toUpperCase().padStart(2, "0")} at byte ${entry.position}`)
+    const packed = baseBytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    const byByte = new Map<number, number[]>();
+    for (const entry of offending) {
+      const list = byByte.get(entry.byte) ?? [];
+      list.push(entry.position);
+      byByte.set(entry.byte, list);
+    }
+    const badSummary = [...byByte.entries()]
+      .map(([byte, positions]) => {
+        const hex = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const posStr = positions.length === 1
+          ? `offset ${positions[0]}`
+          : positions.length === positions[positions.length - 1] - positions[0] + 1
+            ? `offsets ${positions[0]}-${positions[positions.length - 1]}`
+            : `offsets ${positions.join(",")}`;
+        return `${hex} (${posStr})`;
+      })
       .join(", ");
-    return `${mod.name} base ${baseHex} contains bad chars (${byteList}). Every address in this module is unusable under the current charset.`;
+    return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
   } catch {
     return undefined;
   }
@@ -108,6 +131,10 @@ function invalidateCorpusPlans(): void {
   corpusGeneration++;
   ropPlans.clear();
   nextRopPlanId = 1;
+}
+
+function resetCorpusModules(): void {
+  corpusModules = [];
 }
 
 function getGlobalObject(): Record<string, unknown> | undefined {
@@ -267,6 +294,7 @@ function bindApi(): OsedApi {
 
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): DxResult => {
     invalidateCorpusPlans();
+    resetCorpusModules();
     currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
     const rows = summarizeCapabilities(currentRopCorpus);
     out.section("ROP Corpus Loaded");
@@ -294,11 +322,12 @@ function bindApi(): OsedApi {
     const discoveredIndexes = discoveries.map((discovery) =>
       buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
     invalidateCorpusPlans();
+    if (!append) resetCorpusModules();
     const indexes = append && currentRopCorpus
       ? [currentRopCorpus, ...discoveredIndexes]
       : discoveredIndexes;
     currentRopCorpus = mergeCapabilityIndexes(indexes);
-    const rows = summarizeCapabilities(currentRopCorpus);
+    const capRows = summarizeCapabilities(currentRopCorpus);
     const stats = discoveries.reduce(
       (total, discovery) => ({
         patterns: total.patterns + discovery.stats.patterns,
@@ -313,37 +342,64 @@ function bindApi(): OsedApi {
     for (let i = 0; i < modules.length; i++) {
       const mod = modules[i];
       const disc = discoveries[i];
-      if (mod && disc.stats.scanned > 0 && disc.stats.discovered === 0 && badcharsArray.length > 0) {
-        const baseWarning = diagnoseModuleBadchars(mod, badcharsArray);
-        if (baseWarning) warnings.push(baseWarning);
+      const accepted = disc.stats.discovered;
+      const rejected = disc.stats.scanned - accepted;
+      let reason: string | undefined;
+      if (mod && disc.stats.scanned > 0 && accepted === 0 && badcharsArray.length > 0) {
+        reason = diagnoseModuleBadchars(mod, badcharsArray);
+        if (reason) warnings.push(reason);
       }
+      corpusModules.push({
+        name: mod ?? "<all>",
+        accepted,
+        rejected,
+        usable: accepted > 0,
+        reason,
+      });
     }
-    out.section("Live ROP Corpus Loaded");
-    out.info(`Modules: ${modules.map((module) => module ?? "<all>").join(", ")}`);
+
+    out.section("Scan Results");
+    for (let i = 0; i < modules.length; i++) {
+      const mod = modules[i] ?? "<all>";
+      const disc = discoveries[i];
+      const accepted = disc.stats.discovered;
+      const rejected = disc.stats.scanned - accepted;
+      out.info(`${mod}: ${accepted} accepted, ${rejected} rejected`);
+    }
+
+    out.section("Corpus");
     out.info(`Mode: ${append ? "append" : "replace"}`);
-    out.info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${stats.discovered} live hits)`);
-    out.info(`Capabilities: ${rows.length}`);
-    if (stats.rejected > 0) {
-      out.info(`Rejected by bad chars: ${stats.rejected}`);
-    }
+    out.info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
+    out.info(`Total gadgets: ${currentRopCorpus.gadgets.length}`);
+    out.info(`Total capabilities: ${capRows.length}`);
+
     for (const warning of warnings) {
       out.warn(warning);
     }
+
     setResult({
       command: "rop.scan_live",
       args: { modules, append, ...options },
       success: true,
-      findings: [{ modules: modules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length, ...stats }],
+      findings: [{ modules: corpusModules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: capRows.length, ...stats }],
       warnings,
       errors: [],
     });
-    return toDxResult("Live ROP Corpus Loaded", [
+    return toDxResult("Live ROP Corpus", [
+      ...modules.map((mod, i) => {
+        const disc = discoveries[i];
+        return {
+          Section: "Scan",
+          Module: mod ?? "<all>",
+          Accepted: disc.stats.discovered.toString(),
+          Rejected: (disc.stats.scanned - disc.stats.discovered).toString(),
+        };
+      }),
       {
-        Corpus: "live",
-        Mode: append ? "append" : "replace",
-        Modules: modules.map((module) => module ?? "<all>").join(", "),
-        Gadgets: currentRopCorpus.gadgets.length.toString(),
-        Capabilities: rows.length.toString(),
+        Section: "Corpus",
+        Module: corpusModules.map((m) => m.name).join(", "),
+        Accepted: currentRopCorpus.gadgets.length.toString(),
+        Rejected: capRows.length.toString(),
       },
     ]);
   };
@@ -1295,9 +1351,11 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
 function initialize(): void {
   currentRopCorpus = undefined;
   invalidateCorpusPlans();
+  resetCorpusModules();
   registry.setReloader(() => {
     currentRopCorpus = undefined;
     invalidateCorpusPlans();
+    resetCorpusModules();
     registerAll();
     osed = bindApi();
     publishOsed();
