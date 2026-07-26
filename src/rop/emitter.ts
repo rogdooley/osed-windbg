@@ -1,5 +1,5 @@
 import { CapabilityIndex } from "./capabilities";
-import { RopStrategyPlan, StrategyPlan } from "./planner";
+import { ExploitStrategy, RopStrategyPlan, StrategyPlan } from "./planner";
 import { CapabilityKind, RopGadget } from "./types";
 
 export interface EmittedGadget {
@@ -15,6 +15,7 @@ export interface EmittedGadget {
 
 export interface EmissionResult {
   planId: number;
+  strategy: ExploitStrategy;
   strategyId: number;
   shape: StrategyPlan["shape"];
   success: boolean;
@@ -70,6 +71,7 @@ export class RankedSemanticEmitter implements RopEmitter {
     if (!strategy) {
       return {
         planId: plan.id,
+        strategy: plan.strategy,
         strategyId: strategyId ?? 0,
         shape: "RET_DISPATCH",
         success: false,
@@ -81,6 +83,7 @@ export class RankedSemanticEmitter implements RopEmitter {
     if (!strategy.possible) {
       return {
         planId: plan.id,
+        strategy: plan.strategy,
         strategyId: strategy.id,
         shape: strategy.shape,
         success: false,
@@ -113,6 +116,7 @@ export class RankedSemanticEmitter implements RopEmitter {
 
     return {
       planId: plan.id,
+      strategy: plan.strategy,
       strategyId: strategy.id,
       shape: strategy.shape,
       success: missing.length === 0,
@@ -129,8 +133,7 @@ export function emissionRows(result: EmissionResult): Array<Record<string, strin
   if (result.gadgets.length === 0) {
     return [{
       Plan: result.planId.toString(),
-      Strategy: result.strategyId.toString(),
-      Shape: result.shape,
+      Strategy: `${result.strategy} / ${result.shape}`,
       Status: result.success ? "ok" : "unavailable",
       Missing: result.missing.join(", "),
       Diagnostic: result.diagnostics.join(" "),
@@ -138,8 +141,7 @@ export function emissionRows(result: EmissionResult): Array<Record<string, strin
   }
   return result.gadgets.map((gadget) => ({
     Plan: result.planId.toString(),
-    Strategy: result.strategyId.toString(),
-    Shape: result.shape,
+    Strategy: `${result.strategy} / ${result.shape}`,
     Capability: gadget.capability,
     Address: `0x${gadget.address.toString(16).toUpperCase()}`,
     Module: gadget.module,

@@ -813,8 +813,14 @@ function bindApi(): OsedApi {
 
     const plan = planVirtualProtect(currentRopCorpus, params);
     const python = formatChainPython(plan);
+    const sectionLabel = plan.hasPushad
+      ? "ROP Chain — VirtualProtect (PUSHAD)"
+      : "ROP Register Setup — VirtualProtect (PUSHAD missing)";
 
-    out.section("ROP Chain — VirtualProtect (PUSHAD)");
+    out.section(sectionLabel);
+    if (!plan.hasPushad) {
+      out.warn("pushad ; ret gadget not found — output is a partial register-setup sketch, not an executable chain. Use frame_vp for a flat stdcall frame instead.");
+    }
     out.info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
     if (plan.placeholders.length > 0) {
       out.info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
@@ -833,16 +839,16 @@ function bindApi(): OsedApi {
         : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
       Meaning: step.comment,
     }));
-    renderRows("ROP VirtualProtect Chain", rows);
+    renderRows(sectionLabel, rows);
     setResult({
       command: "rop.chain_vp",
       args: options,
-      success: plan.unsatisfied.length === 0,
+      success: plan.hasPushad && plan.unsatisfied.length === 0,
       findings: [{ ...plan, python }],
       warnings,
       errors: [],
     });
-    return toDxResult("ROP VirtualProtect Chain", rows);
+    return toDxResult(sectionLabel, rows);
   };
 
   const executeRopChainWpm = (...args: unknown[]): DxResult => {
@@ -875,8 +881,14 @@ function bindApi(): OsedApi {
 
     const plan = planWriteProcessMemory(currentRopCorpus, params);
     const python = formatChainPython(plan);
+    const sectionLabel = plan.hasPushad
+      ? "ROP Chain — WriteProcessMemory (PUSHAD)"
+      : "ROP Register Setup — WriteProcessMemory (PUSHAD missing)";
 
-    out.section("ROP Chain — WriteProcessMemory (PUSHAD)");
+    out.section(sectionLabel);
+    if (!plan.hasPushad) {
+      out.warn("pushad ; ret gadget not found — output is a partial register-setup sketch, not an executable chain. Use frame_wpm for a flat stdcall frame instead.");
+    }
     out.info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
     if (plan.placeholders.length > 0) {
       out.info(`Define before use: ${plan.placeholders.join(", ")}`);
@@ -895,16 +907,16 @@ function bindApi(): OsedApi {
         : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
       Meaning: step.comment,
     }));
-    renderRows("ROP WriteProcessMemory Chain", rows);
+    renderRows(sectionLabel, rows);
     setResult({
       command: "rop.chain_wpm",
       args: options,
-      success: plan.unsatisfied.length === 0,
+      success: plan.hasPushad && plan.unsatisfied.length === 0,
       findings: [{ ...plan, python }],
       warnings,
       errors: [],
     });
-    return toDxResult("ROP WriteProcessMemory Chain", rows);
+    return toDxResult(sectionLabel, rows);
   };
 
   const executeRopChainVa = (...args: unknown[]): DxResult => {
@@ -937,8 +949,14 @@ function bindApi(): OsedApi {
 
     const plan = planVirtualAlloc(currentRopCorpus, params);
     const python = formatChainPython(plan);
+    const sectionLabel = plan.hasPushad
+      ? "ROP Chain — VirtualAlloc (PUSHAD)"
+      : "ROP Register Setup — VirtualAlloc (PUSHAD missing)";
 
-    out.section("ROP Chain — VirtualAlloc (PUSHAD)");
+    out.section(sectionLabel);
+    if (!plan.hasPushad) {
+      out.warn("pushad ; ret gadget not found — output is a partial register-setup sketch, not an executable chain. Use frame_va for a flat stdcall frame instead.");
+    }
     out.info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
     if (plan.placeholders.length > 0) {
       out.info(`Define before use: ${plan.placeholders.join(", ")}`);
@@ -957,16 +975,16 @@ function bindApi(): OsedApi {
         : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
       Meaning: step.comment,
     }));
-    renderRows("ROP VirtualAlloc Chain", rows);
+    renderRows(sectionLabel, rows);
     setResult({
       command: "rop.chain_va",
       args: options,
-      success: plan.unsatisfied.length === 0,
+      success: plan.hasPushad && plan.unsatisfied.length === 0,
       findings: [{ ...plan, python }],
       warnings,
       errors: [],
     });
-    return toDxResult("ROP VirtualAlloc Chain", rows);
+    return toDxResult(sectionLabel, rows);
   };
 
   const executeRopFrameVp = (...args: unknown[]): DxResult => {

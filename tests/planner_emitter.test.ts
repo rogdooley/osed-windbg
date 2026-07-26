@@ -37,7 +37,7 @@ describe("semantic ROP planning and emission", () => {
     });
   });
 
-  test("IAT planning adds a semantic dereference requirement", () => {
+  test("IAT planning adds a semantic dereference requirement to non-exempt shapes", () => {
     const index = buildCapabilityIndexFromRpPlusText(
       "0x1000: pop eax ; ret ;\n0x2000: mov esi, eax ; ret ;",
       { provenance },
@@ -47,10 +47,11 @@ describe("semantic ROP planning and emission", () => {
       strategy: "VirtualProtect",
       apiResolution: "iat",
     });
-    const retDispatch = plan.strategies.find((strategy) => strategy.shape === "RET_DISPATCH");
+    const pushad = plan.strategies.find((strategy) => strategy.shape === "PUSHAD_DISPATCH");
+    expect(pushad?.required).toContain("LOAD_MEMORY");
 
-    expect(retDispatch?.required).toContain("LOAD_MEMORY");
-    expect(retDispatch?.missing).toContain("LOAD_MEMORY");
+    const retDispatch = plan.strategies.find((strategy) => strategy.shape === "RET_DISPATCH");
+    expect(retDispatch?.required).not.toContain("LOAD_MEMORY");
   });
 
   test("emitter selects concrete gadgets only after strategy selection", () => {

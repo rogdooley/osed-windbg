@@ -3859,13 +3859,19 @@ var osed_bundle = (() => {
     return [...new Set(values)];
   }
   function definitionsFor(strategy) {
+    const apiName = strategy === "Stack Pivot" ? "continuation" : strategy;
     if (strategy === "Stack Pivot") {
       return [
         {
           shape: "STACK_PIVOT_FRAME",
           complexity: "LOW",
           required: ["STACK_PIVOT", "DISPATCH_RET"],
-          assumptions: ["A controlled stack region can hold the continuation frame."]
+          assumptions: [],
+          preconditions: [
+            "A controlled, writable memory region can hold the continuation frame.",
+            "The pivot source register or memory contains a valid pointer to the controlled region."
+          ],
+          iatExempt: true
         }
       ];
     }
@@ -3874,37 +3880,71 @@ var osed_bundle = (() => {
         shape: "SYNTHETIC_STDCALL_FRAME",
         complexity: "LOW",
         required: ["DISPATCH_RET"],
-        assumptions: ["The stack is writable and sufficiently controlled to place a flat stdcall frame."]
+        assumptions: [],
+        preconditions: [
+          "EIP is controlled (e.g. via SEH overwrite or saved return address).",
+          `ESP points to or can reach a region with ${strategy === "WriteProcessMemory" ? "28" : "24"}+ contiguous controlled bytes.`,
+          `${apiName} address is known or resolvable at exploit time.`,
+          "All frame values are encodable under the current charset."
+        ],
+        iatExempt: true
       },
       {
         shape: "STACK_PIVOT_FRAME",
         complexity: "LOW",
         required: ["STACK_PIVOT", "DISPATCH_RET"],
-        assumptions: ["A writable controlled region can hold the synthetic frame."]
+        assumptions: [],
+        preconditions: [
+          "A controlled, writable memory region can hold the synthetic frame.",
+          "The pivot source register or memory contains a valid pointer to the controlled region.",
+          `${apiName} address is known or resolvable at exploit time.`
+        ],
+        iatExempt: true
       },
       {
         shape: "RET_DISPATCH",
-        complexity: "MEDIUM",
-        required: ["LOAD_CONSTANT", "REGISTER_TRANSFER", "DISPATCH_RET"],
-        assumptions: ["Required API arguments can be represented or synthesized without forbidden bytes."]
+        complexity: "LOW",
+        required: ["DISPATCH_RET"],
+        assumptions: [],
+        preconditions: [
+          "ESP points to a controlled region large enough for the stdcall frame.",
+          `${apiName} address is encodable and placed at ESP when ret executes.`,
+          "Stdcall arguments follow the API address on the stack."
+        ],
+        iatExempt: true
       },
       {
         shape: "PUSHAD_DISPATCH",
         complexity: "MEDIUM",
         required: ["LOAD_CONSTANT", "DISPATCH_PUSHAD"],
-        assumptions: ["The target ABI and register layout are compatible with PUSHAD dispatch."]
+        assumptions: [],
+        preconditions: [
+          "Registers can be loaded with the required API arguments via pop gadgets.",
+          `The PUSHAD stack layout matches the ${apiName} stdcall ABI.`,
+          "ESP at pushad time points into the shellcode or NOP sled (used as lpAddress)."
+        ]
       },
       {
         shape: "CALL_REGISTER",
         complexity: "HIGH",
         required: ["LOAD_CONSTANT", "DISPATCH_CALL_REGISTER"],
-        assumptions: ["A usable return continuation exists after the call."]
+        assumptions: [],
+        preconditions: [
+          `The API address must be loaded into the dispatch register before call.`,
+          `A valid stdcall frame for ${apiName} must exist at [ESP] when call executes (return addr is pushed by call).`,
+          "The call target must not clobber registers or stack state needed by the API."
+        ]
       },
       {
         shape: "JMP_REGISTER",
         complexity: "HIGH",
         required: ["LOAD_CONSTANT", "DISPATCH_JMP_REGISTER"],
-        assumptions: ["The selected API or dispatcher does not need an implicit return continuation."]
+        assumptions: [],
+        preconditions: [
+          `The API address must be loaded into the dispatch register before jmp.`,
+          `ESP must point to: [RETURN_ADDR][arg1][arg2]... since jmp does not push a return address.`,
+          `The full ${apiName} stdcall frame must already be on the stack.`
+        ]
       }
     ];
   }
@@ -3923,21 +3963,24 @@ var osed_bundle = (() => {
     const strategies = definitions.map((definition, offset) => {
       const required = unique([
         ...definition.required,
-        ...apiResolution === "iat" && definition.shape !== "SYNTHETIC_STDCALL_FRAME" ? ["LOAD_MEMORY"] : []
+        ...apiResolution === "iat" && !definition.iatExempt ? ["LOAD_MEMORY"] : []
       ]);
       const satisfied = required.filter((capability) => availableSet.has(capability));
       const missing = required.filter((capability) => !availableSet.has(capability));
+      const hasPreconditions = definition.preconditions.length > 0;
       return {
         id: offset + 1,
         shape: definition.shape,
         possible: missing.length === 0,
+        feasibility: missing.length === 0 && hasPreconditions ? "exploit-state-dependent" : missing.length === 0 ? "capability-feasible" : "exploit-state-dependent",
         recommended: false,
         complexity: definition.complexity,
         required,
         satisfied,
         missing,
         assumptions: definition.assumptions,
-        reason: missing.length === 0 ? "All required semantic capabilities exist in the corpus." : `Missing semantic capabilities: ${missing.join(", ")}.`
+        preconditions: definition.preconditions,
+        reason: missing.length === 0 ? "All required capabilities present. Exploit-state preconditions must be verified." : `Missing semantic capabilities: ${missing.join(", ")}.`
       };
     });
     const recommendation = strategies.find((strategy) => strategy.possible);
@@ -3958,12 +4001,13 @@ var osed_bundle = (() => {
       Strategy: plan.strategy,
       Shape: strategy.shape,
       Possible: strategy.possible ? "yes" : "no",
+      Feasibility: strategy.possible ? strategy.feasibility : "",
       Recommended: strategy.recommended ? "yes" : "",
       Complexity: strategy.complexity,
       Required: strategy.required.join(", "),
       Satisfied: strategy.satisfied.join(", "),
       Missing: strategy.missing.join(", "),
-      Assumptions: strategy.assumptions.join(" "),
+      Preconditions: strategy.preconditions.join(" | "),
       Reason: strategy.reason
     }));
   }
@@ -3999,6 +4043,7 @@ var osed_bundle = (() => {
       if (!strategy) {
         return {
           planId: plan.id,
+          strategy: plan.strategy,
           strategyId: strategyId != null ? strategyId : 0,
           shape: "RET_DISPATCH",
           success: false,
@@ -4010,6 +4055,7 @@ var osed_bundle = (() => {
       if (!strategy.possible) {
         return {
           planId: plan.id,
+          strategy: plan.strategy,
           strategyId: strategy.id,
           shape: strategy.shape,
           success: false,
@@ -4040,6 +4086,7 @@ var osed_bundle = (() => {
       }
       return {
         planId: plan.id,
+        strategy: plan.strategy,
         strategyId: strategy.id,
         shape: strategy.shape,
         success: missing.length === 0,
@@ -4053,8 +4100,7 @@ var osed_bundle = (() => {
     if (result3.gadgets.length === 0) {
       return [{
         Plan: result3.planId.toString(),
-        Strategy: result3.strategyId.toString(),
-        Shape: result3.shape,
+        Strategy: `${result3.strategy} / ${result3.shape}`,
         Status: result3.success ? "ok" : "unavailable",
         Missing: result3.missing.join(", "),
         Diagnostic: result3.diagnostics.join(" ")
@@ -4064,8 +4110,7 @@ var osed_bundle = (() => {
       var _a, _b;
       return {
         Plan: result3.planId.toString(),
-        Strategy: result3.strategyId.toString(),
-        Shape: result3.shape,
+        Strategy: `${result3.strategy} / ${result3.shape}`,
         Capability: gadget.capability,
         Address: `0x${gadget.address.toString(16).toUpperCase()}`,
         Module: gadget.module,
@@ -9341,8 +9386,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T21:04:25.945Z",
-      gitCommit: "e41a2119d1cd",
+      buildTime: "2026-07-26T21:22:04.887Z",
+      gitCommit: "4a098bef9be7",
       gitDirty: true
     };
   }
@@ -10445,7 +10490,11 @@ var osed_bundle = (() => {
       };
       const plan = planVirtualProtect(currentRopCorpus, params);
       const python = formatChainPython(plan);
-      section("ROP Chain \u2014 VirtualProtect (PUSHAD)");
+      const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualProtect (PUSHAD)" : "ROP Register Setup \u2014 VirtualProtect (PUSHAD missing)";
+      section(sectionLabel);
+      if (!plan.hasPushad) {
+        warn("pushad ; ret gadget not found \u2014 output is a partial register-setup sketch, not an executable chain. Use frame_vp for a flat stdcall frame instead.");
+      }
       info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) {
         info(`Define before use: ${plan.placeholders.join(", ")} (e.g. VIRTUALPROTECT via sc.iat_find("VirtualProtect"))`);
@@ -10464,16 +10513,16 @@ var osed_bundle = (() => {
           Meaning: step.comment
         };
       });
-      renderRows("ROP VirtualProtect Chain", rows);
+      renderRows(sectionLabel, rows);
       setResult({
         command: "rop.chain_vp",
         args: options,
-        success: plan.unsatisfied.length === 0,
+        success: plan.hasPushad && plan.unsatisfied.length === 0,
         findings: [__spreadProps(__spreadValues({}, plan), { python })],
         warnings,
         errors: []
       });
-      return toDxResult("ROP VirtualProtect Chain", rows);
+      return toDxResult(sectionLabel, rows);
     };
     const executeRopChainWpm = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -10501,7 +10550,11 @@ var osed_bundle = (() => {
       };
       const plan = planWriteProcessMemory(currentRopCorpus, params);
       const python = formatChainPython(plan);
-      section("ROP Chain \u2014 WriteProcessMemory (PUSHAD)");
+      const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 WriteProcessMemory (PUSHAD)" : "ROP Register Setup \u2014 WriteProcessMemory (PUSHAD missing)";
+      section(sectionLabel);
+      if (!plan.hasPushad) {
+        warn("pushad ; ret gadget not found \u2014 output is a partial register-setup sketch, not an executable chain. Use frame_wpm for a flat stdcall frame instead.");
+      }
       info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) {
         info(`Define before use: ${plan.placeholders.join(", ")}`);
@@ -10520,16 +10573,16 @@ var osed_bundle = (() => {
           Meaning: step.comment
         };
       });
-      renderRows("ROP WriteProcessMemory Chain", rows);
+      renderRows(sectionLabel, rows);
       setResult({
         command: "rop.chain_wpm",
         args: options,
-        success: plan.unsatisfied.length === 0,
+        success: plan.hasPushad && plan.unsatisfied.length === 0,
         findings: [__spreadProps(__spreadValues({}, plan), { python })],
         warnings,
         errors: []
       });
-      return toDxResult("ROP WriteProcessMemory Chain", rows);
+      return toDxResult(sectionLabel, rows);
     };
     const executeRopChainVa = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -10557,7 +10610,11 @@ var osed_bundle = (() => {
       };
       const plan = planVirtualAlloc(currentRopCorpus, params);
       const python = formatChainPython(plan);
-      section("ROP Chain \u2014 VirtualAlloc (PUSHAD)");
+      const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualAlloc (PUSHAD)" : "ROP Register Setup \u2014 VirtualAlloc (PUSHAD missing)";
+      section(sectionLabel);
+      if (!plan.hasPushad) {
+        warn("pushad ; ret gadget not found \u2014 output is a partial register-setup sketch, not an executable chain. Use frame_va for a flat stdcall frame instead.");
+      }
       info(`Mode: ${plan.mode} | Resolved gadgets: ${plan.satisfied.join(", ") || "(none)"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) {
         info(`Define before use: ${plan.placeholders.join(", ")}`);
@@ -10576,16 +10633,16 @@ var osed_bundle = (() => {
           Meaning: step.comment
         };
       });
-      renderRows("ROP VirtualAlloc Chain", rows);
+      renderRows(sectionLabel, rows);
       setResult({
         command: "rop.chain_va",
         args: options,
-        success: plan.unsatisfied.length === 0,
+        success: plan.hasPushad && plan.unsatisfied.length === 0,
         findings: [__spreadProps(__spreadValues({}, plan), { python })],
         warnings,
         errors: []
       });
-      return toDxResult("ROP VirtualAlloc Chain", rows);
+      return toDxResult(sectionLabel, rows);
     };
     const executeRopFrameVp = (...args) => {
       if (args.length === 1 && args[0] === "help") {

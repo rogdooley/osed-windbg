@@ -7,6 +7,7 @@ import {
   mergeCapabilityIndexes,
   normalizeExploitStrategy,
   planExploitStrategy,
+  planVirtualProtect,
   RankedSemanticEmitter,
   strategyPlanRows,
   type CapabilityIndex,
@@ -103,7 +104,22 @@ describe("plan output contains no addresses", () => {
 });
 
 describe("IAT planning", () => {
-  test("IAT mode adds LOAD_MEMORY to non-flat strategies", () => {
+  test("IAT mode adds LOAD_MEMORY to non-exempt strategies", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;",
+      { provenance },
+    );
+    const plan = planExploitStrategy(index, {
+      strategy: "VirtualProtect",
+      apiResolution: "iat",
+    });
+    const pushad = plan.strategies.find((s) => s.shape === "PUSHAD_DISPATCH");
+    expect(pushad?.required).toContain("LOAD_MEMORY");
+    const callReg = plan.strategies.find((s) => s.shape === "CALL_REGISTER");
+    expect(callReg?.required).toContain("LOAD_MEMORY");
+  });
+
+  test("IAT mode does not add LOAD_MEMORY to RET_DISPATCH (flat shape)", () => {
     const index = buildCapabilityIndexFromRpPlusText(
       "0x1000: pop eax ; ret ;",
       { provenance },
@@ -113,7 +129,7 @@ describe("IAT planning", () => {
       apiResolution: "iat",
     });
     const retDispatch = plan.strategies.find((s) => s.shape === "RET_DISPATCH");
-    expect(retDispatch?.required).toContain("LOAD_MEMORY");
+    expect(retDispatch?.required).not.toContain("LOAD_MEMORY");
   });
 
   test("IAT mode does not add LOAD_MEMORY to SYNTHETIC_STDCALL_FRAME", () => {
@@ -348,6 +364,76 @@ describe("scan_live positional arg parsing", () => {
     const withNumberOnly = parseScanLivePositionalArgs(["crypto", "00 0A 0D", 10]);
     expect(withNumberOnly.maxPerPattern).toBe(10);
     expect(withNumberOnly.append).toBeUndefined();
+  });
+});
+
+describe("planner feasibility and preconditions", () => {
+  test("possible strategies have exploit-state-dependent feasibility", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;",
+      { provenance },
+    );
+    const plan = planExploitStrategy(index, { strategy: "VirtualProtect" });
+    const flat = plan.strategies.find((s) => s.shape === "SYNTHETIC_STDCALL_FRAME");
+    expect(flat?.possible).toBe(true);
+    expect(flat?.feasibility).toBe("exploit-state-dependent");
+  });
+
+  test("possible strategies include preconditions", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;",
+      { provenance },
+    );
+    const plan = planExploitStrategy(index, { strategy: "VirtualProtect" });
+    const flat = plan.strategies.find((s) => s.shape === "SYNTHETIC_STDCALL_FRAME");
+    expect(flat?.preconditions.length).toBeGreaterThan(0);
+    expect(flat?.preconditions.some((p) => p.includes("EIP"))).toBe(true);
+  });
+
+  test("plan rows include Feasibility and Preconditions columns", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;",
+      { provenance },
+    );
+    const plan = planExploitStrategy(index, { strategy: "VirtualAlloc" });
+    const rows = strategyPlanRows(plan);
+    for (const row of rows) {
+      expect(Object.keys(row)).toContain("Feasibility");
+      expect(Object.keys(row)).toContain("Preconditions");
+    }
+  });
+
+  test("emission result strategy shows name not numeric ID", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;",
+      { provenance },
+    );
+    const plan = planExploitStrategy(index, { strategy: "VirtualAlloc" });
+    const result = new RankedSemanticEmitter().emit(index, plan);
+    const rows = emissionRows(result);
+    expect(rows[0].Strategy).toContain("VirtualAlloc");
+    expect(rows[0].Strategy).not.toMatch(/^\d+$/);
+  });
+});
+
+describe("chain_vp incomplete labeling", () => {
+  test("plan without pushad reports hasPushad false", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;\n0x2000: pop ebx ; ret ;",
+      { provenance },
+    );
+    const plan = planVirtualProtect(index);
+    expect(plan.hasPushad).toBe(false);
+    expect(plan.unsatisfied.some((u) => u.register === "pushad")).toBe(true);
+  });
+
+  test("plan with pushad reports hasPushad true", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: pop eax ; ret ;\n0x2000: pushad ; ret ;",
+      { provenance },
+    );
+    const plan = planVirtualProtect(index);
+    expect(plan.hasPushad).toBe(true);
   });
 });
 
