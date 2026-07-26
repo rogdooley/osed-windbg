@@ -151,4 +151,15 @@ describe("help command", () => {
     expect(rendered).toContain("0x75537060  first");
     expect(rendered).toContain("0x1         second");
   });
+
+  test("empty tables produce no output", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+    };
+
+    table([{ key: "Value", header: "Value" }], []);
+
+    expect(logs).toEqual([]);
+  });
 });

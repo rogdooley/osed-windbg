@@ -114,16 +114,18 @@ function scanForPattern(name: string, pattern: GadgetPattern, options: ScanOptio
     }))
     .sort((a, b) => (a.address < b.address ? -1 : 1));
 
-  out.section(name);
-  out.table(
-    [
-      { key: "address", header: "Address", width: 18 },
-      { key: "mnemonic", header: "Mnemonic", width: 18 },
-      { key: "bytes", header: "Bytes", width: 16 },
-      { key: "py", header: "Python", width: 14 },
-    ],
-    rows,
-  );
+  if (rows.length > 0) {
+    out.section(name);
+    out.table(
+      [
+        { key: "address", header: "Address", width: 18 },
+        { key: "mnemonic", header: "Mnemonic", width: 18 },
+        { key: "bytes", header: "Bytes", width: 16 },
+        { key: "py", header: "Python", width: 14 },
+      ],
+      rows,
+    );
+  }
 
   return {
     command: name,

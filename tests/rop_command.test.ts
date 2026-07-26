@@ -105,4 +105,27 @@ describe("rop_suggest command", () => {
     expect(result?.findings).toEqual([textStart + BigInt(0x1000)]);
     expect(result?.stats?.results).toBe(1);
   });
+
+  test("legacy suggestions do not print sections for patterns with no matches", () => {
+    const { image, base } = makeImageWithTextSection();
+    const logs: string[] = [];
+    installPeBackedHost(image, base);
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host.diagnostics = {
+      debugLog: (line: string) => logs.push(line),
+    };
+
+    const ropSuggest = createRopCommands().find((command) => command.name === "rop_suggest");
+    const result = ropSuggest?.execute({
+      module: "target",
+      executableOnly: true,
+      maxResults: 10,
+      mode: "fast",
+      engine: "legacy",
+    });
+
+    expect(result?.success).toBe(true);
+    expect(result?.findings).toEqual([]);
+    expect(logs.join("")).not.toContain("ROP Suggest:");
+    expect(logs.join("")).not.toContain("(no rows)");
+  });
 });

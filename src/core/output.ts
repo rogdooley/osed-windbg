@@ -68,7 +68,6 @@ export function table(columns: TableColumn[], rows: Array<Record<string, string>
   );
 
   if (rows.length === 0 || !hasVisibleValues) {
-    write("(no rows)");
     return;
   }
 

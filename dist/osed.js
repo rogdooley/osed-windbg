@@ -288,7 +288,6 @@ var osed_bundle = (() => {
       })
     );
     if (rows.length === 0 || !hasVisibleValues) {
-      write("(no rows)");
       return;
     }
     const widths = columns.map((column) => {
@@ -4619,16 +4618,18 @@ var osed_bundle = (() => {
       bytes: hit.bytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" "),
       py: `0x${hit.address.toString(16).toUpperCase()}`
     })).sort((a, b) => a.address < b.address ? -1 : 1);
-    section(name);
-    table(
-      [
-        { key: "address", header: "Address", width: 18 },
-        { key: "mnemonic", header: "Mnemonic", width: 18 },
-        { key: "bytes", header: "Bytes", width: 16 },
-        { key: "py", header: "Python", width: 14 }
-      ],
-      rows
-    );
+    if (rows.length > 0) {
+      section(name);
+      table(
+        [
+          { key: "address", header: "Address", width: 18 },
+          { key: "mnemonic", header: "Mnemonic", width: 18 },
+          { key: "bytes", header: "Bytes", width: 16 },
+          { key: "py", header: "Python", width: 14 }
+        ],
+        rows
+      );
+    }
     return {
       command: name,
       args: options,
@@ -8582,6 +8583,9 @@ var osed_bundle = (() => {
     };
     const wantsHelp = (value) => value === "help";
     const renderAndReturn = (title, rows) => {
+      if (rows.length === 0) {
+        return toDxResult(title, rows);
+      }
       section(title);
       if (rows.length > 0 && "Error" in rows[0]) {
         error(rows[0].Error);
@@ -8895,8 +8899,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T19:10:01.527Z",
-      gitCommit: "3cc4c1dff463",
+      buildTime: "2026-07-26T20:03:21.227Z",
+      gitCommit: "b932b76fd6cf",
       gitDirty: true
     };
   }
@@ -9408,6 +9412,9 @@ var osed_bundle = (() => {
       lastResult = result3;
     };
     const renderRows = (title, rows) => {
+      if (rows.length === 0) {
+        return;
+      }
       section(title);
       if (rows.length > 0 && "Error" in rows[0]) {
         error(rows[0].Error);

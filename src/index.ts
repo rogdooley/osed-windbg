@@ -150,6 +150,9 @@ function bindApi(): OsedApi {
   };
 
   const renderRows = (title: string, rows: Array<Record<string, string>>): void => {
+    if (rows.length === 0) {
+      return;
+    }
     out.section(title);
     if (rows.length > 0 && "Error" in rows[0]) {
       out.error(rows[0].Error);

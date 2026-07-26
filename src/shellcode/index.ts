@@ -1732,6 +1732,9 @@ export function createShellcodeNamespace(): {
   };
   const wantsHelp = (value: unknown): boolean => value === "help";
   const renderAndReturn = (title: string, rows: Array<Record<string, string>>): DxResult => {
+    if (rows.length === 0) {
+      return toDxResult(title, rows);
+    }
     out.section(title);
     if (rows.length > 0 && "Error" in rows[0]) {
       out.error(rows[0].Error);
