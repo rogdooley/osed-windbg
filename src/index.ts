@@ -349,29 +349,38 @@ function bindApi(): OsedApi {
         reason = diagnoseModuleBadchars(mod, badcharsArray);
         if (reason) warnings.push(reason);
       }
-      corpusModules.push({
-        name: mod ?? "<all>",
-        accepted,
-        rejected,
-        usable: accepted > 0,
-        reason,
-      });
+      const modName = mod ?? "<all>";
+      const existing = corpusModules.find((m) => m.name === modName);
+      if (existing) {
+        existing.accepted = accepted;
+        existing.rejected = rejected;
+        existing.usable = accepted > 0;
+        existing.reason = reason;
+      } else {
+        corpusModules.push({
+          name: modName,
+          accepted,
+          rejected,
+          usable: accepted > 0,
+          reason,
+        });
+      }
     }
 
-    out.section("Scan Results");
+    out.section("Module Scan");
     for (let i = 0; i < modules.length; i++) {
       const mod = modules[i] ?? "<all>";
       const disc = discoveries[i];
       const accepted = disc.stats.discovered;
       const rejected = disc.stats.scanned - accepted;
-      out.info(`${mod}: ${accepted} accepted, ${rejected} rejected`);
+      out.info(`${mod}: ${accepted} raw gadgets accepted, ${rejected} rejected`);
     }
 
-    out.section("Corpus");
+    out.section("Corpus Summary");
     out.info(`Mode: ${append ? "append" : "replace"}`);
     out.info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
-    out.info(`Total gadgets: ${currentRopCorpus.gadgets.length}`);
-    out.info(`Total capabilities: ${capRows.length}`);
+    out.info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
+    out.info(`Capabilities: ${capRows.length}`);
 
     for (const warning of warnings) {
       out.warn(warning);
@@ -385,21 +394,24 @@ function bindApi(): OsedApi {
       warnings,
       errors: [],
     });
+    const uniqueModuleNames = corpusModules.map((m) => m.name).join(", ");
     return toDxResult("Live ROP Corpus", [
       ...modules.map((mod, i) => {
         const disc = discoveries[i];
         return {
-          Section: "Scan",
+          Section: "Module Scan",
           Module: mod ?? "<all>",
-          Accepted: disc.stats.discovered.toString(),
+          "Raw Accepted": disc.stats.discovered.toString(),
           Rejected: (disc.stats.scanned - disc.stats.discovered).toString(),
         };
       }),
       {
-        Section: "Corpus",
-        Module: corpusModules.map((m) => m.name).join(", "),
-        Accepted: currentRopCorpus.gadgets.length.toString(),
-        Rejected: capRows.length.toString(),
+        Section: "Corpus Summary",
+        Module: uniqueModuleNames,
+        "Raw Accepted": "",
+        Rejected: "",
+        "Semantic Gadgets": currentRopCorpus.gadgets.length.toString(),
+        Capabilities: capRows.length.toString(),
       },
     ]);
   };

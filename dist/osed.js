@@ -9341,8 +9341,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T20:56:54.033Z",
-      gitCommit: "f27087c2dae2",
+      buildTime: "2026-07-26T21:04:25.945Z",
+      gitCommit: "e41a2119d1cd",
       gitDirty: true
     };
   }
@@ -10021,27 +10021,36 @@ var osed_bundle = (() => {
           reason = diagnoseModuleBadchars(mod, badcharsArray);
           if (reason) warnings.push(reason);
         }
-        corpusModules.push({
-          name: mod != null ? mod : "<all>",
-          accepted,
-          rejected,
-          usable: accepted > 0,
-          reason
-        });
+        const modName = mod != null ? mod : "<all>";
+        const existing = corpusModules.find((m) => m.name === modName);
+        if (existing) {
+          existing.accepted = accepted;
+          existing.rejected = rejected;
+          existing.usable = accepted > 0;
+          existing.reason = reason;
+        } else {
+          corpusModules.push({
+            name: modName,
+            accepted,
+            rejected,
+            usable: accepted > 0,
+            reason
+          });
+        }
       }
-      section("Scan Results");
+      section("Module Scan");
       for (let i = 0; i < modules.length; i++) {
         const mod = (_a = modules[i]) != null ? _a : "<all>";
         const disc = discoveries[i];
         const accepted = disc.stats.discovered;
         const rejected = disc.stats.scanned - accepted;
-        info(`${mod}: ${accepted} accepted, ${rejected} rejected`);
+        info(`${mod}: ${accepted} raw gadgets accepted, ${rejected} rejected`);
       }
-      section("Corpus");
+      section("Corpus Summary");
       info(`Mode: ${append ? "append" : "replace"}`);
       info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
-      info(`Total gadgets: ${currentRopCorpus.gadgets.length}`);
-      info(`Total capabilities: ${capRows.length}`);
+      info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
+      info(`Capabilities: ${capRows.length}`);
       for (const warning of warnings) {
         warn(warning);
       }
@@ -10053,21 +10062,24 @@ var osed_bundle = (() => {
         warnings,
         errors: []
       });
+      const uniqueModuleNames = corpusModules.map((m) => m.name).join(", ");
       return toDxResult("Live ROP Corpus", [
         ...modules.map((mod, i) => {
           const disc = discoveries[i];
           return {
-            Section: "Scan",
+            Section: "Module Scan",
             Module: mod != null ? mod : "<all>",
-            Accepted: disc.stats.discovered.toString(),
+            "Raw Accepted": disc.stats.discovered.toString(),
             Rejected: (disc.stats.scanned - disc.stats.discovered).toString()
           };
         }),
         {
-          Section: "Corpus",
-          Module: corpusModules.map((m) => m.name).join(", "),
-          Accepted: currentRopCorpus.gadgets.length.toString(),
-          Rejected: capRows.length.toString()
+          Section: "Corpus Summary",
+          Module: uniqueModuleNames,
+          "Raw Accepted": "",
+          Rejected: "",
+          "Semantic Gadgets": currentRopCorpus.gadgets.length.toString(),
+          Capabilities: capRows.length.toString()
         }
       ]);
     };
