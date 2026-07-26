@@ -46,6 +46,7 @@ import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
 import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, emissionRows, formatChainPython, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type FlatFramePlan, type RopQuery, type RopStrategyPlan, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
+import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
@@ -76,6 +77,32 @@ let nextRopPlanId = 1;
 const ropPlans = new Map<number, { plan: RopStrategyPlan; generation: number }>();
 const ropEmitter = new RankedSemanticEmitter();
 const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+
+function diagnoseModuleBadchars(moduleName: string, badchars: number[]): string | undefined {
+  try {
+    const modules = listModulesWithMitigations(moduleName);
+    const mod = modules.find((m) => m.name.toLowerCase().includes(moduleName.toLowerCase()));
+    if (!mod) return undefined;
+    const badSet = new Set(badchars);
+    const base = mod.base;
+    const baseBytes: number[] = [];
+    const pointerSize = getPointerSize();
+    for (let i = 0; i < pointerSize; i++) {
+      baseBytes.push(Number((base >> BigInt(i * 8)) & BigInt(0xff)));
+    }
+    const offending = baseBytes
+      .map((b, i) => ({ byte: b, position: i }))
+      .filter((entry) => badSet.has(entry.byte));
+    if (offending.length === 0) return undefined;
+    const baseHex = `0x${base.toString(16).toUpperCase().padStart(pointerSize * 2, "0")}`;
+    const byteList = offending
+      .map((entry) => `0x${entry.byte.toString(16).toUpperCase().padStart(2, "0")} at byte ${entry.position}`)
+      .join(", ");
+    return `${mod.name} base ${baseHex} contains bad chars (${byteList}). Every address in this module is unusable under the current charset.`;
+  } catch {
+    return undefined;
+  }
+}
 
 function invalidateCorpusPlans(): void {
   corpusGeneration++;
@@ -282,6 +309,15 @@ function bindApi(): OsedApi {
       { patterns: 0, scanned: 0, discovered: 0, rejected: 0 },
     );
     const warnings = discoveries.flatMap((discovery) => discovery.warnings);
+    const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
+    for (let i = 0; i < modules.length; i++) {
+      const mod = modules[i];
+      const disc = discoveries[i];
+      if (mod && disc.stats.scanned > 0 && disc.stats.discovered === 0 && badcharsArray.length > 0) {
+        const baseWarning = diagnoseModuleBadchars(mod, badcharsArray);
+        if (baseWarning) warnings.push(baseWarning);
+      }
+    }
     out.section("Live ROP Corpus Loaded");
     out.info(`Modules: ${modules.map((module) => module ?? "<all>").join(", ")}`);
     out.info(`Mode: ${append ? "append" : "replace"}`);
@@ -289,6 +325,9 @@ function bindApi(): OsedApi {
     out.info(`Capabilities: ${rows.length}`);
     if (stats.rejected > 0) {
       out.info(`Rejected by bad chars: ${stats.rejected}`);
+    }
+    for (const warning of warnings) {
+      out.warn(warning);
     }
     setResult({
       command: "rop.scan_live",
@@ -315,12 +354,7 @@ function bindApi(): OsedApi {
     }
     const options = isPlainObject(args[0])
       ? args[0]
-      : {
-          module: args[0],
-          badchars: parseHexByteList(args[1]),
-          maxPerPattern: args[2],
-          append: args[3],
-        };
+      : parseScanLivePositionalArgs(args);
     const requested = Array.isArray(options.modules)
       ? options.modules
       : Array.isArray(options.module)
@@ -1077,6 +1111,25 @@ function bindApi(): OsedApi {
   };
 
   return api;
+}
+
+function parseScanLivePositionalArgs(args: unknown[]): Record<string, unknown> {
+  const result: Record<string, unknown> = { module: args[0] };
+  result.badchars = parseHexByteList(args[1]);
+  let idx = 2;
+  if (idx < args.length && typeof args[idx] === "boolean") {
+    result.append = args[idx];
+    idx++;
+  } else if (idx < args.length && typeof args[idx] === "number") {
+    result.maxPerPattern = args[idx];
+    idx++;
+    if (idx < args.length) {
+      result.append = args[idx];
+    }
+  } else if (idx < args.length) {
+    result.append = args[idx];
+  }
+  return result;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

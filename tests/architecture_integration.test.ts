@@ -312,6 +312,45 @@ describe("live discovery pattern coverage", () => {
   });
 });
 
+describe("scan_live positional arg parsing", () => {
+  function parseScanLivePositionalArgs(args: unknown[]): Record<string, unknown> {
+    const result: Record<string, unknown> = { module: args[0] };
+    result.badchars = args[1];
+    let idx = 2;
+    if (idx < args.length && typeof args[idx] === "boolean") {
+      result.append = args[idx];
+      idx++;
+    } else if (idx < args.length && typeof args[idx] === "number") {
+      result.maxPerPattern = args[idx];
+      idx++;
+      if (idx < args.length) {
+        result.append = args[idx];
+      }
+    } else if (idx < args.length) {
+      result.append = args[idx];
+    }
+    return result;
+  }
+
+  test("boolean in third position is treated as append, not maxPerPattern", () => {
+    const withBoolThird = parseScanLivePositionalArgs(["crypto", "00 0A 0D", true]);
+    expect(withBoolThird.append).toBe(true);
+    expect(withBoolThird.maxPerPattern).toBeUndefined();
+  });
+
+  test("number in third position is maxPerPattern, boolean in fourth is append", () => {
+    const withNumberThird = parseScanLivePositionalArgs(["crypto", "00 0A 0D", 10, true]);
+    expect(withNumberThird.maxPerPattern).toBe(10);
+    expect(withNumberThird.append).toBe(true);
+  });
+
+  test("number only in third position without fourth arg leaves append undefined", () => {
+    const withNumberOnly = parseScanLivePositionalArgs(["crypto", "00 0A 0D", 10]);
+    expect(withNumberOnly.maxPerPattern).toBe(10);
+    expect(withNumberOnly.append).toBeUndefined();
+  });
+});
+
 describe("help catalog entries", () => {
   test("plan and emit have help catalog entries", async () => {
     const { findHelpEntry } = await import("../src/core/help_catalog");

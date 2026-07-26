@@ -5708,9 +5708,10 @@ var osed_bundle = (() => {
     {
       name: "rop.scan_live",
       description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
-      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, maxPerPattern?, append?)",
+      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?)",
       examples: [
         'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
+        'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
         'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
         'dx @$osed().rop.scan_live({module:"crypto", append:true})'
       ]
@@ -9340,9 +9341,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T20:40:42.567Z",
-      gitCommit: "25c4d1a9a2f3",
-      gitDirty: false
+      buildTime: "2026-07-26T20:50:50.465Z",
+      gitCommit: "61e60361f107",
+      gitDirty: true
     };
   }
 
@@ -9785,6 +9786,27 @@ var osed_bundle = (() => {
   var ropPlans = /* @__PURE__ */ new Map();
   var ropEmitter = new RankedSemanticEmitter();
   var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+  function diagnoseModuleBadchars(moduleName, badchars) {
+    try {
+      const modules = listModulesWithMitigations(moduleName);
+      const mod = modules.find((m) => m.name.toLowerCase().includes(moduleName.toLowerCase()));
+      if (!mod) return void 0;
+      const badSet = new Set(badchars);
+      const base = mod.base;
+      const baseBytes = [];
+      const pointerSize = getPointerSize();
+      for (let i = 0; i < pointerSize; i++) {
+        baseBytes.push(Number(base >> BigInt(i * 8) & BigInt(255)));
+      }
+      const offending = baseBytes.map((b, i) => ({ byte: b, position: i })).filter((entry) => badSet.has(entry.byte));
+      if (offending.length === 0) return void 0;
+      const baseHex = `0x${base.toString(16).toUpperCase().padStart(pointerSize * 2, "0")}`;
+      const byteList2 = offending.map((entry) => `0x${entry.byte.toString(16).toUpperCase().padStart(2, "0")} at byte ${entry.position}`).join(", ");
+      return `${mod.name} base ${baseHex} contains bad chars (${byteList2}). Every address in this module is unusable under the current charset.`;
+    } catch (e) {
+      return void 0;
+    }
+  }
   function invalidateCorpusPlans() {
     corpusGeneration++;
     ropPlans.clear();
@@ -9969,6 +9991,15 @@ var osed_bundle = (() => {
         { patterns: 0, scanned: 0, discovered: 0, rejected: 0 }
       );
       const warnings = discoveries.flatMap((discovery) => discovery.warnings);
+      const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
+      for (let i = 0; i < modules.length; i++) {
+        const mod = modules[i];
+        const disc = discoveries[i];
+        if (mod && disc.stats.scanned > 0 && disc.stats.discovered === 0 && badcharsArray.length > 0) {
+          const baseWarning = diagnoseModuleBadchars(mod, badcharsArray);
+          if (baseWarning) warnings.push(baseWarning);
+        }
+      }
       section("Live ROP Corpus Loaded");
       info(`Modules: ${modules.map((module) => module != null ? module : "<all>").join(", ")}`);
       info(`Mode: ${append ? "append" : "replace"}`);
@@ -9976,6 +10007,9 @@ var osed_bundle = (() => {
       info(`Capabilities: ${rows.length}`);
       if (stats.rejected > 0) {
         info(`Rejected by bad chars: ${stats.rejected}`);
+      }
+      for (const warning of warnings) {
+        warn(warning);
       }
       setResult({
         command: "rop.scan_live",
@@ -9999,12 +10033,7 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.scan_live");
       }
-      const options = isPlainObject(args[0]) ? args[0] : {
-        module: args[0],
-        badchars: parseHexByteList(args[1]),
-        maxPerPattern: args[2],
-        append: args[3]
-      };
+      const options = isPlainObject(args[0]) ? args[0] : parseScanLivePositionalArgs(args);
       const requested = Array.isArray(options.modules) ? options.modules : Array.isArray(options.module) ? options.module : [options.module];
       const modules = requested.map((module) => module === void 0 ? void 0 : String(module).trim()).filter((module) => module === void 0 || module.length > 0);
       const parsedBadchars = parseHexByteList(options.badchars);
@@ -10697,6 +10726,24 @@ var osed_bundle = (() => {
       return lastResult == null ? void 0 : lastResult.findings[0];
     };
     return api;
+  }
+  function parseScanLivePositionalArgs(args) {
+    const result3 = { module: args[0] };
+    result3.badchars = parseHexByteList(args[1]);
+    let idx = 2;
+    if (idx < args.length && typeof args[idx] === "boolean") {
+      result3.append = args[idx];
+      idx++;
+    } else if (idx < args.length && typeof args[idx] === "number") {
+      result3.maxPerPattern = args[idx];
+      idx++;
+      if (idx < args.length) {
+        result3.append = args[idx];
+      }
+    } else if (idx < args.length) {
+      result3.append = args[idx];
+    }
+    return result3;
   }
   function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);

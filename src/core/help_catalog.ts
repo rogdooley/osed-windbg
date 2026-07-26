@@ -81,9 +81,10 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.scan_live",
     description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
-    usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, maxPerPattern?, append?)",
+    usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?)",
     examples: [
       'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
+      'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
       'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
       'dx @$osed().rop.scan_live({module:"crypto", append:true})',
     ],
