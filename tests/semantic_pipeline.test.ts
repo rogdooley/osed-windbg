@@ -4,7 +4,7 @@ import { canonicalizeInstructionSequence, normalizeInstructionText } from "../sr
 import { composeSemanticSequence } from "../src/semantics/compose";
 import { RPPlusProvider } from "../src/semantics/rpplus-provider";
 import { analyzeInstruction } from "../src/semantics/instruction-semantics";
-import { buildCapabilityIndex, buildCapabilityIndexFromRpPlusText, buildRopGadgetFromSequence, buildRopIndexFromProvider, buildRopIndexFromSequences } from "../src/rop";
+import { buildCapabilityIndex, buildCapabilityIndexFromRpPlusText, buildRopGadgetFromSequence, buildRopIndexFromProvider, buildRopIndexFromSequences, mergeCapabilityIndexes } from "../src/rop";
 
 const fixture = readFileSync(new URL("./fixtures/rpplus/basic.txt", import.meta.url), "utf8");
 
@@ -254,6 +254,40 @@ describe("semantic pipeline", () => {
     const capabilityIndex = buildCapabilityIndex(index);
     expect(capabilityIndex.loadRegister("eax").length).toBeGreaterThan(0);
     expect(capabilityIndex.stackPivotCandidates().length).toBeGreaterThan(0);
+  });
+
+  test("derives higher-level primitives while preserving legacy capabilities", async () => {
+    const sequences = await loadAll(new RPPlusProvider(
+      "0x1000: pop eax ; ret ;\n"
+      + "0x2000: mov eax, [eax] ; ret ;\n"
+      + "0x3000: xchg eax, esi ; ret ;\n"
+      + "0x4000: pushad ; ret ;",
+    ));
+    const capabilityIndex = buildCapabilityIndex(buildRopIndexFromSequences(sequences));
+
+    expect(capabilityIndex.query({ capability: "LOAD_REGISTER" })).toHaveLength(1);
+    expect(capabilityIndex.query({ capability: "LOAD_CONSTANT" })).toHaveLength(1);
+    expect(capabilityIndex.query({ capability: "LOAD_MEMORY" })).toHaveLength(1);
+    expect(capabilityIndex.query({ capability: "REGISTER_SWAP" })).toHaveLength(1);
+    expect(capabilityIndex.query({ capability: "DISPATCH_PUSHAD" })).toHaveLength(1);
+    expect(capabilityIndex.query({ capability: "DISPATCH_RET" })).toHaveLength(4);
+  });
+
+  test("merges module corpora without losing duplicate gadget locations", async () => {
+    const left = buildCapabilityIndex(buildRopIndexFromSequences(await loadAll(new RPPlusProvider(
+      "0x1000: pop eax ; ret ;",
+      { provenance: { module: "compression.dll" } },
+    ))));
+    const right = buildCapabilityIndex(buildRopIndexFromSequences(await loadAll(new RPPlusProvider(
+      "0x2000: pop eax ; ret ;\n0x3000: mov eax, [eax] ; ret ;",
+      { provenance: { module: "crypto.dll" } },
+    ))));
+
+    const merged = mergeCapabilityIndexes([left, right]);
+
+    expect(merged.gadgets).toHaveLength(2);
+    expect(merged.loadRegister("eax")[0].locations).toHaveLength(2);
+    expect(merged.query({ capability: "LOAD_MEMORY" })).toHaveLength(1);
   });
 
   test("RP++ text builds a capability index and supports semantic queries", () => {

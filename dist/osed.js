@@ -148,19 +148,19 @@ var osed_bundle = (() => {
       throw new Error("Byte arrays must contain integers in range 0x00..0xFF.");
     }
     const sorted = [...values].sort((a, b) => a - b);
-    const unique = [];
+    const unique2 = [];
     for (const value of sorted) {
-      if (unique.length === 0 || unique[unique.length - 1] !== value) {
-        unique.push(value);
+      if (unique2.length === 0 || unique2[unique2.length - 1] !== value) {
+        unique2.push(value);
       }
     }
-    if (unique.length !== values.length) {
+    if (unique2.length !== values.length) {
       return {
-        values: unique,
+        values: unique2,
         warning: "Duplicate exclude bytes were removed during normalization."
       };
     }
-    return { values: unique };
+    return { values: unique2 };
   }
 
   // src/core/registry.ts
@@ -2617,7 +2617,137 @@ var osed_bundle = (() => {
     }
     return patterns;
   }
-  var ALL_PATTERNS = [...KNOWN_PATTERNS, ...buildPprPatterns(), ...buildWritePatterns()];
+  function buildReadPatterns() {
+    const srcs = [
+      { rm: 0, name: "eax" },
+      { rm: 1, name: "ecx" },
+      { rm: 2, name: "edx" },
+      { rm: 3, name: "ebx" },
+      { rm: 6, name: "esi" },
+      { rm: 7, name: "edi" }
+    ];
+    const dsts = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 4, name: "esp" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (const src of srcs) {
+      for (const dst of dsts) {
+        const modRM = dst.code << 3 | src.rm;
+        patterns.push({
+          name: `mov_${dst.name}_mem_${src.name}_ret`,
+          bytes: [139, modRM, 195],
+          mnemonic: `mov ${dst.name}, [${src.name}] ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  function buildTransferPatterns() {
+    const regs = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (const src of regs) {
+      for (const dst of regs) {
+        if (src.code === dst.code) continue;
+        const modRM = 192 | src.code << 3 | dst.code;
+        patterns.push({
+          name: `mov_${dst.name}_${src.name}_ret`,
+          bytes: [137, modRM, 195],
+          mnemonic: `mov ${dst.name}, ${src.name} ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  function buildSwapPatterns() {
+    const regs = [
+      { code: 0, name: "eax" },
+      { code: 1, name: "ecx" },
+      { code: 2, name: "edx" },
+      { code: 3, name: "ebx" },
+      { code: 5, name: "ebp" },
+      { code: 6, name: "esi" },
+      { code: 7, name: "edi" }
+    ];
+    const patterns = [];
+    for (let i = 0; i < regs.length; i++) {
+      for (let j = i + 1; j < regs.length; j++) {
+        const modRM = 192 | regs[i].code << 3 | regs[j].code;
+        patterns.push({
+          name: `xchg_${regs[i].name}_${regs[j].name}_ret`,
+          bytes: [135, modRM, 195],
+          mnemonic: `xchg ${regs[i].name}, ${regs[j].name} ; ret`
+        });
+      }
+    }
+    return patterns;
+  }
+  var ADDITIONAL_PATTERNS = [
+    // call register — remaining GP registers (eax/esp already in KNOWN_PATTERNS)
+    { name: "call_ecx", bytes: [255, 209], mnemonic: "call ecx" },
+    { name: "call_edx", bytes: [255, 210], mnemonic: "call edx" },
+    { name: "call_ebx", bytes: [255, 211], mnemonic: "call ebx" },
+    { name: "call_ebp", bytes: [255, 213], mnemonic: "call ebp" },
+    { name: "call_esi", bytes: [255, 214], mnemonic: "call esi" },
+    { name: "call_edi", bytes: [255, 215], mnemonic: "call edi" },
+    // jmp register — remaining GP registers (eax/esp already in KNOWN_PATTERNS)
+    { name: "jmp_ecx", bytes: [255, 225], mnemonic: "jmp ecx" },
+    { name: "jmp_edx", bytes: [255, 226], mnemonic: "jmp edx" },
+    { name: "jmp_ebx", bytes: [255, 227], mnemonic: "jmp ebx" },
+    { name: "jmp_ebp", bytes: [255, 229], mnemonic: "jmp ebp" },
+    { name: "jmp_esi", bytes: [255, 230], mnemonic: "jmp esi" },
+    { name: "jmp_edi", bytes: [255, 231], mnemonic: "jmp edi" },
+    // call [register] — memory-indirect calls (DISPATCH_CALL_MEMORY)
+    { name: "call_mem_eax", bytes: [255, 16], mnemonic: "call [eax]" },
+    { name: "call_mem_ecx", bytes: [255, 17], mnemonic: "call [ecx]" },
+    { name: "call_mem_edx", bytes: [255, 18], mnemonic: "call [edx]" },
+    { name: "call_mem_ebx", bytes: [255, 19], mnemonic: "call [ebx]" },
+    { name: "call_mem_esi", bytes: [255, 22], mnemonic: "call [esi]" },
+    { name: "call_mem_edi", bytes: [255, 23], mnemonic: "call [edi]" },
+    // add esp, imm8 ; ret — small stack adjustments (0x04..0x7C, multiples of 4)
+    { name: "add_esp_4_ret", bytes: [131, 196, 4, 195], mnemonic: "add esp, 0x04 ; ret" },
+    { name: "add_esp_8_ret", bytes: [131, 196, 8, 195], mnemonic: "add esp, 0x08 ; ret" },
+    { name: "add_esp_c_ret", bytes: [131, 196, 12, 195], mnemonic: "add esp, 0x0C ; ret" },
+    { name: "add_esp_10_ret", bytes: [131, 196, 16, 195], mnemonic: "add esp, 0x10 ; ret" },
+    { name: "add_esp_14_ret", bytes: [131, 196, 20, 195], mnemonic: "add esp, 0x14 ; ret" },
+    { name: "add_esp_18_ret", bytes: [131, 196, 24, 195], mnemonic: "add esp, 0x18 ; ret" },
+    { name: "add_esp_1c_ret", bytes: [131, 196, 28, 195], mnemonic: "add esp, 0x1C ; ret" },
+    { name: "add_esp_20_ret", bytes: [131, 196, 32, 195], mnemonic: "add esp, 0x20 ; ret" },
+    { name: "add_esp_24_ret", bytes: [131, 196, 36, 195], mnemonic: "add esp, 0x24 ; ret" },
+    { name: "add_esp_28_ret", bytes: [131, 196, 40, 195], mnemonic: "add esp, 0x28 ; ret" },
+    { name: "add_esp_2c_ret", bytes: [131, 196, 44, 195], mnemonic: "add esp, 0x2C ; ret" },
+    { name: "add_esp_30_ret", bytes: [131, 196, 48, 195], mnemonic: "add esp, 0x30 ; ret" },
+    // xor reg, reg ; ret — zero register via self-XOR (opcode 31/33)
+    { name: "xor_eax_eax_ret", bytes: [49, 192, 195], mnemonic: "xor eax, eax ; ret" },
+    { name: "xor_ecx_ecx_ret", bytes: [49, 201, 195], mnemonic: "xor ecx, ecx ; ret" },
+    { name: "xor_edx_edx_ret", bytes: [49, 210, 195], mnemonic: "xor edx, edx ; ret" },
+    { name: "xor_ebx_ebx_ret", bytes: [49, 219, 195], mnemonic: "xor ebx, ebx ; ret" },
+    { name: "xor_esi_esi_ret", bytes: [51, 246, 195], mnemonic: "xor esi, esi ; ret" },
+    { name: "xor_edi_edi_ret", bytes: [51, 255, 195], mnemonic: "xor edi, edi ; ret" }
+  ];
+  var ALL_PATTERNS = [
+    ...KNOWN_PATTERNS,
+    ...buildPprPatterns(),
+    ...buildWritePatterns(),
+    ...buildReadPatterns(),
+    ...buildTransferPatterns(),
+    ...buildSwapPatterns(),
+    ...ADDITIONAL_PATTERNS
+  ];
   function sameBytes(left, right) {
     if (left.length !== right.length) {
       return false;
@@ -3230,38 +3360,99 @@ var osed_bundle = (() => {
   }
   function deriveCapabilities(semantic, categories) {
     const capabilities = [];
+    const add = (capability) => {
+      const duplicate = capabilities.some((existing) => existing.kind === capability.kind && existing.register === capability.register && existing.targetRegister === capability.targetRegister);
+      if (!duplicate) {
+        capabilities.push(capability);
+      }
+    };
     for (const step of semantic.instructionSemantics) {
       const text = step.instruction.normalizedText;
+      const operands = step.instruction.operands.map((operand) => operand.trim().toLowerCase());
       if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
-        capabilities.push({ kind: "LOAD_REGISTER", register: step.instruction.operands[0].trim().toLowerCase(), evidence: [text] });
+        add({ kind: "LOAD_REGISTER", register: operands[0], evidence: [text] });
+        add({ kind: "LOAD_CONSTANT", register: operands[0], evidence: [text] });
+        add({ kind: "STACK_READ", register: operands[0], evidence: [text] });
       }
-      if (step.instruction.mnemonic === "xor" && step.instruction.operands.length === 2 && step.instruction.operands[0].trim().toLowerCase() === step.instruction.operands[1].trim().toLowerCase()) {
-        capabilities.push({ kind: "ZERO_REGISTER", register: step.instruction.operands[0].trim().toLowerCase(), evidence: [text] });
+      if (step.instruction.mnemonic === "push" && operands.length === 1) {
+        add({ kind: "STACK_WRITE", register: operands[0], evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "pushad") {
+        add({ kind: "DISPATCH_PUSHAD", evidence: [text] });
+        add({ kind: "STACK_WRITE", evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "ret") {
+        add({ kind: "DISPATCH_RET", evidence: [text] });
+      }
+      if (step.instruction.mnemonic === "xor" && operands.length === 2) {
+        add({ kind: "REGISTER_XOR", register: operands[0], targetRegister: operands[1], evidence: [text] });
+        if (operands[0] === operands[1]) {
+          add({ kind: "ZERO_REGISTER", register: operands[0], evidence: [text] });
+          add({ kind: "REGISTER_ZERO", register: operands[0], evidence: [text] });
+        }
       }
       if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
-        const left = step.instruction.operands[0].trim().toLowerCase();
-        const right = step.instruction.operands[1].trim().toLowerCase();
+        const [left, right] = operands;
         if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right) {
-          capabilities.push({ kind: "MOVE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+          add({ kind: "MOVE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+          add({ kind: "REGISTER_TRANSFER", register: left, targetRegister: right, evidence: [text] });
+          if (left === "esp" || right === "esp") {
+            add({ kind: "STACK_COPY", register: left, targetRegister: right, evidence: [text] });
+          }
         }
         if (left.includes("[") && !right.includes("[")) {
-          capabilities.push({ kind: "MEMORY_WRITE", evidence: [text] });
+          add({ kind: "MEMORY_WRITE", register: right, evidence: [text] });
+          add({ kind: "STORE_MEMORY", register: right, evidence: [text] });
         }
         if (!left.includes("[") && right.includes("[")) {
-          capabilities.push({ kind: "MEMORY_READ", evidence: [text] });
+          add({ kind: "MEMORY_READ", register: left, evidence: [text] });
+          add({ kind: "LOAD_MEMORY", register: left, evidence: [text] });
         }
       }
       if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
-        const left = step.instruction.operands[0].trim().toLowerCase();
-        const right = step.instruction.operands[1].trim().toLowerCase();
+        const [left, right] = operands;
         if (left === "esp" || right === "esp") {
-          capabilities.push({ kind: "STACK_PIVOT", evidence: [text] });
+          add({ kind: "STACK_PIVOT", evidence: [text] });
         }
-        capabilities.push({ kind: "EXCHANGE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+        add({ kind: "EXCHANGE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+        add({ kind: "REGISTER_SWAP", register: left, targetRegister: right, evidence: [text] });
+      }
+      const unaryKind = {
+        neg: "REGISTER_NEGATE",
+        inc: "REGISTER_INCREMENT",
+        dec: "REGISTER_DECREMENT"
+      };
+      const unary = unaryKind[step.instruction.mnemonic];
+      if (unary && operands.length === 1) {
+        add({ kind: unary, register: operands[0], evidence: [text] });
+      }
+      const binaryKind = {
+        add: "REGISTER_ADD",
+        sub: "REGISTER_SUB"
+      };
+      const binary = binaryKind[step.instruction.mnemonic];
+      if (binary && operands.length === 2) {
+        add({ kind: binary, register: operands[0], targetRegister: operands[1], evidence: [text] });
+        if (operands[0] === "esp") {
+          add({ kind: "STACK_ADJUST", evidence: [text] });
+        }
+      }
+      if (step.instruction.mnemonic === "call" && operands.length === 1) {
+        add({
+          kind: operands[0].includes("[") ? "DISPATCH_CALL_MEMORY" : "DISPATCH_CALL_REGISTER",
+          register: operands[0].includes("[") ? void 0 : operands[0],
+          evidence: [text]
+        });
+      }
+      if (step.instruction.mnemonic === "jmp" && operands.length === 1 && !operands[0].includes("[")) {
+        add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
       }
     }
     if (categories.includes("STACK_PIVOT")) {
-      capabilities.push({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
+      add({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
+    }
+    if (categories.includes("STACK_ADJUST")) {
+      add({ kind: "STACK_ADJUST", evidence: ["category:STACK_ADJUST"] });
     }
     return capabilities;
   }
@@ -3654,6 +3845,236 @@ var osed_bundle = (() => {
     return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
       "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
     ]);
+  }
+
+  // src/rop/planner.ts
+  var STRATEGY_NAMES = /* @__PURE__ */ new Map([
+    ["virtualprotect", "VirtualProtect"],
+    ["virtualalloc", "VirtualAlloc"],
+    ["writeprocessmemory", "WriteProcessMemory"],
+    ["stackpivot", "Stack Pivot"],
+    ["stack pivot", "Stack Pivot"]
+  ]);
+  function unique(values) {
+    return [...new Set(values)];
+  }
+  function definitionsFor(strategy) {
+    if (strategy === "Stack Pivot") {
+      return [
+        {
+          shape: "STACK_PIVOT_FRAME",
+          complexity: "LOW",
+          required: ["STACK_PIVOT", "DISPATCH_RET"],
+          assumptions: ["A controlled stack region can hold the continuation frame."]
+        }
+      ];
+    }
+    return [
+      {
+        shape: "SYNTHETIC_STDCALL_FRAME",
+        complexity: "LOW",
+        required: ["DISPATCH_RET"],
+        assumptions: ["The stack is writable and sufficiently controlled to place a flat stdcall frame."]
+      },
+      {
+        shape: "STACK_PIVOT_FRAME",
+        complexity: "LOW",
+        required: ["STACK_PIVOT", "DISPATCH_RET"],
+        assumptions: ["A writable controlled region can hold the synthetic frame."]
+      },
+      {
+        shape: "RET_DISPATCH",
+        complexity: "MEDIUM",
+        required: ["LOAD_CONSTANT", "REGISTER_TRANSFER", "DISPATCH_RET"],
+        assumptions: ["Required API arguments can be represented or synthesized without forbidden bytes."]
+      },
+      {
+        shape: "PUSHAD_DISPATCH",
+        complexity: "MEDIUM",
+        required: ["LOAD_CONSTANT", "DISPATCH_PUSHAD"],
+        assumptions: ["The target ABI and register layout are compatible with PUSHAD dispatch."]
+      },
+      {
+        shape: "CALL_REGISTER",
+        complexity: "HIGH",
+        required: ["LOAD_CONSTANT", "DISPATCH_CALL_REGISTER"],
+        assumptions: ["A usable return continuation exists after the call."]
+      },
+      {
+        shape: "JMP_REGISTER",
+        complexity: "HIGH",
+        required: ["LOAD_CONSTANT", "DISPATCH_JMP_REGISTER"],
+        assumptions: ["The selected API or dispatcher does not need an implicit return continuation."]
+      }
+    ];
+  }
+  function normalizeExploitStrategy(value) {
+    return STRATEGY_NAMES.get(value.trim().toLowerCase());
+  }
+  function availableCapabilityKinds(index) {
+    return unique(index.gadgets.flatMap((gadget) => gadget.capabilities.map((capability) => capability.kind))).sort();
+  }
+  function planExploitStrategy(index, request, planId = 1) {
+    var _a;
+    const apiResolution = (_a = request.apiResolution) != null ? _a : "direct";
+    const available = availableCapabilityKinds(index);
+    const availableSet = new Set(available);
+    const definitions = definitionsFor(request.strategy);
+    const strategies = definitions.map((definition, offset) => {
+      const required = unique([
+        ...definition.required,
+        ...apiResolution === "iat" && definition.shape !== "SYNTHETIC_STDCALL_FRAME" ? ["LOAD_MEMORY"] : []
+      ]);
+      const satisfied = required.filter((capability) => availableSet.has(capability));
+      const missing = required.filter((capability) => !availableSet.has(capability));
+      return {
+        id: offset + 1,
+        shape: definition.shape,
+        possible: missing.length === 0,
+        recommended: false,
+        complexity: definition.complexity,
+        required,
+        satisfied,
+        missing,
+        assumptions: definition.assumptions,
+        reason: missing.length === 0 ? "All required semantic capabilities exist in the corpus." : `Missing semantic capabilities: ${missing.join(", ")}.`
+      };
+    });
+    const recommendation = strategies.find((strategy) => strategy.possible);
+    if (recommendation) {
+      recommendation.recommended = true;
+    }
+    return {
+      id: planId,
+      strategy: request.strategy,
+      apiResolution,
+      corpusCapabilities: available,
+      strategies
+    };
+  }
+  function strategyPlanRows(plan) {
+    return plan.strategies.map((strategy) => ({
+      Plan: plan.id.toString(),
+      Strategy: plan.strategy,
+      Shape: strategy.shape,
+      Possible: strategy.possible ? "yes" : "no",
+      Recommended: strategy.recommended ? "yes" : "",
+      Complexity: strategy.complexity,
+      Required: strategy.required.join(", "),
+      Satisfied: strategy.satisfied.join(", "),
+      Missing: strategy.missing.join(", "),
+      Assumptions: strategy.assumptions.join(" "),
+      Reason: strategy.reason
+    }));
+  }
+
+  // src/rop/emitter.ts
+  function knownAddress(gadget) {
+    var _a;
+    const location = gadget.locations.find((candidate) => candidate.virtualAddress !== void 0);
+    return (location == null ? void 0 : location.virtualAddress) === void 0 ? void 0 : { address: BigInt(location.virtualAddress), module: (_a = location.module) != null ? _a : "unknown" };
+  }
+  function exactStackDelta(gadget) {
+    const values = [...gadget.semanticSummary.summary.stackDelta.values.exact];
+    return values.length === 1 ? values[0] : void 0;
+  }
+  function sideEffectCount(gadget) {
+    const summary = gadget.semanticSummary.summary;
+    return summary.writes.values.exact.size + summary.writes.values.conservative.size + summary.memoryReads.values.exact.size + summary.memoryReads.values.conservative.size + (summary.memoryWrites.values.exact.size + summary.memoryWrites.values.conservative.size) * 2;
+  }
+  function rankCandidates(gadgets) {
+    return gadgets.filter((gadget) => knownAddress(gadget) !== void 0).sort((left, right) => {
+      var _a, _b;
+      const sideEffectDifference = sideEffectCount(left) - sideEffectCount(right);
+      if (sideEffectDifference !== 0) return sideEffectDifference;
+      const stackDifference = ((_a = exactStackDelta(left)) != null ? _a : Number.MAX_SAFE_INTEGER) - ((_b = exactStackDelta(right)) != null ? _b : Number.MAX_SAFE_INTEGER);
+      if (stackDifference !== 0) return stackDifference;
+      const lengthDifference = left.instructions.length - right.instructions.length;
+      return lengthDifference !== 0 ? lengthDifference : right.score - left.score;
+    });
+  }
+  var RankedSemanticEmitter = class {
+    emit(index, plan, strategyId) {
+      const strategy = strategyId === void 0 ? plan.strategies.find((candidate) => candidate.recommended) : plan.strategies.find((candidate) => candidate.id === strategyId);
+      if (!strategy) {
+        return {
+          planId: plan.id,
+          strategyId: strategyId != null ? strategyId : 0,
+          shape: "RET_DISPATCH",
+          success: false,
+          gadgets: [],
+          missing: [],
+          diagnostics: ["No matching or recommended strategy exists for this plan."]
+        };
+      }
+      if (!strategy.possible) {
+        return {
+          planId: plan.id,
+          strategyId: strategy.id,
+          shape: strategy.shape,
+          success: false,
+          gadgets: [],
+          missing: strategy.missing,
+          diagnostics: [strategy.reason]
+        };
+      }
+      const gadgets = [];
+      const missing = [];
+      for (const capability of strategy.required) {
+        const selected = rankCandidates(index.query({ capability }))[0];
+        const location = selected ? knownAddress(selected) : void 0;
+        if (!selected || !location) {
+          missing.push(capability);
+          continue;
+        }
+        gadgets.push({
+          capability,
+          canonicalId: selected.canonicalId,
+          address: location.address,
+          module: location.module,
+          sequence: selected.instructions.map((instruction) => instruction.normalizedText).join(" ; "),
+          score: selected.score,
+          stackDelta: exactStackDelta(selected),
+          sideEffects: sideEffectCount(selected)
+        });
+      }
+      return {
+        planId: plan.id,
+        strategyId: strategy.id,
+        shape: strategy.shape,
+        success: missing.length === 0,
+        gadgets,
+        missing,
+        diagnostics: missing.length === 0 ? ["Gadget assignment (not an ordered executable chain). Use chain_vp/chain_wpm/chain_va for executable chain output."] : [`No address-bearing gadget satisfies: ${missing.join(", ")}.`]
+      };
+    }
+  };
+  function emissionRows(result3) {
+    if (result3.gadgets.length === 0) {
+      return [{
+        Plan: result3.planId.toString(),
+        Strategy: result3.strategyId.toString(),
+        Shape: result3.shape,
+        Status: result3.success ? "ok" : "unavailable",
+        Missing: result3.missing.join(", "),
+        Diagnostic: result3.diagnostics.join(" ")
+      }];
+    }
+    return result3.gadgets.map((gadget) => {
+      var _a, _b;
+      return {
+        Plan: result3.planId.toString(),
+        Strategy: result3.strategyId.toString(),
+        Shape: result3.shape,
+        Capability: gadget.capability,
+        Address: `0x${gadget.address.toString(16).toUpperCase()}`,
+        Module: gadget.module,
+        Sequence: gadget.sequence,
+        Score: gadget.score.toString(),
+        StackDelta: (_b = (_a = gadget.stackDelta) == null ? void 0 : _a.toString()) != null ? _b : "unknown",
+        SideEffects: gadget.sideEffects.toString()
+      };
+    });
   }
 
   // src/semantics/types.ts
@@ -4538,6 +4959,10 @@ var osed_bundle = (() => {
   function buildCapabilityIndex(index) {
     return buildCapabilities(index.gadgets);
   }
+  function mergeCapabilityIndexes(indexes) {
+    const gadgets = dedupeRopGadgets([...indexes].flatMap((index) => index.gadgets));
+    return buildCapabilities(gadgets);
+  }
   function buildCapabilityIndexFromSequences(sequences) {
     return buildCapabilities(buildRopIndexFromSequences(sequences).gadgets);
   }
@@ -5282,9 +5707,13 @@ var osed_bundle = (() => {
     },
     {
       name: "rop.scan_live",
-      description: "Discovers live target gadgets and loads them into the semantic ROP corpus.",
-      usage: "dx @$osed().rop.scan_live(module?, badchars?, maxPerPattern?)",
-      examples: ['dx @$osed().rop.scan_live("essfunc", "00 0A 0D")']
+      description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
+      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, maxPerPattern?, append?)",
+      examples: [
+        'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
+        'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
+        'dx @$osed().rop.scan_live({module:"crypto", append:true})'
+      ]
     },
     {
       name: "rop.query",
@@ -5297,6 +5726,18 @@ var osed_bundle = (() => {
       description: "Summarizes capabilities in the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.capabilities()",
       examples: ["dx @$osed().rop.capabilities()"]
+    },
+    {
+      name: "rop.plan",
+      description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses.",
+      usage: "dx @$osed().rop.plan(strategy, apiResolution?)",
+      examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")']
+    },
+    {
+      name: "rop.emit",
+      description: "Selects and ranks concrete gadgets for a plan strategy. Produces a gadget assignment, not an executable chain.",
+      usage: "dx @$osed().rop.emit(planId, strategyId?)",
+      examples: ["dx @$osed().rop.emit(1)", "dx @$osed().rop.emit(1, 3)"]
     },
     {
       name: "rop.chain",
@@ -8899,8 +9340,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T20:03:21.227Z",
-      gitCommit: "b932b76fd6cf",
+      buildTime: "2026-07-26T20:37:42.704Z",
+      gitCommit: "55215991eba0",
       gitDirty: true
     };
   }
@@ -9339,7 +9780,16 @@ var osed_bundle = (() => {
   var osed = {};
   var lastResult;
   var currentRopCorpus;
+  var corpusGeneration = 0;
+  var nextRopPlanId = 1;
+  var ropPlans = /* @__PURE__ */ new Map();
+  var ropEmitter = new RankedSemanticEmitter();
   var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+  function invalidateCorpusPlans() {
+    corpusGeneration++;
+    ropPlans.clear();
+    nextRopPlanId = 1;
+  }
   function getGlobalObject() {
     if (typeof globalThis !== "undefined") {
       return globalThis;
@@ -9484,6 +9934,7 @@ var osed_bundle = (() => {
       return toDxResult(`Help: ${name}`, rows);
     };
     const scanCorpus = (text, options = {}) => {
+      invalidateCorpusPlans();
       currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
       const rows = summarizeCapabilities(currentRopCorpus);
       section("ROP Corpus Loaded");
@@ -9501,38 +9952,70 @@ var osed_bundle = (() => {
         { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() }
       ]);
     };
-    const scanLiveCorpus = (options) => {
-      const discovery = discoverLiveGadgets(options);
-      currentRopCorpus = buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits));
+    const scanLiveCorpus = (modules, options, append) => {
+      const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
+      const discoveredIndexes = discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
+      invalidateCorpusPlans();
+      const indexes = append && currentRopCorpus ? [currentRopCorpus, ...discoveredIndexes] : discoveredIndexes;
+      currentRopCorpus = mergeCapabilityIndexes(indexes);
       const rows = summarizeCapabilities(currentRopCorpus);
+      const stats = discoveries.reduce(
+        (total, discovery) => ({
+          patterns: total.patterns + discovery.stats.patterns,
+          scanned: total.scanned + discovery.stats.scanned,
+          discovered: total.discovered + discovery.stats.discovered,
+          rejected: total.rejected + discovery.stats.rejected
+        }),
+        { patterns: 0, scanned: 0, discovered: 0, rejected: 0 }
+      );
+      const warnings = discoveries.flatMap((discovery) => discovery.warnings);
       section("Live ROP Corpus Loaded");
-      info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${discovery.stats.discovered} live hits)`);
+      info(`Modules: ${modules.map((module) => module != null ? module : "<all>").join(", ")}`);
+      info(`Mode: ${append ? "append" : "replace"}`);
+      info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${stats.discovered} live hits)`);
       info(`Capabilities: ${rows.length}`);
-      if (discovery.stats.rejected > 0) {
-        info(`Rejected by bad chars: ${discovery.stats.rejected}`);
+      if (stats.rejected > 0) {
+        info(`Rejected by bad chars: ${stats.rejected}`);
       }
       setResult({
         command: "rop.scan_live",
-        args: options,
+        args: __spreadValues({ modules, append }, options),
         success: true,
-        findings: [__spreadValues({ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length }, discovery.stats)],
-        warnings: discovery.warnings,
+        findings: [__spreadValues({ modules: modules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length }, stats)],
+        warnings,
         errors: []
       });
       return toDxResult("Live ROP Corpus Loaded", [
-        { Corpus: "live", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() }
+        {
+          Corpus: "live",
+          Mode: append ? "append" : "replace",
+          Modules: modules.map((module) => module != null ? module : "<all>").join(", "),
+          Gadgets: currentRopCorpus.gadgets.length.toString(),
+          Capabilities: rows.length.toString()
+        }
       ]);
     };
     const executeRopScanLive = (...args) => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.scan_live");
       }
-      const options = isPlainObject(args[0]) ? args[0] : { module: args[0], badchars: parseHexByteList(args[1]), maxPerPattern: args[2] };
-      return scanLiveCorpus({
-        module: options.module,
-        badchars: options.badchars,
-        maxPerPattern: options.maxPerPattern
-      });
+      const options = isPlainObject(args[0]) ? args[0] : {
+        module: args[0],
+        badchars: parseHexByteList(args[1]),
+        maxPerPattern: args[2],
+        append: args[3]
+      };
+      const requested = Array.isArray(options.modules) ? options.modules : Array.isArray(options.module) ? options.module : [options.module];
+      const modules = requested.map((module) => module === void 0 ? void 0 : String(module).trim()).filter((module) => module === void 0 || module.length > 0);
+      const parsedBadchars = parseHexByteList(options.badchars);
+      return scanLiveCorpus(
+        modules.length > 0 ? modules : [void 0],
+        {
+          badchars: Array.isArray(parsedBadchars) ? parsedBadchars : void 0,
+          maxPerPattern: options.maxPerPattern
+        },
+        Boolean(options.append)
+      );
     };
     const executeRopScan = (...args) => {
       var _a, _b, _c;
@@ -9662,6 +10145,87 @@ var osed_bundle = (() => {
         errors: currentRopCorpus ? [] : [NO_ROP_CORPUS_MESSAGE]
       });
       return toDxResult("ROP Capabilities", rows);
+    };
+    const executeRopPlan = (...args) => {
+      var _a, _b, _c;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.plan");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Plan", rows2);
+        return toDxResult("ROP Plan", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : { strategy: args[0], apiResolution: args[1] };
+      const strategy = normalizeExploitStrategy(String((_a = options.strategy) != null ? _a : ""));
+      if (!strategy) {
+        const rows2 = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, or Stack Pivot." }];
+        renderRows("ROP Plan", rows2);
+        return toDxResult("ROP Plan", rows2);
+      }
+      const resolution = String((_c = (_b = options.apiResolution) != null ? _b : options.resolution) != null ? _c : "direct").toLowerCase();
+      if (resolution !== "direct" && resolution !== "iat") {
+        const rows2 = [{ Error: "API resolution must be direct or iat." }];
+        renderRows("ROP Plan", rows2);
+        return toDxResult("ROP Plan", rows2);
+      }
+      const plan = planExploitStrategy(currentRopCorpus, {
+        strategy,
+        apiResolution: resolution
+      }, nextRopPlanId++);
+      ropPlans.set(plan.id, { plan, generation: corpusGeneration });
+      const rows = strategyPlanRows(plan);
+      renderRows(`ROP Plan ${plan.id}: ${plan.strategy}`, rows);
+      setResult({
+        command: "rop.plan",
+        args: options,
+        success: plan.strategies.some((candidate) => candidate.possible),
+        findings: [plan],
+        warnings: [],
+        errors: []
+      });
+      return toDxResult(`ROP Plan ${plan.id}`, rows);
+    };
+    const executeRopEmit = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.emit");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Emit", rows2);
+        return toDxResult("ROP Emit", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], strategyId: args[1] };
+      const planId = Number((_a = options.planId) != null ? _a : options.plan_id);
+      const strategyId = (_b = options.strategyId) != null ? _b : options.strategy_id;
+      const entry = ropPlans.get(planId);
+      if (!entry) {
+        const rows2 = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+        renderRows("ROP Emit", rows2);
+        return toDxResult("ROP Emit", rows2);
+      }
+      if (entry.generation !== corpusGeneration) {
+        const rows2 = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+        renderRows("ROP Emit", rows2);
+        return toDxResult("ROP Emit", rows2);
+      }
+      const result3 = ropEmitter.emit(
+        currentRopCorpus,
+        entry.plan,
+        strategyId === void 0 ? void 0 : Number(strategyId)
+      );
+      const rows = emissionRows(result3);
+      renderRows(`ROP Emit ${entry.plan.id}.${result3.strategyId}`, rows);
+      setResult({
+        command: "rop.emit",
+        args: options,
+        success: result3.success,
+        findings: [result3],
+        warnings: [],
+        errors: result3.success ? [] : result3.diagnostics
+      });
+      return toDxResult(`ROP Emit ${entry.plan.id}.${result3.strategyId}`, rows);
     };
     const parseChainTargets = (spec) => {
       if (Array.isArray(spec)) {
@@ -10030,6 +10594,8 @@ var osed_bundle = (() => {
       scan_live: executeRopScanLive,
       query: executeRopQuery,
       capabilities: executeRopCapabilities,
+      plan: executeRopPlan,
+      emit: executeRopEmit,
       chain: executeRopChain,
       chain_vp: executeRopChainVp,
       chain_wpm: executeRopChainWpm,
@@ -10283,8 +10849,10 @@ var osed_bundle = (() => {
   }
   function initialize() {
     currentRopCorpus = void 0;
+    invalidateCorpusPlans();
     registry.setReloader(() => {
       currentRopCorpus = void 0;
+      invalidateCorpusPlans();
       registerAll();
       osed = bindApi();
       publishOsed();

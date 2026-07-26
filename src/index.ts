@@ -44,7 +44,7 @@ import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, summarizeCapabilities, type CapabilityIndex, type ChainTarget, type FlatFramePlan, type RopQuery, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, emissionRows, formatChainPython, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type FlatFramePlan, type RopQuery, type RopStrategyPlan, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
@@ -71,7 +71,17 @@ const registry = new CommandRegistry();
 let osed: OsedApi = {};
 let lastResult: CommandResult | undefined;
 let currentRopCorpus: CapabilityIndex | undefined;
+let corpusGeneration = 0;
+let nextRopPlanId = 1;
+const ropPlans = new Map<number, { plan: RopStrategyPlan; generation: number }>();
+const ropEmitter = new RankedSemanticEmitter();
 const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+
+function invalidateCorpusPlans(): void {
+  corpusGeneration++;
+  ropPlans.clear();
+  nextRopPlanId = 1;
+}
 
 function getGlobalObject(): Record<string, unknown> | undefined {
   if (typeof globalThis !== "undefined") {
@@ -229,6 +239,7 @@ function bindApi(): OsedApi {
   };
 
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): DxResult => {
+    invalidateCorpusPlans();
     currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
     const rows = summarizeCapabilities(currentRopCorpus);
     out.section("ROP Corpus Loaded");
@@ -247,26 +258,54 @@ function bindApi(): OsedApi {
     ]);
   };
 
-  const scanLiveCorpus = (options: LiveDiscoveryOptions): DxResult => {
-    const discovery = discoverLiveGadgets(options);
-    currentRopCorpus = buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits));
+  const scanLiveCorpus = (
+    modules: Array<string | undefined>,
+    options: Omit<LiveDiscoveryOptions, "module">,
+    append: boolean,
+  ): DxResult => {
+    const discoveries = modules.map((module) => discoverLiveGadgets({ ...options, module }));
+    const discoveredIndexes = discoveries.map((discovery) =>
+      buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
+    invalidateCorpusPlans();
+    const indexes = append && currentRopCorpus
+      ? [currentRopCorpus, ...discoveredIndexes]
+      : discoveredIndexes;
+    currentRopCorpus = mergeCapabilityIndexes(indexes);
     const rows = summarizeCapabilities(currentRopCorpus);
+    const stats = discoveries.reduce(
+      (total, discovery) => ({
+        patterns: total.patterns + discovery.stats.patterns,
+        scanned: total.scanned + discovery.stats.scanned,
+        discovered: total.discovered + discovery.stats.discovered,
+        rejected: total.rejected + discovery.stats.rejected,
+      }),
+      { patterns: 0, scanned: 0, discovered: 0, rejected: 0 },
+    );
+    const warnings = discoveries.flatMap((discovery) => discovery.warnings);
     out.section("Live ROP Corpus Loaded");
-    out.info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${discovery.stats.discovered} live hits)`);
+    out.info(`Modules: ${modules.map((module) => module ?? "<all>").join(", ")}`);
+    out.info(`Mode: ${append ? "append" : "replace"}`);
+    out.info(`Gadgets: ${currentRopCorpus.gadgets.length} (from ${stats.discovered} live hits)`);
     out.info(`Capabilities: ${rows.length}`);
-    if (discovery.stats.rejected > 0) {
-      out.info(`Rejected by bad chars: ${discovery.stats.rejected}`);
+    if (stats.rejected > 0) {
+      out.info(`Rejected by bad chars: ${stats.rejected}`);
     }
     setResult({
       command: "rop.scan_live",
-      args: options as Record<string, unknown>,
+      args: { modules, append, ...options },
       success: true,
-      findings: [{ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length, ...discovery.stats }],
-      warnings: discovery.warnings,
+      findings: [{ modules: modules.length, gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length, ...stats }],
+      warnings,
       errors: [],
     });
     return toDxResult("Live ROP Corpus Loaded", [
-      { Corpus: "live", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() },
+      {
+        Corpus: "live",
+        Mode: append ? "append" : "replace",
+        Modules: modules.map((module) => module ?? "<all>").join(", "),
+        Gadgets: currentRopCorpus.gadgets.length.toString(),
+        Capabilities: rows.length.toString(),
+      },
     ]);
   };
 
@@ -276,12 +315,29 @@ function bindApi(): OsedApi {
     }
     const options = isPlainObject(args[0])
       ? args[0]
-      : { module: args[0], badchars: parseHexByteList(args[1]), maxPerPattern: args[2] };
-    return scanLiveCorpus({
-      module: options.module as string | undefined,
-      badchars: options.badchars as number[] | undefined,
-      maxPerPattern: options.maxPerPattern as number | undefined,
-    });
+      : {
+          module: args[0],
+          badchars: parseHexByteList(args[1]),
+          maxPerPattern: args[2],
+          append: args[3],
+        };
+    const requested = Array.isArray(options.modules)
+      ? options.modules
+      : Array.isArray(options.module)
+        ? options.module
+        : [options.module];
+    const modules = requested
+      .map((module) => module === undefined ? undefined : String(module).trim())
+      .filter((module): module is string | undefined => module === undefined || module.length > 0);
+    const parsedBadchars = parseHexByteList(options.badchars);
+    return scanLiveCorpus(
+      modules.length > 0 ? modules : [undefined],
+      {
+        badchars: Array.isArray(parsedBadchars) ? parsedBadchars : undefined,
+        maxPerPattern: options.maxPerPattern as number | undefined,
+      },
+      Boolean(options.append),
+    );
   };
 
   const executeRopScan = (...args: unknown[]): DxResult => {
@@ -417,6 +473,91 @@ function bindApi(): OsedApi {
       errors: currentRopCorpus ? [] : [NO_ROP_CORPUS_MESSAGE],
     });
     return toDxResult("ROP Capabilities", rows);
+  };
+
+  const executeRopPlan = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.plan");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Plan", rows);
+      return toDxResult("ROP Plan", rows);
+    }
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { strategy: args[0], apiResolution: args[1] };
+    const strategy = normalizeExploitStrategy(String(options.strategy ?? ""));
+    if (!strategy) {
+      const rows = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, or Stack Pivot." }];
+      renderRows("ROP Plan", rows);
+      return toDxResult("ROP Plan", rows);
+    }
+    const resolution = String(options.apiResolution ?? options.resolution ?? "direct").toLowerCase();
+    if (resolution !== "direct" && resolution !== "iat") {
+      const rows = [{ Error: "API resolution must be direct or iat." }];
+      renderRows("ROP Plan", rows);
+      return toDxResult("ROP Plan", rows);
+    }
+    const plan = planExploitStrategy(currentRopCorpus, {
+      strategy,
+      apiResolution: resolution as ApiResolutionMode,
+    }, nextRopPlanId++);
+    ropPlans.set(plan.id, { plan, generation: corpusGeneration });
+    const rows = strategyPlanRows(plan);
+    renderRows(`ROP Plan ${plan.id}: ${plan.strategy}`, rows);
+    setResult({
+      command: "rop.plan",
+      args: options,
+      success: plan.strategies.some((candidate) => candidate.possible),
+      findings: [plan],
+      warnings: [],
+      errors: [],
+    });
+    return toDxResult(`ROP Plan ${plan.id}`, rows);
+  };
+
+  const executeRopEmit = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.emit");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Emit", rows);
+      return toDxResult("ROP Emit", rows);
+    }
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { planId: args[0], strategyId: args[1] };
+    const planId = Number(options.planId ?? options.plan_id);
+    const strategyId = options.strategyId ?? options.strategy_id;
+    const entry = ropPlans.get(planId);
+    if (!entry) {
+      const rows = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+      renderRows("ROP Emit", rows);
+      return toDxResult("ROP Emit", rows);
+    }
+    if (entry.generation !== corpusGeneration) {
+      const rows = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+      renderRows("ROP Emit", rows);
+      return toDxResult("ROP Emit", rows);
+    }
+    const result = ropEmitter.emit(
+      currentRopCorpus,
+      entry.plan,
+      strategyId === undefined ? undefined : Number(strategyId),
+    );
+    const rows = emissionRows(result);
+    renderRows(`ROP Emit ${entry.plan.id}.${result.strategyId}`, rows);
+    setResult({
+      command: "rop.emit",
+      args: options,
+      success: result.success,
+      findings: [result],
+      warnings: [],
+      errors: result.success ? [] : result.diagnostics,
+    });
+    return toDxResult(`ROP Emit ${entry.plan.id}.${result.strategyId}`, rows);
   };
 
   const parseChainTargets = (spec: unknown): ChainTarget[] => {
@@ -826,6 +967,8 @@ function bindApi(): OsedApi {
     scan_live: executeRopScanLive,
     query: executeRopQuery,
     capabilities: executeRopCapabilities,
+    plan: executeRopPlan,
+    emit: executeRopEmit,
     chain: executeRopChain,
     chain_vp: executeRopChainVp,
     chain_wpm: executeRopChainWpm,
@@ -1098,8 +1241,10 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
 
 function initialize(): void {
   currentRopCorpus = undefined;
+  invalidateCorpusPlans();
   registry.setReloader(() => {
     currentRopCorpus = undefined;
+    invalidateCorpusPlans();
     registerAll();
     osed = bindApi();
     publishOsed();

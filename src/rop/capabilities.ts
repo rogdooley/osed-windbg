@@ -80,39 +80,103 @@ export function buildCapabilities(gadgets: RopGadget[]): CapabilityIndex {
 
 export function deriveCapabilities(semantic: SemanticSequence, categories: RopCategory[]): RopCapability[] {
   const capabilities: RopCapability[] = [];
+  const add = (capability: RopCapability): void => {
+    const duplicate = capabilities.some((existing) =>
+      existing.kind === capability.kind
+      && existing.register === capability.register
+      && existing.targetRegister === capability.targetRegister);
+    if (!duplicate) {
+      capabilities.push(capability);
+    }
+  };
   for (const step of semantic.instructionSemantics) {
     const text = step.instruction.normalizedText;
+    const operands = step.instruction.operands.map((operand) => operand.trim().toLowerCase());
     if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
-      capabilities.push({ kind: "LOAD_REGISTER", register: step.instruction.operands[0].trim().toLowerCase(), evidence: [text] });
+      add({ kind: "LOAD_REGISTER", register: operands[0], evidence: [text] });
+      add({ kind: "LOAD_CONSTANT", register: operands[0], evidence: [text] });
+      add({ kind: "STACK_READ", register: operands[0], evidence: [text] });
     }
-    if (step.instruction.mnemonic === "xor" && step.instruction.operands.length === 2 && step.instruction.operands[0].trim().toLowerCase() === step.instruction.operands[1].trim().toLowerCase()) {
-      capabilities.push({ kind: "ZERO_REGISTER", register: step.instruction.operands[0].trim().toLowerCase(), evidence: [text] });
+    if (step.instruction.mnemonic === "push" && operands.length === 1) {
+      add({ kind: "STACK_WRITE", register: operands[0], evidence: [text] });
+    }
+    if (step.instruction.mnemonic === "pushad") {
+      add({ kind: "DISPATCH_PUSHAD", evidence: [text] });
+      add({ kind: "STACK_WRITE", evidence: [text] });
+    }
+    if (step.instruction.mnemonic === "ret") {
+      add({ kind: "DISPATCH_RET", evidence: [text] });
+    }
+    if (step.instruction.mnemonic === "xor" && operands.length === 2) {
+      add({ kind: "REGISTER_XOR", register: operands[0], targetRegister: operands[1], evidence: [text] });
+      if (operands[0] === operands[1]) {
+        add({ kind: "ZERO_REGISTER", register: operands[0], evidence: [text] });
+        add({ kind: "REGISTER_ZERO", register: operands[0], evidence: [text] });
+      }
     }
     if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
-      const left = step.instruction.operands[0].trim().toLowerCase();
-      const right = step.instruction.operands[1].trim().toLowerCase();
+      const [left, right] = operands;
       if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right) {
-        capabilities.push({ kind: "MOVE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+        add({ kind: "MOVE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+        add({ kind: "REGISTER_TRANSFER", register: left, targetRegister: right, evidence: [text] });
+        if (left === "esp" || right === "esp") {
+          add({ kind: "STACK_COPY", register: left, targetRegister: right, evidence: [text] });
+        }
       }
       if (left.includes("[") && !right.includes("[")) {
-        capabilities.push({ kind: "MEMORY_WRITE", evidence: [text] });
+        add({ kind: "MEMORY_WRITE", register: right, evidence: [text] });
+        add({ kind: "STORE_MEMORY", register: right, evidence: [text] });
       }
       if (!left.includes("[") && right.includes("[")) {
-        capabilities.push({ kind: "MEMORY_READ", evidence: [text] });
+        add({ kind: "MEMORY_READ", register: left, evidence: [text] });
+        add({ kind: "LOAD_MEMORY", register: left, evidence: [text] });
       }
     }
     if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
-      const left = step.instruction.operands[0].trim().toLowerCase();
-      const right = step.instruction.operands[1].trim().toLowerCase();
+      const [left, right] = operands;
       if (left === "esp" || right === "esp") {
-        capabilities.push({ kind: "STACK_PIVOT", evidence: [text] });
+        add({ kind: "STACK_PIVOT", evidence: [text] });
       }
-      capabilities.push({ kind: "EXCHANGE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+      add({ kind: "EXCHANGE_REGISTER", register: left, targetRegister: right, evidence: [text] });
+      add({ kind: "REGISTER_SWAP", register: left, targetRegister: right, evidence: [text] });
+    }
+    const unaryKind = {
+      neg: "REGISTER_NEGATE",
+      inc: "REGISTER_INCREMENT",
+      dec: "REGISTER_DECREMENT",
+    } as const;
+    const unary = unaryKind[step.instruction.mnemonic as keyof typeof unaryKind];
+    if (unary && operands.length === 1) {
+      add({ kind: unary, register: operands[0], evidence: [text] });
+    }
+    const binaryKind = {
+      add: "REGISTER_ADD",
+      sub: "REGISTER_SUB",
+    } as const;
+    const binary = binaryKind[step.instruction.mnemonic as keyof typeof binaryKind];
+    if (binary && operands.length === 2) {
+      add({ kind: binary, register: operands[0], targetRegister: operands[1], evidence: [text] });
+      if (operands[0] === "esp") {
+        add({ kind: "STACK_ADJUST", evidence: [text] });
+      }
+    }
+    if (step.instruction.mnemonic === "call" && operands.length === 1) {
+      add({
+        kind: operands[0].includes("[") ? "DISPATCH_CALL_MEMORY" : "DISPATCH_CALL_REGISTER",
+        register: operands[0].includes("[") ? undefined : operands[0],
+        evidence: [text],
+      });
+    }
+    if (step.instruction.mnemonic === "jmp" && operands.length === 1 && !operands[0].includes("[")) {
+      add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
     }
   }
 
   if (categories.includes("STACK_PIVOT")) {
-    capabilities.push({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
+    add({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
+  }
+  if (categories.includes("STACK_ADJUST")) {
+    add({ kind: "STACK_ADJUST", evidence: ["category:STACK_ADJUST"] });
   }
   return capabilities;
 }

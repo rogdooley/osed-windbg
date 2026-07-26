@@ -80,9 +80,13 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "rop.scan_live",
-    description: "Discovers live target gadgets and loads them into the semantic ROP corpus.",
-    usage: "dx @$osed().rop.scan_live(module?, badchars?, maxPerPattern?)",
-    examples: ['dx @$osed().rop.scan_live("essfunc", "00 0A 0D")'],
+    description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
+    usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, maxPerPattern?, append?)",
+    examples: [
+      'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
+      'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
+      'dx @$osed().rop.scan_live({module:"crypto", append:true})',
+    ],
   },
   {
     name: "rop.query",
@@ -95,6 +99,18 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Summarizes capabilities in the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.capabilities()",
     examples: ["dx @$osed().rop.capabilities()"],
+  },
+  {
+    name: "rop.plan",
+    description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses.",
+    usage: "dx @$osed().rop.plan(strategy, apiResolution?)",
+    examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")'],
+  },
+  {
+    name: "rop.emit",
+    description: "Selects and ranks concrete gadgets for a plan strategy. Produces a gadget assignment, not an executable chain.",
+    usage: "dx @$osed().rop.emit(planId, strategyId?)",
+    examples: ["dx @$osed().rop.emit(1)", "dx @$osed().rop.emit(1, 3)"],
   },
   {
     name: "rop.chain",

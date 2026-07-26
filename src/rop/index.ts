@@ -4,6 +4,8 @@ export * from "./scoring";
 export * from "./capabilities";
 export * from "./query";
 export * from "./chain";
+export * from "./planner";
+export * from "./emitter";
 
 import { canonicalizeSequenceForPolicy, composeSemanticSequence } from "../semantics/compose";
 import { InstructionSequence, InstructionSequenceSource } from "../semantics/types";
@@ -87,6 +89,19 @@ export function buildCapabilityIndexFromRpPlusText(text: string, options: RPPlus
 
 export function buildCapabilityIndex(index: RopIndex) {
   return buildCapabilities(index.gadgets);
+}
+
+export function mergeRopIndexes(indexes: Iterable<RopIndex>): RopIndex {
+  const gadgets = dedupeRopGadgets([...indexes].flatMap((index) => index.gadgets));
+  return {
+    gadgets,
+    byCanonicalId: new Map(gadgets.map((gadget) => [gadget.canonicalId, gadget])),
+  };
+}
+
+export function mergeCapabilityIndexes(indexes: Iterable<ReturnType<typeof buildCapabilities>>) {
+  const gadgets = dedupeRopGadgets([...indexes].flatMap((index) => index.gadgets));
+  return buildCapabilities(gadgets);
 }
 
 export function buildCapabilityIndexFromSequences(sequences: Iterable<InstructionSequence>) {
