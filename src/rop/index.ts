@@ -6,6 +6,7 @@ export * from "./query";
 export * from "./chain";
 export * from "./planner";
 export * from "./emitter";
+export * from "./synthesizer";
 
 import { canonicalizeSequenceForPolicy, composeSemanticSequence } from "../semantics/compose";
 import { InstructionSequence, InstructionSequenceSource } from "../semantics/types";

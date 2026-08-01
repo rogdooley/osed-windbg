@@ -42,9 +42,10 @@ import { createFindPtrCommand } from "./commands/find_ptr";
 import { createEncodeCommand } from "./commands/encode";
 import { createNopCommand } from "./commands/nop";
 import { createRopTemplateCommand } from "./commands/rop_template";
+import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, emissionRows, formatChainPython, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type FlatFramePlan, type RopQuery, type RopStrategyPlan, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, emissionRows, formatChainPython, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type ExploitState, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -84,7 +85,105 @@ interface CorpusModuleEntry {
 }
 let corpusModules: CorpusModuleEntry[] = [];
 const ropEmitter = new RankedSemanticEmitter();
+let cachedExploitState: ExploitState | undefined;
 const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+const NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
+
+function buildExploitStateFromTriage(findings: Record<string, unknown>): ExploitState {
+  const control = findings.control as Record<string, unknown> | undefined;
+  const stack = findings.stack as Record<string, unknown> | undefined;
+  const seh = findings.seh as Record<string, unknown> | undefined;
+  const badcharStats = findings.badchars as Array<{ byte: number; count: number }> | undefined;
+
+  const ipControlled = control?.ipControlled === true;
+
+  let mechanism: ControlMechanism = "saved-ret";
+  if (seh?.overwritten === "yes") {
+    mechanism = "seh";
+  }
+
+  const badchars = (badcharStats ?? [])
+    .filter((entry) => typeof entry.byte === "number")
+    .map((entry) => entry.byte & 0xff);
+
+  const sp = stack?.sp;
+  const spValue = sp !== undefined && sp !== null ? Number(sp) : undefined;
+
+  const landing = stack?.landing as Record<string, unknown> | undefined;
+  const landingBytes = landing?.bytes as number[] | undefined;
+  const controlledAfterEsp = landingBytes?.length ?? 0;
+
+  const registers: Partial<Record<string, RegisterState>> = {};
+  const regEntries = (control as Record<string, unknown>)?.registers as Array<{ name: string; value: unknown }> | undefined;
+  if (Array.isArray(regEntries)) {
+    for (const entry of regEntries) {
+      const name = entry.name?.toLowerCase();
+      if (name && name !== "eip" && name !== "esp") {
+        registers[name] = { kind: "unknown" };
+      }
+    }
+  }
+
+  return {
+    control: {
+      mechanism,
+      instructionPointerControlled: ipControlled,
+    },
+    stack: {
+      espAtControl: spValue,
+      controlledBeforeEsp: 0,
+      controlledAfterEsp,
+      contiguousControlledBytes: controlledAfterEsp,
+      readable: true,
+      writable: true,
+      executable: false,
+    },
+    registers,
+    constraints: {
+      badchars,
+      apiResolution: "either",
+    },
+  };
+}
+
+function mergeExploitStateOverrides(base: ExploitState, overrides: Record<string, unknown>): ExploitState {
+  const merged = { ...base };
+
+  if (overrides.mechanism !== undefined) {
+    merged.control = { ...merged.control, mechanism: String(overrides.mechanism) as ControlMechanism };
+  }
+  if (overrides.eipControlled !== undefined) {
+    merged.control = { ...merged.control, instructionPointerControlled: Boolean(overrides.eipControlled) };
+  }
+
+  if (overrides.controlledBytesAfterEsp !== undefined) {
+    merged.stack = { ...merged.stack, controlledAfterEsp: Number(overrides.controlledBytesAfterEsp), contiguousControlledBytes: Number(overrides.controlledBytesAfterEsp) };
+  }
+  if (overrides.controlledBytesBeforeEsp !== undefined) {
+    merged.stack = { ...merged.stack, controlledBeforeEsp: Number(overrides.controlledBytesBeforeEsp) };
+  }
+  if (overrides.stackWritable !== undefined) {
+    merged.stack = { ...merged.stack, writable: Boolean(overrides.stackWritable) };
+  }
+  if (overrides.stackExecutable !== undefined) {
+    merged.stack = { ...merged.stack, executable: Boolean(overrides.stackExecutable) };
+  }
+
+  if (overrides.badchars !== undefined) {
+    merged.constraints = { ...merged.constraints, badchars: parseHexByteList(overrides.badchars) as number[] };
+  }
+  if (overrides.apiResolution !== undefined) {
+    const resolution = String(overrides.apiResolution).toLowerCase();
+    if (resolution === "direct" || resolution === "iat" || resolution === "either") {
+      merged.constraints = { ...merged.constraints, apiResolution: resolution };
+    }
+  }
+  if (overrides.maximumPayloadLength !== undefined) {
+    merged.constraints = { ...merged.constraints, maximumPayloadLength: Number(overrides.maximumPayloadLength) };
+  }
+
+  return merged;
+}
 
 function diagnoseModuleBadchars(moduleName: string, badchars: number[]): string | undefined {
   try {
@@ -174,6 +273,7 @@ function registerAll(): void {
     createMathCommand(),
     createVersionCommand(),
     ...createStringCommands(),
+    createCodeCavesCommand(),
     createEncodeCommand(),
     createNopCommand(),
     createRopTemplateCommand(),
@@ -198,6 +298,9 @@ function bindApi(): OsedApi {
     }
     const result = registry.execute(commandName, normalizeInvocation(commandName, args));
     lastResult = result;
+    if (commandName === "triage" && result.success && result.findings.length > 0) {
+      cachedExploitState = buildExploitStateFromTriage(result.findings[0] as Record<string, unknown>);
+    }
     if (!result.success) {
       for (const error of result.errors) {
         out.error(error);
@@ -662,6 +765,93 @@ function bindApi(): OsedApi {
     return toDxResult(`ROP Emit ${entry.plan.id}.${result.strategyId}`, rows);
   };
 
+  const executeRopSynthesize = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.synthesize");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Synthesize", rows);
+      return toDxResult("ROP Synthesize", rows);
+    }
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { planId: args[0], ...(isPlainObject(args[1]) ? args[1] as Record<string, unknown> : {}) };
+    const planId = Number(options.planId ?? options.plan_id ?? args[0]);
+    const entry = ropPlans.get(planId);
+    if (!entry) {
+      const rows = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+      renderRows("ROP Synthesize", rows);
+      return toDxResult("ROP Synthesize", rows);
+    }
+    if (entry.generation !== corpusGeneration) {
+      const rows = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+      renderRows("ROP Synthesize", rows);
+      return toDxResult("ROP Synthesize", rows);
+    }
+
+    let state = cachedExploitState;
+    if (!state) {
+      const rows = [{ Error: NO_EXPLOIT_STATE_MESSAGE }];
+      renderRows("ROP Synthesize", rows);
+      return toDxResult("ROP Synthesize", rows);
+    }
+
+    const overrides = isPlainObject(args[1]) ? args[1] as Record<string, unknown> : {};
+    if (Object.keys(overrides).length > 0) {
+      state = mergeExploitStateOverrides(state, overrides);
+    }
+
+    const result = synthesize(currentRopCorpus, entry.plan, state);
+    const title = `ROP Synthesize ${planId}`;
+
+    out.section(title);
+    out.info(`Path: ${result.entryPath}`);
+    out.info(`Status: ${result.status}`);
+    out.info(`Layout: ${result.layoutProduced ? "produced" : "none"}`);
+    out.info(`Constraint compatible: ${result.constraintCompatible ? "yes" : "no"}`);
+
+    if (result.layoutProduced) {
+      out.info(`Strategy: ${result.strategy} / ${result.shape}`);
+      out.info(`Total: ${result.totalBytes} bytes`);
+      if (result.placeholders.length > 0) {
+        out.info(`Resolve before use: ${result.placeholders.join(", ")}`);
+      }
+      if (result.pivot) {
+        out.info(`Pivot: ${result.pivot.sequence} (source: ${result.pivot.source}${result.pivot.sourceRegister ? ` ${result.pivot.sourceRegister}` : ""})`);
+      }
+    }
+
+    for (const v of result.violations) {
+      out.warn(`VIOLATION: ${v.message}`);
+    }
+    for (const b of result.blockers) {
+      out.error(`BLOCKER: ${b.message}`);
+    }
+    for (const w of result.warnings) {
+      out.warn(w.message);
+    }
+
+    if (!result.constraintCompatible && result.layoutProduced && result.violations.length > 0) {
+      out.info("Operator action: synthesize values arithmetically, use writable memory construction, or select an alternate strategy.");
+    }
+
+    const rows = synthesisRows(result);
+    renderRows(title, rows);
+    setResult({
+      command: "rop.synthesize",
+      args: options,
+      success: result.status === "complete",
+      findings: [result],
+      warnings: [
+        ...result.violations.map((v) => v.message),
+        ...result.warnings.map((w) => w.message),
+      ],
+      errors: result.blockers.map((b) => b.message),
+    });
+    return toDxResult(title, rows);
+  };
+
   const parseChainTargets = (spec: unknown): ChainTarget[] => {
     if (Array.isArray(spec)) {
       return spec
@@ -1089,6 +1279,7 @@ function bindApi(): OsedApi {
     capabilities: executeRopCapabilities,
     plan: executeRopPlan,
     emit: executeRopEmit,
+    synthesize: executeRopSynthesize,
     chain: executeRopChain,
     chain_vp: executeRopChainVp,
     chain_wpm: executeRopChainWpm,
@@ -1285,6 +1476,8 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
       return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
     case "modules":
       return { filter: args[0] };
+    case "code_caves":
+      return { module: args[0], minSize: args[1], maxResults: args[2] };
     case "math":
       return { value: args[0], bits: args[1] };
     case "str_read":
@@ -1380,10 +1573,12 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
 
 function initialize(): void {
   currentRopCorpus = undefined;
+  cachedExploitState = undefined;
   invalidateCorpusPlans();
   resetCorpusModules();
   registry.setReloader(() => {
     currentRopCorpus = undefined;
+    cachedExploitState = undefined;
     invalidateCorpusPlans();
     resetCorpusModules();
     registerAll();

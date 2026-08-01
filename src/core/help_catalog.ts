@@ -114,6 +114,16 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().rop.emit(1)", "dx @$osed().rop.emit(1, 3)"],
   },
   {
+    name: "rop.synthesize",
+    description: "Synthesizes a concrete stack layout from a plan and the current exploit state. Uses cached state from triage(); accepts optional overrides.",
+    usage: "dx @$osed().rop.synthesize(planId, overrides?)",
+    examples: [
+      "dx @$osed().rop.synthesize(1)",
+      'dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 128})',
+      'dx @$osed().rop.synthesize(1, {badchars: "00 0A 0D"})',
+    ],
+  },
+  {
     name: "rop.chain",
     description: "Builds a register-setup chain from the loaded ROP corpus.",
     usage: "dx @$osed().rop.chain(register, value, register2?, value2?, ...)",
@@ -154,6 +164,16 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Builds a flat VirtualAlloc stdcall frame without requiring ROP gadgets.",
     usage: "dx @$osed().rop.frame_va(virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars?)",
     examples: ['dx @$osed().rop.frame_va(0x7C809AE1, 0x625011AF, 0, 0x201, 0x1000, 0x40, "00 0A 0D")'],
+  },
+  {
+    name: "code_caves",
+    description: "Finds contiguous null-byte regions in PE sections suitable for shellcode placement.",
+    usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
+    examples: [
+      "dx @$osed().code_caves()",
+      'dx @$osed().code_caves("essfunc")',
+      'dx @$osed().code_caves("essfunc", 100)',
+    ],
   },
   {
     name: "sc.iat",

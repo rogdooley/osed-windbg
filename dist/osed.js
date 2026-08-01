@@ -2286,8 +2286,8 @@ var osed_bundle = (() => {
       label = "ntaccess egghunter";
     }
     template.splice(tagOffset, 4, ...tag);
-    const badcharHits2 = checkBadchars(template, label, badSet);
-    return { bytes: template, size: template.length, badcharHits: badcharHits2 };
+    const badcharHits3 = checkBadchars(template, label, badSet);
+    return { bytes: template, size: template.length, badcharHits: badcharHits3 };
   }
   function bytesToHex(bytes) {
     return bytes.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join("");
@@ -4122,6 +4122,552 @@ var osed_bundle = (() => {
     });
   }
 
+  // src/rop/synthesizer.ts
+  function hex322(value) {
+    const v = typeof value === "bigint" ? value : BigInt(value >>> 0);
+    return `0x${v.toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function uniqueBytes3(values) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const v of values != null ? values : []) {
+      if (Number.isInteger(v) && v >= 0 && v <= 255) seen.add(v & 255);
+    }
+    return [...seen].sort((a, b) => a - b);
+  }
+  function badcharHits2(value, badchars) {
+    if (badchars.length === 0) return [];
+    const bad = new Set(badchars);
+    const hits = [];
+    const word = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      const byte = word >>> i * 8 & 255;
+      if (bad.has(byte) && !hits.includes(byte)) hits.push(byte);
+    }
+    return hits;
+  }
+  function byteList2(bytes) {
+    return bytes.map((b) => `0x${b.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
+  }
+  function firstKnownAddress2(gadget) {
+    const loc = gadget.locations.find((l) => l.virtualAddress !== void 0);
+    return (loc == null ? void 0 : loc.virtualAddress) !== void 0 ? BigInt(loc.virtualAddress) : void 0;
+  }
+  function gadgetSequence(gadget) {
+    return gadget.instructions.map((i) => i.normalizedText).join(" ; ");
+  }
+  var GP_REGISTERS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+  function findRetGadget(index) {
+    return index.gadgets.filter((g) => g.instructions.length === 1 && g.instructions[0].mnemonic === "ret" && g.instructions[0].operands.length === 0 && firstKnownAddress2(g) !== void 0).sort((a, b) => b.score - a.score)[0];
+  }
+  function classifyPivotSource(gadget) {
+    const instrs = gadget.instructions;
+    const first = instrs[0];
+    if (first.mnemonic === "xchg" && first.operands.length === 2) {
+      const ops = first.operands.map((o) => o.trim().toLowerCase());
+      const espIdx = ops.indexOf("esp");
+      if (espIdx >= 0) {
+        const other = ops[1 - espIdx];
+        return { source: "register", sourceRegister: other, clobbers: [other, "esp"] };
+      }
+    }
+    if (first.mnemonic === "mov" && first.operands.length === 2) {
+      const dst = first.operands[0].trim().toLowerCase();
+      const src = first.operands[1].trim().toLowerCase();
+      if (dst === "esp" && GP_REGISTERS.includes(src)) {
+        return { source: "register", sourceRegister: src, clobbers: ["esp"] };
+      }
+    }
+    if (first.mnemonic === "add" && first.operands.length === 2) {
+      const dst = first.operands[0].trim().toLowerCase();
+      if (dst === "esp") {
+        const imm = first.operands[1].trim();
+        const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
+        if (Number.isFinite(val)) {
+          return { source: "esp-adjust", adjustment: val, clobbers: ["esp"] };
+        }
+      }
+    }
+    if (first.mnemonic === "sub" && first.operands.length === 2) {
+      const dst = first.operands[0].trim().toLowerCase();
+      if (dst === "esp") {
+        const imm = first.operands[1].trim();
+        const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
+        if (Number.isFinite(val)) {
+          return { source: "esp-adjust", adjustment: -val, clobbers: ["esp"] };
+        }
+      }
+    }
+    return { source: "memory", clobbers: ["esp"] };
+  }
+  function selectPivotGadget(index, state) {
+    const candidates2 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress2(g) !== void 0).sort((a, b) => {
+      const aLen = a.instructions.length;
+      const bLen = b.instructions.length;
+      if (aLen !== bLen) return aLen - bLen;
+      return b.score - a.score;
+    });
+    for (const gadget of candidates2) {
+      const addr = firstKnownAddress2(gadget);
+      const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
+      if (source === "register" && sourceRegister) {
+        const regState = state.registers[sourceRegister];
+        if (!regState || regState.kind === "unknown") continue;
+      }
+      const stackDelta = gadget.semanticSummary.summary.stackDelta.values.exact;
+      const delta = stackDelta.size === 1 ? [...stackDelta][0] : 0;
+      return {
+        gadget,
+        semantics: {
+          sequence: gadgetSequence(gadget),
+          address: addr,
+          source,
+          sourceRegister,
+          adjustment,
+          stackDeltaBeforePivot: delta,
+          clobbers
+        }
+      };
+    }
+    return void 0;
+  }
+  function validateForDirectApi(state, plan) {
+    var _a;
+    const blockers = [];
+    const warnings = [];
+    if (!state.control.instructionPointerControlled) {
+      blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    }
+    if (state.control.mechanism !== "saved-ret") {
+      blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; DIRECT_API requires ret-based control transfer.` });
+    }
+    const frameSize = plan.strategy === "WriteProcessMemory" ? 24 : 20;
+    if (state.stack.controlledAfterEsp < frameSize) {
+      blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for ${plan.strategy} arguments (API address is the saved return, not on the stack).` });
+    }
+    if (!state.stack.writable) {
+      blockers.push({ kind: "blocker", source: "stack", message: "Stack region after ESP is not writable." });
+    }
+    if (state.stack.executable) {
+      warnings.push({ kind: "warning", source: "stack", message: "Stack is already executable; DEP bypass may be unnecessary." });
+    }
+    const alignment = (_a = state.stack.alignment) != null ? _a : 4;
+    if (alignment % 4 !== 0) {
+      warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
+    }
+    if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires IAT resolution but exploit state constrains to direct resolution." });
+    }
+    if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
+    }
+    return {
+      viable: blockers.length === 0,
+      entryPath: blockers.length === 0 ? "DIRECT_API" : void 0,
+      blockers,
+      warnings
+    };
+  }
+  function validateForRetToFrame(state, plan, index) {
+    var _a;
+    const blockers = [];
+    const warnings = [];
+    if (!state.control.instructionPointerControlled) {
+      blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    }
+    if (state.control.mechanism !== "saved-ret") {
+      blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; RET_TO_FRAME requires ret-based control transfer.` });
+    }
+    const strategy = plan.strategies.find(
+      (s) => s.shape === "SYNTHETIC_STDCALL_FRAME" || s.shape === "RET_DISPATCH"
+    );
+    if (!(strategy == null ? void 0 : strategy.possible)) {
+      blockers.push({ kind: "blocker", source: "plan", message: "No flat stdcall shape is capability-feasible in the current plan." });
+    }
+    if (!findRetGadget(index)) {
+      blockers.push({ kind: "blocker", source: "corpus", message: "No plain ret gadget with a known address exists in the corpus." });
+    }
+    const frameSize = plan.strategy === "WriteProcessMemory" ? 28 : 24;
+    if (state.stack.controlledAfterEsp < frameSize) {
+      blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for the ${plan.strategy} stdcall frame (ret gadget + API + args).` });
+    }
+    if (!state.stack.writable) {
+      blockers.push({ kind: "blocker", source: "stack", message: "Stack region after ESP is not writable." });
+    }
+    if (state.stack.executable) {
+      warnings.push({ kind: "warning", source: "stack", message: "Stack is already executable; DEP bypass may be unnecessary." });
+    }
+    if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires IAT resolution but exploit state constrains to direct resolution." });
+    }
+    if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
+    }
+    const alignment = (_a = state.stack.alignment) != null ? _a : 4;
+    if (alignment % 4 !== 0) {
+      warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
+    }
+    return {
+      viable: blockers.length === 0,
+      entryPath: blockers.length === 0 ? "RET_TO_FRAME" : void 0,
+      blockers,
+      warnings
+    };
+  }
+  function validateForPivotToFrame(state, plan, index) {
+    var _a;
+    const blockers = [];
+    const warnings = [];
+    if (!state.control.instructionPointerControlled) {
+      blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    }
+    const pivotShape = plan.strategies.find((s) => s.shape === "STACK_PIVOT_FRAME");
+    if (!(pivotShape == null ? void 0 : pivotShape.possible)) {
+      blockers.push({ kind: "blocker", source: "plan", message: "STACK_PIVOT_FRAME is not capability-feasible in the current plan." });
+    }
+    const pivotSelection = selectPivotGadget(index, state);
+    if (!pivotSelection) {
+      const hasPivotGadgets = index.gadgets.some((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress2(g) !== void 0);
+      if (hasPivotGadgets) {
+        blockers.push({ kind: "blocker", source: "pivot", message: "Pivot gadgets exist but none have a source register in a known state. Declare the register state in ExploitState.registers." });
+      } else {
+        blockers.push({ kind: "blocker", source: "corpus", message: "No stack-pivot gadget with a known address exists in the corpus." });
+      }
+    }
+    const hasControlledRegion = ((_a = state.memory) != null ? _a : []).some(
+      (r) => r.controlled && r.writable && r.size >= 24
+    );
+    if (!hasControlledRegion && state.stack.controlledAfterEsp < 24) {
+      blockers.push({ kind: "blocker", source: "memory", message: "No controlled, writable memory region large enough for a stdcall frame is described in the exploit state." });
+    }
+    if (state.stack.controlledAfterEsp < 8) {
+      blockers.push({ kind: "blocker", source: "stack", message: "Fewer than 8 controlled bytes after ESP; not enough room for a pivot gadget address and target." });
+    }
+    if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires IAT resolution but exploit state constrains to direct resolution." });
+    }
+    if (plan.apiResolution === "direct" && state.constraints.apiResolution === "iat") {
+      blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
+    }
+    return {
+      viable: blockers.length === 0,
+      entryPath: blockers.length === 0 ? "PIVOT_TO_FRAME" : void 0,
+      blockers,
+      warnings
+    };
+  }
+  function apiFrameSlots(strategy) {
+    switch (strategy) {
+      case "VirtualProtect":
+        return [
+          { role: "api-address", placeholder: "VIRTUALPROTECT", comment: "VirtualProtect" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. shellcode or jmp esp)" },
+          { role: "arg1-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg2-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg3-flNewProtect", value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          { role: "arg4-lpflOldProtect", placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" }
+        ];
+      case "VirtualAlloc":
+        return [
+          { role: "api-address", placeholder: "VIRTUALALLOC", comment: "VirtualAlloc" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+          { role: "arg1-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg2-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg3-flAllocationType", value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { role: "arg4-flProtect", value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WriteProcessMemory":
+        return [
+          { role: "api-address", placeholder: "WRITEPROCESSMEMORY", comment: "WriteProcessMemory" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+          { role: "arg1-hProcess", value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { role: "arg2-lpBaseAddress", placeholder: "LP_BASE_ADDRESS", comment: "lpBaseAddress (executable dest)" },
+          { role: "arg3-lpBuffer", placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
+          { role: "arg4-nSize", placeholder: "NSIZE", comment: "nSize" },
+          { role: "arg5-lpNBW", placeholder: "WRITABLE", comment: "lpNumberOfBytesWritten (writable dummy)" }
+        ];
+      case "Stack Pivot":
+        return [
+          { role: "pivot-target", placeholder: "PIVOT_TARGET", comment: "pivot target address" }
+        ];
+    }
+  }
+  function checkAddressBadchars(addr, badchars, label) {
+    const hits = badcharHits2(Number(addr & BigInt(4294967295)), badchars);
+    if (hits.length > 0) {
+      return { kind: "violation", source: label, message: `${label} ${hex322(addr)} contains badchar byte(s) ${byteList2(hits)}.` };
+    }
+    return void 0;
+  }
+  function buildFrameSlots(frameDefs, badchars, startOffset) {
+    const placeholders = /* @__PURE__ */ new Set();
+    const violations = [];
+    const warnings = [];
+    const slots = [];
+    let offset = startOffset;
+    for (const def of frameDefs) {
+      let step;
+      if (def.value !== void 0) {
+        const v = def.value >>> 0;
+        const hits = badcharHits2(v, badchars);
+        if (hits.length > 0) {
+          violations.push({
+            kind: "violation",
+            source: def.role,
+            message: `${def.comment}: ${hex322(v)} contains badchar byte(s) ${byteList2(hits)}.`
+          });
+        }
+        step = { kind: "value", value: v, comment: def.comment };
+      } else {
+        placeholders.add(def.placeholder);
+        warnings.push({
+          kind: "warning",
+          source: def.role,
+          message: `${def.placeholder}: placeholder value must be checked against badchars after resolution.`
+        });
+        step = { kind: "value", placeholder: def.placeholder, comment: def.comment };
+      }
+      slots.push({ offset, size: 4, role: def.role, step });
+      offset += 4;
+    }
+    return { slots, placeholders: [...placeholders], violations, warnings };
+  }
+  function checkPayloadLength(totalBytes, state) {
+    const max = state.constraints.maximumPayloadLength;
+    if (max !== void 0 && totalBytes > max) {
+      return {
+        kind: "blocker",
+        source: "payload-length",
+        message: `Layout requires ${totalBytes} bytes but maximumPayloadLength is ${max}.`
+      };
+    }
+    return void 0;
+  }
+  function synthesizeDirectApi(plan, state, badchars) {
+    const frameDefs = apiFrameSlots(plan.strategy);
+    const apiSlot = frameDefs.shift();
+    const { slots, placeholders, violations, warnings } = buildFrameSlots(frameDefs, badchars, 0);
+    const apiStep = { kind: "value", placeholder: apiSlot.placeholder, comment: `saved EIP = ${apiSlot.comment} (direct overwrite)` };
+    const allPlaceholders = /* @__PURE__ */ new Set([apiSlot.placeholder, ...placeholders]);
+    warnings.push({
+      kind: "warning",
+      source: "api-address",
+      message: `${apiSlot.placeholder}: saved EIP must contain the API address; check against badchars after resolution.`
+    });
+    const allSlots = [
+      { offset: -4, size: 4, role: "saved-eip", step: apiStep },
+      ...slots
+    ];
+    const totalBytes = allSlots.length * 4;
+    const lengthCheck = checkPayloadLength(totalBytes, state);
+    if (lengthCheck) {
+      return blocked(plan, "DIRECT_API", [lengthCheck]);
+    }
+    const hasViolations = violations.length > 0;
+    return {
+      status: hasViolations ? "complete-with-violations" : "complete",
+      layoutProduced: true,
+      constraintCompatible: !hasViolations,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath: "DIRECT_API",
+      slots: allSlots,
+      totalBytes,
+      placeholders: [...allPlaceholders],
+      blockers: [],
+      violations,
+      warnings
+    };
+  }
+  function synthesizeRetToFrame(index, plan, state, badchars) {
+    const retGadget = findRetGadget(index);
+    const retAddr = firstKnownAddress2(retGadget);
+    const violations = [];
+    const warnings = [];
+    const retCheck = checkAddressBadchars(retAddr, badchars, "ret gadget");
+    if (retCheck) violations.push(retCheck);
+    const retStep = {
+      kind: "gadget",
+      address: retAddr,
+      comment: `saved EIP = ret gadget (dispatches to frame at ESP)`
+    };
+    const frameDefs = apiFrameSlots(plan.strategy);
+    const { slots: frameSlots, placeholders, violations: frameViolations, warnings: frameWarnings } = buildFrameSlots(frameDefs, badchars, 0);
+    violations.push(...frameViolations);
+    warnings.push(...frameWarnings);
+    const allSlots = [
+      { offset: -4, size: 4, role: "saved-eip", step: retStep },
+      ...frameSlots
+    ];
+    const totalBytes = allSlots.length * 4;
+    const lengthCheck = checkPayloadLength(totalBytes, state);
+    if (lengthCheck) {
+      return blocked(plan, "RET_TO_FRAME", [lengthCheck]);
+    }
+    const hasViolations = violations.length > 0;
+    return {
+      status: hasViolations ? "complete-with-violations" : "complete",
+      layoutProduced: true,
+      constraintCompatible: !hasViolations,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath: "RET_TO_FRAME",
+      slots: allSlots,
+      totalBytes,
+      placeholders,
+      blockers: [],
+      violations,
+      warnings
+    };
+  }
+  function synthesizePivotToFrame(index, plan, state, badchars, pivotSel) {
+    const violations = [];
+    const warnings = [];
+    const pivotCheck = checkAddressBadchars(pivotSel.semantics.address, badchars, "pivot gadget");
+    if (pivotCheck) violations.push(pivotCheck);
+    const pivotStep = {
+      kind: "gadget",
+      address: pivotSel.semantics.address,
+      comment: `saved EIP = pivot: ${pivotSel.semantics.sequence}`
+    };
+    const pivotDestStep = {
+      kind: "value",
+      placeholder: "PIVOT_DEST",
+      comment: "pivot destination (controlled region holding the stdcall frame)"
+    };
+    const frameDefs = apiFrameSlots(plan.strategy);
+    const { slots: frameSlots, placeholders: framePlaceholders, violations: frameViolations, warnings: frameWarnings } = buildFrameSlots(frameDefs, badchars, 8);
+    violations.push(...frameViolations);
+    warnings.push(...frameWarnings);
+    const allPlaceholders = /* @__PURE__ */ new Set(["PIVOT_DEST", ...framePlaceholders]);
+    warnings.push({
+      kind: "warning",
+      source: "pivot-destination",
+      message: "PIVOT_DEST: set to a controlled, writable region that holds the stdcall frame."
+    });
+    const allSlots = [
+      { offset: -4, size: 4, role: "saved-eip", step: pivotStep },
+      { offset: 0, size: 4, role: "pivot-destination", step: pivotDestStep },
+      ...frameSlots
+    ];
+    const totalBytes = allSlots.length * 4;
+    const lengthCheck = checkPayloadLength(totalBytes, state);
+    if (lengthCheck) {
+      return blocked(plan, "PIVOT_TO_FRAME", [lengthCheck]);
+    }
+    const hasViolations = violations.length > 0;
+    return {
+      status: hasViolations ? "complete-with-violations" : "complete",
+      layoutProduced: true,
+      constraintCompatible: !hasViolations,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "STACK_PIVOT_FRAME",
+      entryPath: "PIVOT_TO_FRAME",
+      pivot: pivotSel.semantics,
+      slots: allSlots,
+      totalBytes,
+      placeholders: [...allPlaceholders],
+      blockers: [],
+      violations,
+      warnings
+    };
+  }
+  function blocked(plan, entryPath, blockers) {
+    return {
+      status: "blocked",
+      layoutProduced: false,
+      constraintCompatible: false,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath,
+      slots: [],
+      totalBytes: 0,
+      placeholders: [],
+      blockers,
+      violations: [],
+      warnings: []
+    };
+  }
+  function synthesize(index, plan, state) {
+    const badchars = uniqueBytes3(state.constraints.badchars);
+    const retToFrameVal = validateForRetToFrame(state, plan, index);
+    const directApiVal = validateForDirectApi(state, plan);
+    const pivotVal = validateForPivotToFrame(state, plan, index);
+    if (retToFrameVal.viable) {
+      const result3 = synthesizeRetToFrame(index, plan, state, badchars);
+      result3.warnings.push(...retToFrameVal.warnings);
+      return result3;
+    }
+    if (directApiVal.viable) {
+      const result3 = synthesizeDirectApi(plan, state, badchars);
+      result3.warnings.push(...directApiVal.warnings);
+      return result3;
+    }
+    if (pivotVal.viable) {
+      const pivotSel = selectPivotGadget(index, state);
+      const result3 = synthesizePivotToFrame(index, plan, state, badchars, pivotSel);
+      result3.warnings.push(...pivotVal.warnings);
+      return result3;
+    }
+    return {
+      status: "blocked",
+      layoutProduced: false,
+      constraintCompatible: false,
+      planId: plan.id,
+      strategy: plan.strategy,
+      shape: "SYNTHETIC_STDCALL_FRAME",
+      entryPath: "DIRECT_API",
+      slots: [],
+      totalBytes: 0,
+      placeholders: [],
+      blockers: [
+        ...retToFrameVal.blockers.map((b) => __spreadProps(__spreadValues({}, b), { source: `RET_TO_FRAME/${b.source}` })),
+        ...directApiVal.blockers.map((b) => __spreadProps(__spreadValues({}, b), { source: `DIRECT_API/${b.source}` })),
+        ...pivotVal.blockers.map((b) => __spreadProps(__spreadValues({}, b), { source: `PIVOT_TO_FRAME/${b.source}` }))
+      ],
+      violations: [],
+      warnings: []
+    };
+  }
+  function synthesisRows(result3) {
+    var _a;
+    if (!result3.layoutProduced) {
+      return [
+        {
+          Plan: result3.planId.toString(),
+          Strategy: `${result3.strategy} / ${result3.shape}`,
+          Status: result3.status,
+          Path: result3.entryPath,
+          Diagnostic: result3.blockers.map((b) => b.message).join(" ")
+        }
+      ];
+    }
+    const rows = [];
+    rows.push({
+      Plan: result3.planId.toString(),
+      Strategy: `${result3.strategy} / ${result3.shape}`,
+      Status: result3.status,
+      Path: result3.entryPath,
+      Layout: result3.layoutProduced ? "produced" : "none",
+      Compatible: result3.constraintCompatible ? "yes" : "no"
+    });
+    for (const slot of result3.slots) {
+      rows.push({
+        Offset: slot.offset < 0 ? `${slot.offset}` : `+${slot.offset}`,
+        Role: slot.role,
+        Word: slot.step.kind === "gadget" ? hex322(slot.step.address) : (_a = slot.step.placeholder) != null ? _a : hex322(slot.step.value),
+        Comment: slot.step.comment
+      });
+    }
+    for (const v of result3.violations) {
+      rows.push({ Diagnostic: "VIOLATION", Detail: v.message });
+    }
+    return rows;
+  }
+
   // src/semantics/types.ts
   var SEMANTIC_SCHEMA_VERSION = "v1";
 
@@ -5786,6 +6332,16 @@ var osed_bundle = (() => {
       examples: ["dx @$osed().rop.emit(1)", "dx @$osed().rop.emit(1, 3)"]
     },
     {
+      name: "rop.synthesize",
+      description: "Synthesizes a concrete stack layout from a plan and the current exploit state. Uses cached state from triage(); accepts optional overrides.",
+      usage: "dx @$osed().rop.synthesize(planId, overrides?)",
+      examples: [
+        "dx @$osed().rop.synthesize(1)",
+        "dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 128})",
+        'dx @$osed().rop.synthesize(1, {badchars: "00 0A 0D"})'
+      ]
+    },
+    {
       name: "rop.chain",
       description: "Builds a register-setup chain from the loaded ROP corpus.",
       usage: "dx @$osed().rop.chain(register, value, register2?, value2?, ...)",
@@ -5826,6 +6382,16 @@ var osed_bundle = (() => {
       description: "Builds a flat VirtualAlloc stdcall frame without requiring ROP gadgets.",
       usage: "dx @$osed().rop.frame_va(virtualAlloc?, returnAddress?, lpAddress?, dwSize?, flAllocationType?, flProtect?, badchars?)",
       examples: ['dx @$osed().rop.frame_va(0x7C809AE1, 0x625011AF, 0, 0x201, 0x1000, 0x40, "00 0A 0D")']
+    },
+    {
+      name: "code_caves",
+      description: "Finds contiguous null-byte regions in PE sections suitable for shellcode placement.",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
+      examples: [
+        "dx @$osed().code_caves()",
+        'dx @$osed().code_caves("essfunc")',
+        'dx @$osed().code_caves("essfunc", 100)'
+      ]
     },
     {
       name: "sc.iat",
@@ -6142,8 +6708,8 @@ var osed_bundle = (() => {
     if (exclude.length === 0) {
       return true;
     }
-    const blocked = new Set(exclude);
-    return !addressBytes(address, pointerSize).some((value) => blocked.has(value));
+    const blocked2 = new Set(exclude);
+    return !addressBytes(address, pointerSize).some((value) => blocked2.has(value));
   }
   function scoreFinding(badcharSafe, aslr, safeseh) {
     let score = 0;
@@ -7197,6 +7763,164 @@ var osed_bundle = (() => {
           success: true,
           findings: [{ api, module: mod }],
           warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+
+  // src/commands/code_caves.ts
+  function scanSectionForCaves(section2, minSize, chunkSize) {
+    const caves = [];
+    let runStart;
+    let runLength = 0;
+    const flush = () => {
+      if (runStart !== void 0 && runLength >= minSize) {
+        caves.push({
+          address: runStart,
+          size: runLength,
+          module: section2.module.name,
+          section: section2.name,
+          sectionExecutable: section2.executable,
+          readable: null,
+          writable: null,
+          executable: null
+        });
+      }
+      runStart = void 0;
+      runLength = 0;
+    };
+    for (let offset = 0; offset < section2.size; offset += chunkSize) {
+      const chunkStart = section2.start + BigInt(offset);
+      const remaining = section2.size - offset;
+      const size = Math.min(remaining, chunkSize);
+      const bytes = tryReadMemory(chunkStart, size);
+      if (!bytes) {
+        flush();
+        continue;
+      }
+      for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] === 0) {
+          if (runStart === void 0) {
+            runStart = chunkStart + BigInt(i);
+            runLength = 1;
+          } else {
+            runLength++;
+          }
+        } else {
+          flush();
+        }
+      }
+    }
+    flush();
+    return caves;
+  }
+  function enrichProtection(caves) {
+    const checked = /* @__PURE__ */ new Map();
+    for (const cave of caves) {
+      const key2 = cave.address.toString();
+      let prot = checked.get(key2);
+      if (!prot) {
+        const region = memoryRegion(cave.address);
+        prot = { readable: region.readable, writable: region.writable, executable: region.executable };
+        checked.set(key2, prot);
+      }
+      cave.readable = prot.readable;
+      cave.writable = prot.writable;
+      cave.executable = prot.executable;
+    }
+  }
+  function flag(value) {
+    return value === null ? "?" : value ? "yes" : "no";
+  }
+  function findCodeCaves(module, minSize, maxResults) {
+    const scope = forEachSection({
+      module,
+      executableOnly: false,
+      maxResults: 200,
+      chunkSize: 4096
+    });
+    const caves = [];
+    for (const section2 of scope.sections) {
+      const found = scanSectionForCaves(section2, minSize, 4096);
+      for (const cave of found) {
+        caves.push(cave);
+        if (caves.length >= maxResults) break;
+      }
+      if (caves.length >= maxResults) break;
+    }
+    caves.sort((a, b) => b.size - a.size);
+    enrichProtection(caves);
+    return { caves, warnings: scope.warnings };
+  }
+  function createCodeCavesCommand() {
+    return {
+      name: "code_caves",
+      description: "Find contiguous null-byte regions in PE sections suitable for shellcode placement.",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
+      examples: [
+        "dx @$osed().code_caves()",
+        'dx @$osed().code_caves("essfunc")',
+        'dx @$osed().code_caves("essfunc", 100)',
+        'dx @$osed().code_caves("essfunc", 50, 20)'
+      ],
+      schema: {
+        module: { type: "string" },
+        minSize: { type: "number", min: 1, default: 50 },
+        maxResults: { type: "number", min: 1, max: 100, default: 25 }
+      },
+      execute(options) {
+        var _a, _b;
+        const module = options.module;
+        const minSize = (_a = options.minSize) != null ? _a : 50;
+        const maxResults = (_b = options.maxResults) != null ? _b : 25;
+        const pointerSize = getPointerSize();
+        const { caves, warnings } = findCodeCaves(module, minSize, maxResults);
+        section("Code Caves");
+        if (caves.length === 0) {
+          info(`No null-byte regions >= ${minSize} bytes found.`);
+        } else {
+          info(`Found ${caves.length} cave(s) (min ${minSize} bytes)`);
+          table(
+            [
+              { key: "address", header: "Address", width: pointerSize * 2 + 2 },
+              { key: "size", header: "Size", width: 8 },
+              { key: "module", header: "Module", width: 16 },
+              { key: "section", header: "Section", width: 8 },
+              { key: "read", header: "R" },
+              { key: "write", header: "W" },
+              { key: "exec", header: "X" }
+            ],
+            caves.map((cave) => ({
+              address: formatAddress(cave.address, pointerSize),
+              size: `0x${cave.size.toString(16).toUpperCase()}`,
+              module: cave.module,
+              section: cave.section,
+              read: flag(cave.readable),
+              write: flag(cave.writable),
+              exec: flag(cave.executable)
+            }))
+          );
+        }
+        for (const warning of warnings) {
+          warn(warning);
+        }
+        whyItMatters("Code caves provide writable regions for shellcode or ROP stack pivots without allocating new memory.");
+        return {
+          command: "code_caves",
+          args: options,
+          success: true,
+          findings: caves.map((cave) => ({
+            address: formatAddress(cave.address, pointerSize),
+            size: cave.size,
+            module: cave.module,
+            section: cave.section,
+            sectionExecutable: cave.sectionExecutable,
+            readable: cave.readable,
+            writable: cave.writable,
+            executable: cave.executable
+          })),
+          warnings,
           errors: []
         };
       }
@@ -9178,7 +9902,7 @@ var osed_bundle = (() => {
   }
 
   // src/commands/memory.ts
-  function flag(value) {
+  function flag2(value) {
     return value === null ? "unknown" : value ? "yes" : "no";
   }
   function createMemoryCommand() {
@@ -9204,12 +9928,12 @@ var osed_bundle = (() => {
             { key: "type", header: "Type" }
           ],
           [{
-            read: flag(evidence.readable),
-            write: flag(evidence.writable),
-            exec: flag(evidence.executable),
-            guard: flag(evidence.guarded),
-            noAccess: flag(evidence.noAccess),
-            commit: flag(evidence.committed),
+            read: flag2(evidence.readable),
+            write: flag2(evidence.writable),
+            exec: flag2(evidence.executable),
+            guard: flag2(evidence.guarded),
+            noAccess: flag2(evidence.noAccess),
+            commit: flag2(evidence.committed),
             type: evidence.regionType
           }]
         );
@@ -9386,8 +10110,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-07-26T21:22:04.887Z",
-      gitCommit: "4a098bef9be7",
+      buildTime: "2026-08-01T21:03:12.904Z",
+      gitCommit: "d4d3c50ff009",
       gitDirty: true
     };
   }
@@ -9831,7 +10555,91 @@ var osed_bundle = (() => {
   var ropPlans = /* @__PURE__ */ new Map();
   var corpusModules = [];
   var ropEmitter = new RankedSemanticEmitter();
+  var cachedExploitState;
   var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+  var NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
+  function buildExploitStateFromTriage(findings) {
+    var _a, _b;
+    const control = findings.control;
+    const stack = findings.stack;
+    const seh = findings.seh;
+    const badcharStats = findings.badchars;
+    const ipControlled = (control == null ? void 0 : control.ipControlled) === true;
+    let mechanism = "saved-ret";
+    if ((seh == null ? void 0 : seh.overwritten) === "yes") {
+      mechanism = "seh";
+    }
+    const badchars = (badcharStats != null ? badcharStats : []).filter((entry) => typeof entry.byte === "number").map((entry) => entry.byte & 255);
+    const sp = stack == null ? void 0 : stack.sp;
+    const spValue = sp !== void 0 && sp !== null ? Number(sp) : void 0;
+    const landing2 = stack == null ? void 0 : stack.landing;
+    const landingBytes = landing2 == null ? void 0 : landing2.bytes;
+    const controlledAfterEsp = (_a = landingBytes == null ? void 0 : landingBytes.length) != null ? _a : 0;
+    const registers = {};
+    const regEntries = control == null ? void 0 : control.registers;
+    if (Array.isArray(regEntries)) {
+      for (const entry of regEntries) {
+        const name = (_b = entry.name) == null ? void 0 : _b.toLowerCase();
+        if (name && name !== "eip" && name !== "esp") {
+          registers[name] = { kind: "unknown" };
+        }
+      }
+    }
+    return {
+      control: {
+        mechanism,
+        instructionPointerControlled: ipControlled
+      },
+      stack: {
+        espAtControl: spValue,
+        controlledBeforeEsp: 0,
+        controlledAfterEsp,
+        contiguousControlledBytes: controlledAfterEsp,
+        readable: true,
+        writable: true,
+        executable: false
+      },
+      registers,
+      constraints: {
+        badchars,
+        apiResolution: "either"
+      }
+    };
+  }
+  function mergeExploitStateOverrides(base, overrides) {
+    const merged = __spreadValues({}, base);
+    if (overrides.mechanism !== void 0) {
+      merged.control = __spreadProps(__spreadValues({}, merged.control), { mechanism: String(overrides.mechanism) });
+    }
+    if (overrides.eipControlled !== void 0) {
+      merged.control = __spreadProps(__spreadValues({}, merged.control), { instructionPointerControlled: Boolean(overrides.eipControlled) });
+    }
+    if (overrides.controlledBytesAfterEsp !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { controlledAfterEsp: Number(overrides.controlledBytesAfterEsp), contiguousControlledBytes: Number(overrides.controlledBytesAfterEsp) });
+    }
+    if (overrides.controlledBytesBeforeEsp !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { controlledBeforeEsp: Number(overrides.controlledBytesBeforeEsp) });
+    }
+    if (overrides.stackWritable !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { writable: Boolean(overrides.stackWritable) });
+    }
+    if (overrides.stackExecutable !== void 0) {
+      merged.stack = __spreadProps(__spreadValues({}, merged.stack), { executable: Boolean(overrides.stackExecutable) });
+    }
+    if (overrides.badchars !== void 0) {
+      merged.constraints = __spreadProps(__spreadValues({}, merged.constraints), { badchars: parseHexByteList(overrides.badchars) });
+    }
+    if (overrides.apiResolution !== void 0) {
+      const resolution = String(overrides.apiResolution).toLowerCase();
+      if (resolution === "direct" || resolution === "iat" || resolution === "either") {
+        merged.constraints = __spreadProps(__spreadValues({}, merged.constraints), { apiResolution: resolution });
+      }
+    }
+    if (overrides.maximumPayloadLength !== void 0) {
+      merged.constraints = __spreadProps(__spreadValues({}, merged.constraints), { maximumPayloadLength: Number(overrides.maximumPayloadLength) });
+    }
+    return merged;
+  }
   function diagnoseModuleBadchars(moduleName, badchars) {
     var _a;
     try {
@@ -9908,6 +10716,7 @@ var osed_bundle = (() => {
       createMathCommand(),
       createVersionCommand(),
       ...createStringCommands(),
+      createCodeCavesCommand(),
       createEncodeCommand(),
       createNopCommand(),
       createRopTemplateCommand(),
@@ -9930,6 +10739,9 @@ var osed_bundle = (() => {
       }
       const result3 = registry.execute(commandName, normalizeInvocation(commandName, args));
       lastResult = result3;
+      if (commandName === "triage" && result3.success && result3.findings.length > 0) {
+        cachedExploitState = buildExploitStateFromTriage(result3.findings[0]);
+      }
       if (!result3.success) {
         for (const error2 of result3.errors) {
           error(error2);
@@ -10355,6 +11167,83 @@ var osed_bundle = (() => {
       });
       return toDxResult(`ROP Emit ${entry.plan.id}.${result3.strategyId}`, rows);
     };
+    const executeRopSynthesize = (...args) => {
+      var _a, _b;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.synthesize");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      const options = isPlainObject(args[0]) ? args[0] : __spreadValues({ planId: args[0] }, isPlainObject(args[1]) ? args[1] : {});
+      const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
+      const entry = ropPlans.get(planId);
+      if (!entry) {
+        const rows2 = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      if (entry.generation !== corpusGeneration) {
+        const rows2 = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      let state = cachedExploitState;
+      if (!state) {
+        const rows2 = [{ Error: NO_EXPLOIT_STATE_MESSAGE }];
+        renderRows("ROP Synthesize", rows2);
+        return toDxResult("ROP Synthesize", rows2);
+      }
+      const overrides = isPlainObject(args[1]) ? args[1] : {};
+      if (Object.keys(overrides).length > 0) {
+        state = mergeExploitStateOverrides(state, overrides);
+      }
+      const result3 = synthesize(currentRopCorpus, entry.plan, state);
+      const title = `ROP Synthesize ${planId}`;
+      section(title);
+      info(`Path: ${result3.entryPath}`);
+      info(`Status: ${result3.status}`);
+      info(`Layout: ${result3.layoutProduced ? "produced" : "none"}`);
+      info(`Constraint compatible: ${result3.constraintCompatible ? "yes" : "no"}`);
+      if (result3.layoutProduced) {
+        info(`Strategy: ${result3.strategy} / ${result3.shape}`);
+        info(`Total: ${result3.totalBytes} bytes`);
+        if (result3.placeholders.length > 0) {
+          info(`Resolve before use: ${result3.placeholders.join(", ")}`);
+        }
+        if (result3.pivot) {
+          info(`Pivot: ${result3.pivot.sequence} (source: ${result3.pivot.source}${result3.pivot.sourceRegister ? ` ${result3.pivot.sourceRegister}` : ""})`);
+        }
+      }
+      for (const v of result3.violations) {
+        warn(`VIOLATION: ${v.message}`);
+      }
+      for (const b of result3.blockers) {
+        error(`BLOCKER: ${b.message}`);
+      }
+      for (const w of result3.warnings) {
+        warn(w.message);
+      }
+      if (!result3.constraintCompatible && result3.layoutProduced && result3.violations.length > 0) {
+        info("Operator action: synthesize values arithmetically, use writable memory construction, or select an alternate strategy.");
+      }
+      const rows = synthesisRows(result3);
+      renderRows(title, rows);
+      setResult({
+        command: "rop.synthesize",
+        args: options,
+        success: result3.status === "complete",
+        findings: [result3],
+        warnings: [
+          ...result3.violations.map((v) => v.message),
+          ...result3.warnings.map((w) => w.message)
+        ],
+        errors: result3.blockers.map((b) => b.message)
+      });
+      return toDxResult(title, rows);
+    };
     const parseChainTargets = (spec) => {
       if (Array.isArray(spec)) {
         return spec.filter((entry) => isPlainObject(entry)).map((entry) => {
@@ -10736,6 +11625,7 @@ var osed_bundle = (() => {
       capabilities: executeRopCapabilities,
       plan: executeRopPlan,
       emit: executeRopEmit,
+      synthesize: executeRopSynthesize,
       chain: executeRopChain,
       chain_vp: executeRopChainVp,
       chain_wpm: executeRopChainWpm,
@@ -10917,6 +11807,8 @@ var osed_bundle = (() => {
         return { mode: args[0], tag: args[1], offset: args[2], address: args[3] };
       case "modules":
         return { filter: args[0] };
+      case "code_caves":
+        return { module: args[0], minSize: args[1], maxResults: args[2] };
       case "math":
         return { value: args[0], bits: args[1] };
       case "str_read":
@@ -11007,10 +11899,12 @@ var osed_bundle = (() => {
   }
   function initialize() {
     currentRopCorpus = void 0;
+    cachedExploitState = void 0;
     invalidateCorpusPlans();
     resetCorpusModules();
     registry.setReloader(() => {
       currentRopCorpus = void 0;
+      cachedExploitState = void 0;
       invalidateCorpusPlans();
       resetCorpusModules();
       registerAll();
