@@ -1,3 +1,6 @@
+// Cave-byte heuristics (0x00, 0xCC, 0x90) and section-alignment scanning
+// inspired by nop-tech/codecaver: https://github.com/nop-tech/codecaver
+
 import { Command, CommandResult } from "../core/registry";
 import { forEachSection, ModuleSection } from "../core/scan_engine";
 import { tryReadMemory, getPointerSize, readUint16LE, readUint32LE } from "../core/memory";
@@ -206,7 +209,7 @@ export function findCodeCaves(
 export function createCodeCavesCommand(): Command {
   return {
     name: "code_caves",
-    description: "Find contiguous null-byte and int3/nop-padding regions in PE sections suitable for shellcode placement.",
+    description: "Find contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
     usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
     examples: [
       "dx @$osed().code_caves()",

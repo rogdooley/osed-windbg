@@ -167,7 +167,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "code_caves",
-    description: "Finds contiguous null-byte regions in PE sections suitable for shellcode placement.",
+    description: "Finds contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
     usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
     examples: [
       "dx @$osed().code_caves()",
