@@ -7779,7 +7779,7 @@ var osed_bundle = (() => {
         caves.push({
           address: runStart,
           size: runLength,
-          module: section2.module.name,
+          module: section2.module.name.replace(/^.*[\\\/]/, ""),
           section: section2.name,
           sectionExecutable: section2.executable,
           readable: null,
@@ -7893,7 +7893,7 @@ var osed_bundle = (() => {
             ],
             caves.map((cave) => ({
               address: formatAddress(cave.address, pointerSize),
-              size: `0x${cave.size.toString(16).toUpperCase()}`,
+              size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
               module: cave.module,
               section: cave.section,
               read: flag(cave.readable),
@@ -10110,9 +10110,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-08-01T21:03:12.904Z",
-      gitCommit: "d4d3c50ff009",
-      gitDirty: true
+      buildTime: "2026-08-07T01:59:33.096Z",
+      gitCommit: "e5aa7687993e",
+      gitDirty: false
     };
   }
 
