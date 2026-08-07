@@ -7780,7 +7780,54 @@ var osed_bundle = (() => {
   function isCaveByte(byte) {
     return byte === 0 || byte === 204 || byte === 144;
   }
-  function scanSectionForCaves(section2, minSize, chunkSize) {
+  function alignUp(value, alignment) {
+    if (alignment <= 0) return value;
+    return Math.ceil(value / alignment) * alignment;
+  }
+  function readSectionAlignment(moduleBase) {
+    try {
+      const mz = readUint16LE(moduleBase);
+      if (mz !== 23117) return 0;
+      const peOffset = readUint32LE(moduleBase + BigInt(60));
+      const pe = moduleBase + BigInt(peOffset);
+      if (readUint32LE(pe) !== 17744) return 0;
+      return readUint32LE(pe + BigInt(56));
+    } catch (e) {
+      return 0;
+    }
+  }
+  function computeEffectiveSizes(sections) {
+    var _a;
+    if (sections.length === 0) return [];
+    const grouped = /* @__PURE__ */ new Map();
+    for (const section2 of sections) {
+      const key2 = `${section2.module.base.toString(16)}`;
+      const list = (_a = grouped.get(key2)) != null ? _a : [];
+      list.push(section2);
+      grouped.set(key2, list);
+    }
+    const effectiveSizes = new Array(sections.length);
+    for (const moduleSections of grouped.values()) {
+      const moduleBase = moduleSections[0].module.base;
+      const moduleEnd = moduleBase + moduleSections[0].module.size;
+      const sectionAlignment = readSectionAlignment(moduleBase);
+      const sorted = [...moduleSections].sort((a, b) => a.start < b.start ? -1 : 1);
+      for (let i = 0; i < sorted.length; i++) {
+        const section2 = sorted[i];
+        const idx = sections.indexOf(section2);
+        if (sectionAlignment > 0) {
+          const alignedSize = alignUp(section2.size, sectionAlignment);
+          const nextStart = i + 1 < sorted.length ? sorted[i + 1].start : moduleEnd;
+          const maxSize = Number(nextStart - section2.start);
+          effectiveSizes[idx] = Math.min(alignedSize, maxSize > 0 ? maxSize : alignedSize);
+        } else {
+          effectiveSizes[idx] = section2.size;
+        }
+      }
+    }
+    return effectiveSizes;
+  }
+  function scanForCaves(section2, scanSize, minSize, chunkSize) {
     const caves = [];
     let runStart;
     let runLength = 0;
@@ -7808,9 +7855,9 @@ var osed_bundle = (() => {
       int3Count = 0;
       nopCount = 0;
     };
-    for (let offset = 0; offset < section2.size; offset += chunkSize) {
+    for (let offset = 0; offset < scanSize; offset += chunkSize) {
       const chunkStart = section2.start + BigInt(offset);
-      const remaining = section2.size - offset;
+      const remaining = scanSize - offset;
       const size = Math.min(remaining, chunkSize);
       const bytes = tryReadMemory(chunkStart, size);
       if (!bytes) {
@@ -7859,9 +7906,12 @@ var osed_bundle = (() => {
       maxResults: 200,
       chunkSize: 4096
     });
+    const effectiveSizes = computeEffectiveSizes(scope.sections);
     const caves = [];
-    for (const section2 of scope.sections) {
-      const found = scanSectionForCaves(section2, minSize, 4096);
+    for (let s = 0; s < scope.sections.length; s++) {
+      const section2 = scope.sections[s];
+      const scanSize = effectiveSizes[s];
+      const found = scanForCaves(section2, scanSize, minSize, 4096);
       for (const cave of found) {
         caves.push(cave);
         if (caves.length >= maxResults) break;
@@ -7875,7 +7925,7 @@ var osed_bundle = (() => {
   function createCodeCavesCommand() {
     return {
       name: "code_caves",
-      description: "Find contiguous null-byte and int3-padding regions in PE sections suitable for shellcode placement.",
+      description: "Find contiguous null-byte and int3/nop-padding regions in PE sections suitable for shellcode placement.",
       usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
       examples: [
         "dx @$osed().code_caves()",
@@ -10132,9 +10182,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-08-07T02:25:04.828Z",
-      gitCommit: "b8f8f682d774",
-      gitDirty: false
+      buildTime: "2026-08-07T12:26:59.174Z",
+      gitCommit: "dbd4afe3521f",
+      gitDirty: true
     };
   }
 

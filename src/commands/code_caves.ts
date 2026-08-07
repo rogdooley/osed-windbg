@@ -1,6 +1,6 @@
 import { Command, CommandResult } from "../core/registry";
 import { forEachSection, ModuleSection } from "../core/scan_engine";
-import { tryReadMemory, getPointerSize } from "../core/memory";
+import { tryReadMemory, getPointerSize, readUint16LE, readUint32LE } from "../core/memory";
 import { memoryRegion } from "../analysis/memory";
 import * as out from "../core/output";
 
@@ -30,8 +30,65 @@ function isCaveByte(byte: number): boolean {
   return byte === 0x00 || byte === 0xcc || byte === 0x90;
 }
 
-function scanSectionForCaves(
+function alignUp(value: number, alignment: number): number {
+  if (alignment <= 0) return value;
+  return Math.ceil(value / alignment) * alignment;
+}
+
+function readSectionAlignment(moduleBase: bigint): number {
+  try {
+    const mz = readUint16LE(moduleBase);
+    if (mz !== 0x5a4d) return 0;
+    const peOffset = readUint32LE(moduleBase + BigInt(0x3c));
+    const pe = moduleBase + BigInt(peOffset);
+    if (readUint32LE(pe) !== 0x4550) return 0;
+    return readUint32LE(pe + BigInt(0x38));
+  } catch {
+    return 0;
+  }
+}
+
+function computeEffectiveSizes(sections: ModuleSection[]): number[] {
+  if (sections.length === 0) return [];
+
+  const grouped = new Map<string, ModuleSection[]>();
+  for (const section of sections) {
+    const key = `${section.module.base.toString(16)}`;
+    const list = grouped.get(key) ?? [];
+    list.push(section);
+    grouped.set(key, list);
+  }
+
+  const effectiveSizes: number[] = new Array(sections.length);
+
+  for (const moduleSections of grouped.values()) {
+    const moduleBase = moduleSections[0].module.base;
+    const moduleEnd = moduleBase + moduleSections[0].module.size;
+    const sectionAlignment = readSectionAlignment(moduleBase);
+
+    const sorted = [...moduleSections].sort((a, b) => (a.start < b.start ? -1 : 1));
+
+    for (let i = 0; i < sorted.length; i++) {
+      const section = sorted[i];
+      const idx = sections.indexOf(section);
+
+      if (sectionAlignment > 0) {
+        const alignedSize = alignUp(section.size, sectionAlignment);
+        const nextStart = i + 1 < sorted.length ? sorted[i + 1].start : moduleEnd;
+        const maxSize = Number(nextStart - section.start);
+        effectiveSizes[idx] = Math.min(alignedSize, maxSize > 0 ? maxSize : alignedSize);
+      } else {
+        effectiveSizes[idx] = section.size;
+      }
+    }
+  }
+
+  return effectiveSizes;
+}
+
+function scanForCaves(
   section: ModuleSection,
+  scanSize: number,
   minSize: number,
   chunkSize: number,
 ): CodeCave[] {
@@ -64,9 +121,9 @@ function scanSectionForCaves(
     nopCount = 0;
   };
 
-  for (let offset = 0; offset < section.size; offset += chunkSize) {
+  for (let offset = 0; offset < scanSize; offset += chunkSize) {
     const chunkStart = section.start + BigInt(offset);
-    const remaining = section.size - offset;
+    const remaining = scanSize - offset;
     const size = Math.min(remaining, chunkSize);
     const bytes = tryReadMemory(chunkStart, size);
     if (!bytes) {
@@ -125,9 +182,13 @@ export function findCodeCaves(
     chunkSize: 0x1000,
   });
 
+  const effectiveSizes = computeEffectiveSizes(scope.sections);
+
   const caves: CodeCave[] = [];
-  for (const section of scope.sections) {
-    const found = scanSectionForCaves(section, minSize, 0x1000);
+  for (let s = 0; s < scope.sections.length; s++) {
+    const section = scope.sections[s];
+    const scanSize = effectiveSizes[s];
+    const found = scanForCaves(section, scanSize, minSize, 0x1000);
     for (const cave of found) {
       caves.push(cave);
       if (caves.length >= maxResults) break;
@@ -145,7 +206,7 @@ export function findCodeCaves(
 export function createCodeCavesCommand(): Command {
   return {
     name: "code_caves",
-    description: "Find contiguous null-byte and int3-padding regions in PE sections suitable for shellcode placement.",
+    description: "Find contiguous null-byte and int3/nop-padding regions in PE sections suitable for shellcode placement.",
     usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
     examples: [
       "dx @$osed().code_caves()",

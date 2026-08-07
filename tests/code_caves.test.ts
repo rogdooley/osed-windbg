@@ -68,6 +68,8 @@ function makeImageWithSections(
   writeUint32LE(image, peOffset, 0x4550);
   writeUint16LE(image, peOffset + 0x6, sections.length);
   writeUint16LE(image, peOffset + 0x14, 0xe0);
+  // SectionAlignment at optional header offset 0x20 (PE + 0x18 + 0x20 = PE + 0x38)
+  writeUint32LE(image, peOffset + 0x38, 0x1000);
 
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
@@ -324,6 +326,38 @@ describe("findCodeCaves", () => {
     expect(caves.length).toBe(1);
     expect(caves[0].pattern).toBe("PADDING");
     expect(caves[0].size).toBe(60);
+  });
+
+  test("finds padding beyond VirtualSize up to section alignment boundary", () => {
+    // .text VirtualSize=0xe70, but SectionAlignment=0x1000 so actual mapped
+    // region extends to 0x2000. Padding from 0x1e70..0x1fff should be found.
+    const { image, base } = makeImageWithSections(
+      [
+        { name: ".text", rva: 0x1000, virtualSize: 0xe70, characteristics: IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ },
+        { name: ".data", rva: 0x2000, virtualSize: 0x100, characteristics: IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE },
+      ],
+      0x4000,
+    );
+    // Fill .text code region with real instructions
+    for (let i = 0x1000; i < 0x1e70; i++) {
+      image[i] = 0xc3;
+    }
+    // Alignment padding after VirtualSize: 0x1e70..0x1fff filled with 0xCC
+    for (let i = 0x1e70; i < 0x2000; i++) {
+      image[i] = 0xcc;
+    }
+    // Fill .data with real data
+    for (let i = 0x2000; i < 0x2100; i++) {
+      image[i] = 0x42;
+    }
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    const textCave = caves.find((c) => c.section === ".text");
+    expect(textCave).toBeDefined();
+    expect(textCave!.address).toBe(base + BigInt(0x1e70));
+    expect(textCave!.size).toBe(0x190); // 0x2000 - 0x1e70
+    expect(textCave!.pattern).toBe("INT3");
   });
 
   test("int3 cave spanning a chunk boundary stays contiguous", () => {
