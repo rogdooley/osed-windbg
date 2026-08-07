@@ -4,7 +4,7 @@ import { tryReadMemory, getPointerSize } from "../core/memory";
 import { memoryRegion } from "../analysis/memory";
 import * as out from "../core/output";
 
-export type CavePattern = "NULL" | "INT3" | "PADDING";
+export type CavePattern = "NULL" | "INT3" | "NOP" | "PADDING";
 
 export type CodeCave = {
   address: bigint;
@@ -18,14 +18,16 @@ export type CodeCave = {
   executable: boolean | null;
 };
 
-function classifyRun(nullCount: number, int3Count: number): CavePattern {
-  if (int3Count === 0) return "NULL";
-  if (nullCount === 0) return "INT3";
+function classifyRun(nullCount: number, int3Count: number, nopCount: number): CavePattern {
+  const total = nullCount + int3Count + nopCount;
+  if (total === nullCount) return "NULL";
+  if (total === int3Count) return "INT3";
+  if (total === nopCount) return "NOP";
   return "PADDING";
 }
 
 function isCaveByte(byte: number): boolean {
-  return byte === 0x00 || byte === 0xcc;
+  return byte === 0x00 || byte === 0xcc || byte === 0x90;
 }
 
 function scanSectionForCaves(
@@ -38,6 +40,7 @@ function scanSectionForCaves(
   let runLength = 0;
   let nullCount = 0;
   let int3Count = 0;
+  let nopCount = 0;
   const moduleName = section.module.name.replace(/^.*[\\\/]/, "");
 
   const flush = (): void => {
@@ -45,7 +48,7 @@ function scanSectionForCaves(
       caves.push({
         address: runStart,
         size: runLength,
-        pattern: classifyRun(nullCount, int3Count),
+        pattern: classifyRun(nullCount, int3Count, nopCount),
         module: moduleName,
         section: section.name,
         sectionExecutable: section.executable,
@@ -58,6 +61,7 @@ function scanSectionForCaves(
     runLength = 0;
     nullCount = 0;
     int3Count = 0;
+    nopCount = 0;
   };
 
   for (let offset = 0; offset < section.size; offset += chunkSize) {
@@ -77,7 +81,8 @@ function scanSectionForCaves(
         }
         runLength++;
         if (bytes[i] === 0x00) nullCount++;
-        else int3Count++;
+        else if (bytes[i] === 0xcc) int3Count++;
+        else nopCount++;
       } else {
         flush();
       }

@@ -89,7 +89,7 @@ describe("findCodeCaves", () => {
       0x5000,
     );
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     for (let i = 0x1100; i < 0x1140; i++) {
       image[i] = 0x00;
@@ -114,7 +114,7 @@ describe("findCodeCaves", () => {
     );
     // Fill section with real code bytes
     for (let i = 0x1000; i < 0x2000; i++) {
-      image[i] = 0x90; // nop
+      image[i] = 0xc3; // nop
     }
     // 80-byte int3 cave
     for (let i = 0x1200; i < 0x1250; i++) {
@@ -135,7 +135,7 @@ describe("findCodeCaves", () => {
       0x3000,
     );
     for (let i = 0x1000; i < 0x2000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     // Mixed run: alternating 0x00 and 0xCC for 60 bytes
     for (let i = 0x1300; i < 0x133c; i++) {
@@ -155,7 +155,7 @@ describe("findCodeCaves", () => {
       0x3000,
     );
     for (let i = 0x1000; i < 0x2000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     // 30-byte null run -- below the 50-byte default
     for (let i = 0x1200; i < 0x121e; i++) {
@@ -195,7 +195,7 @@ describe("findCodeCaves", () => {
       0x5000,
     );
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     // Small cave: 60 null bytes at 0x1100
     for (let i = 0x1100; i < 0x113c; i++) {
@@ -233,7 +233,7 @@ describe("findCodeCaves", () => {
       0x3000,
     );
     for (let i = 0x1000; i < 0x2000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     for (let i = 0x1200; i < 0x1240; i++) {
       image[i] = 0x00;
@@ -251,7 +251,7 @@ describe("findCodeCaves", () => {
       0x5000,
     );
     for (let i = 0x1000; i < 0x4000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     // Place 5 caves of 60 bytes each, spaced out
     for (let cave = 0; cave < 5; cave++) {
@@ -272,7 +272,7 @@ describe("findCodeCaves", () => {
       0x4000,
     );
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     // 128-byte cave straddling the 0x2000 chunk boundary (0x1FC0..0x2040)
     for (let i = 0x1fc0; i < 0x2040; i++) {
@@ -286,13 +286,53 @@ describe("findCodeCaves", () => {
     expect(caves[0].address).toBe(base + BigInt(0x1fc0));
   });
 
+  test("detects pure nop caves", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x3000,
+    );
+    for (let i = 0x1000; i < 0x2000; i++) {
+      image[i] = 0xc3;
+    }
+    // 70-byte nop sled
+    for (let i = 0x1400; i < 0x1446; i++) {
+      image[i] = 0x90;
+    }
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    expect(caves.length).toBe(1);
+    expect(caves[0].pattern).toBe("NOP");
+    expect(caves[0].size).toBe(70);
+  });
+
+  test("detects mixed null/int3/nop as PADDING", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x3000,
+    );
+    for (let i = 0x1000; i < 0x2000; i++) {
+      image[i] = 0xc3;
+    }
+    // Mixed: 20 x 0x00, 20 x 0xCC, 20 x 0x90
+    for (let i = 0x1500; i < 0x1514; i++) image[i] = 0x00;
+    for (let i = 0x1514; i < 0x1528; i++) image[i] = 0xcc;
+    for (let i = 0x1528; i < 0x153c; i++) image[i] = 0x90;
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    expect(caves.length).toBe(1);
+    expect(caves[0].pattern).toBe("PADDING");
+    expect(caves[0].size).toBe(60);
+  });
+
   test("int3 cave spanning a chunk boundary stays contiguous", () => {
     const { image, base } = makeImageWithSections(
       [{ name: ".text", rva: 0x1000, virtualSize: 0x2000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
       0x4000,
     );
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0x90;
+      image[i] = 0xc3;
     }
     // 100-byte int3 cave across chunk boundary
     for (let i = 0x1fce; i < 0x2032; i++) {

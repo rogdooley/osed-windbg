@@ -7770,13 +7770,15 @@ var osed_bundle = (() => {
   }
 
   // src/commands/code_caves.ts
-  function classifyRun(nullCount, int3Count) {
-    if (int3Count === 0) return "NULL";
-    if (nullCount === 0) return "INT3";
+  function classifyRun(nullCount, int3Count, nopCount) {
+    const total = nullCount + int3Count + nopCount;
+    if (total === nullCount) return "NULL";
+    if (total === int3Count) return "INT3";
+    if (total === nopCount) return "NOP";
     return "PADDING";
   }
   function isCaveByte(byte) {
-    return byte === 0 || byte === 204;
+    return byte === 0 || byte === 204 || byte === 144;
   }
   function scanSectionForCaves(section2, minSize, chunkSize) {
     const caves = [];
@@ -7784,13 +7786,14 @@ var osed_bundle = (() => {
     let runLength = 0;
     let nullCount = 0;
     let int3Count = 0;
+    let nopCount = 0;
     const moduleName = section2.module.name.replace(/^.*[\\\/]/, "");
     const flush = () => {
       if (runStart !== void 0 && runLength >= minSize) {
         caves.push({
           address: runStart,
           size: runLength,
-          pattern: classifyRun(nullCount, int3Count),
+          pattern: classifyRun(nullCount, int3Count, nopCount),
           module: moduleName,
           section: section2.name,
           sectionExecutable: section2.executable,
@@ -7803,6 +7806,7 @@ var osed_bundle = (() => {
       runLength = 0;
       nullCount = 0;
       int3Count = 0;
+      nopCount = 0;
     };
     for (let offset = 0; offset < section2.size; offset += chunkSize) {
       const chunkStart = section2.start + BigInt(offset);
@@ -7820,7 +7824,8 @@ var osed_bundle = (() => {
           }
           runLength++;
           if (bytes[i] === 0) nullCount++;
-          else int3Count++;
+          else if (bytes[i] === 204) int3Count++;
+          else nopCount++;
         } else {
           flush();
         }
@@ -10127,8 +10132,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-08-07T02:21:30.648Z",
-      gitCommit: "6f962e3492c8",
+      buildTime: "2026-08-07T02:24:31.325Z",
+      gitCommit: "4a7b70a2e3b1",
       gitDirty: true
     };
   }
