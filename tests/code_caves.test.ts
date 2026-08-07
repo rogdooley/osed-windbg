@@ -88,9 +88,8 @@ describe("findCodeCaves", () => {
       [{ name: ".text", rva: 0x1000, virtualSize: 0x2000, characteristics: IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ }],
       0x5000,
     );
-    // Fill .text with non-zero, then place a 64-byte null cave at offset 0x100 into .text
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0xcc;
+      image[i] = 0x90;
     }
     for (let i = 0x1100; i < 0x1140; i++) {
       image[i] = 0x00;
@@ -100,11 +99,54 @@ describe("findCodeCaves", () => {
     const { caves } = findCodeCaves(undefined, 50, 25);
 
     expect(caves.length).toBe(1);
+    expect(caves[0].pattern).toBe("NULL");
     expect(caves[0].address).toBe(base + BigInt(0x1100));
     expect(caves[0].size).toBe(64);
     expect(caves[0].module).toBe("target.exe");
     expect(caves[0].section).toBe(".text");
     expect(caves[0].sectionExecutable).toBe(true);
+  });
+
+  test("detects pure int3 caves", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x3000,
+    );
+    // Fill section with real code bytes
+    for (let i = 0x1000; i < 0x2000; i++) {
+      image[i] = 0x90; // nop
+    }
+    // 80-byte int3 cave
+    for (let i = 0x1200; i < 0x1250; i++) {
+      image[i] = 0xcc;
+    }
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    expect(caves.length).toBe(1);
+    expect(caves[0].pattern).toBe("INT3");
+    expect(caves[0].size).toBe(80);
+    expect(caves[0].address).toBe(base + BigInt(0x1200));
+  });
+
+  test("detects mixed null/int3 as PADDING", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x3000,
+    );
+    for (let i = 0x1000; i < 0x2000; i++) {
+      image[i] = 0x90;
+    }
+    // Mixed run: alternating 0x00 and 0xCC for 60 bytes
+    for (let i = 0x1300; i < 0x133c; i++) {
+      image[i] = i % 2 === 0 ? 0x00 : 0xcc;
+    }
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    expect(caves.length).toBe(1);
+    expect(caves[0].pattern).toBe("PADDING");
+    expect(caves[0].size).toBe(60);
   });
 
   test("ignores runs shorter than minSize", () => {
@@ -113,7 +155,7 @@ describe("findCodeCaves", () => {
       0x3000,
     );
     for (let i = 0x1000; i < 0x2000; i++) {
-      image[i] = 0xcc;
+      image[i] = 0x90;
     }
     // 30-byte null run -- below the 50-byte default
     for (let i = 0x1200; i < 0x121e; i++) {
@@ -144,6 +186,7 @@ describe("findCodeCaves", () => {
     expect(caves[0].section).toBe(".data");
     expect(caves[0].sectionExecutable).toBe(false);
     expect(caves[0].size).toBe(100);
+    expect(caves[0].pattern).toBe("NULL");
   });
 
   test("finds multiple caves sorted by size descending", () => {
@@ -152,22 +195,24 @@ describe("findCodeCaves", () => {
       0x5000,
     );
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0xcc;
+      image[i] = 0x90;
     }
-    // Small cave: 60 bytes at 0x1100
+    // Small cave: 60 null bytes at 0x1100
     for (let i = 0x1100; i < 0x113c; i++) {
       image[i] = 0x00;
     }
-    // Large cave: 200 bytes at 0x1800
+    // Large cave: 200 int3 bytes at 0x1800
     for (let i = 0x1800; i < 0x18c8; i++) {
-      image[i] = 0x00;
+      image[i] = 0xcc;
     }
     installPeBackedHost(image, base);
 
     const { caves } = findCodeCaves(undefined, 50, 25);
     expect(caves.length).toBe(2);
     expect(caves[0].size).toBe(200);
+    expect(caves[0].pattern).toBe("INT3");
     expect(caves[1].size).toBe(60);
+    expect(caves[1].pattern).toBe("NULL");
   });
 
   test("respects module filter", () => {
@@ -182,13 +227,31 @@ describe("findCodeCaves", () => {
     expect(warnings.length).toBeGreaterThan(0);
   });
 
+  test("module filter matches by substring", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x1000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x3000,
+    );
+    for (let i = 0x1000; i < 0x2000; i++) {
+      image[i] = 0x90;
+    }
+    for (let i = 0x1200; i < 0x1240; i++) {
+      image[i] = 0x00;
+    }
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves("target", 50, 25);
+    expect(caves.length).toBe(1);
+    expect(caves[0].module).toBe("target.exe");
+  });
+
   test("respects maxResults limit", () => {
     const { image, base } = makeImageWithSections(
       [{ name: ".text", rva: 0x1000, virtualSize: 0x3000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
       0x5000,
     );
     for (let i = 0x1000; i < 0x4000; i++) {
-      image[i] = 0xcc;
+      image[i] = 0x90;
     }
     // Place 5 caves of 60 bytes each, spaced out
     for (let cave = 0; cave < 5; cave++) {
@@ -209,7 +272,7 @@ describe("findCodeCaves", () => {
       0x4000,
     );
     for (let i = 0x1000; i < 0x3000; i++) {
-      image[i] = 0xcc;
+      image[i] = 0x90;
     }
     // 128-byte cave straddling the 0x2000 chunk boundary (0x1FC0..0x2040)
     for (let i = 0x1fc0; i < 0x2040; i++) {
@@ -221,5 +284,25 @@ describe("findCodeCaves", () => {
     expect(caves.length).toBe(1);
     expect(caves[0].size).toBe(128);
     expect(caves[0].address).toBe(base + BigInt(0x1fc0));
+  });
+
+  test("int3 cave spanning a chunk boundary stays contiguous", () => {
+    const { image, base } = makeImageWithSections(
+      [{ name: ".text", rva: 0x1000, virtualSize: 0x2000, characteristics: IMAGE_SCN_MEM_EXECUTE }],
+      0x4000,
+    );
+    for (let i = 0x1000; i < 0x3000; i++) {
+      image[i] = 0x90;
+    }
+    // 100-byte int3 cave across chunk boundary
+    for (let i = 0x1fce; i < 0x2032; i++) {
+      image[i] = 0xcc;
+    }
+    installPeBackedHost(image, base);
+
+    const { caves } = findCodeCaves(undefined, 50, 25);
+    expect(caves.length).toBe(1);
+    expect(caves[0].size).toBe(100);
+    expect(caves[0].pattern).toBe("INT3");
   });
 });

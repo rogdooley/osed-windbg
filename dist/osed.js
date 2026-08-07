@@ -7770,16 +7770,28 @@ var osed_bundle = (() => {
   }
 
   // src/commands/code_caves.ts
+  function classifyRun(nullCount, int3Count) {
+    if (int3Count === 0) return "NULL";
+    if (nullCount === 0) return "INT3";
+    return "PADDING";
+  }
+  function isCaveByte(byte) {
+    return byte === 0 || byte === 204;
+  }
   function scanSectionForCaves(section2, minSize, chunkSize) {
     const caves = [];
     let runStart;
     let runLength = 0;
+    let nullCount = 0;
+    let int3Count = 0;
+    const moduleName = section2.module.name.replace(/^.*[\\\/]/, "");
     const flush = () => {
       if (runStart !== void 0 && runLength >= minSize) {
         caves.push({
           address: runStart,
           size: runLength,
-          module: section2.module.name.replace(/^.*[\\\/]/, ""),
+          pattern: classifyRun(nullCount, int3Count),
+          module: moduleName,
           section: section2.name,
           sectionExecutable: section2.executable,
           readable: null,
@@ -7789,6 +7801,8 @@ var osed_bundle = (() => {
       }
       runStart = void 0;
       runLength = 0;
+      nullCount = 0;
+      int3Count = 0;
     };
     for (let offset = 0; offset < section2.size; offset += chunkSize) {
       const chunkStart = section2.start + BigInt(offset);
@@ -7800,13 +7814,13 @@ var osed_bundle = (() => {
         continue;
       }
       for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] === 0) {
+        if (isCaveByte(bytes[i])) {
           if (runStart === void 0) {
             runStart = chunkStart + BigInt(i);
-            runLength = 1;
-          } else {
-            runLength++;
           }
+          runLength++;
+          if (bytes[i] === 0) nullCount++;
+          else int3Count++;
         } else {
           flush();
         }
@@ -7856,11 +7870,11 @@ var osed_bundle = (() => {
   function createCodeCavesCommand() {
     return {
       name: "code_caves",
-      description: "Find contiguous null-byte regions in PE sections suitable for shellcode placement.",
+      description: "Find contiguous null-byte and int3-padding regions in PE sections suitable for shellcode placement.",
       usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
       examples: [
         "dx @$osed().code_caves()",
-        'dx @$osed().code_caves("essfunc")',
+        'dx @$osed().code_caves("vulnserver")',
         'dx @$osed().code_caves("essfunc", 100)',
         'dx @$osed().code_caves("essfunc", 50, 20)'
       ],
@@ -7878,13 +7892,14 @@ var osed_bundle = (() => {
         const { caves, warnings } = findCodeCaves(module, minSize, maxResults);
         section("Code Caves");
         if (caves.length === 0) {
-          info(`No null-byte regions >= ${minSize} bytes found.`);
+          info(`No caves >= ${minSize} bytes found${module ? ` in '${module}'` : ""}.`);
         } else {
-          info(`Found ${caves.length} cave(s) (min ${minSize} bytes)`);
+          info(`Found ${caves.length} cave(s) (min ${minSize} bytes${module ? `, module: ${module}` : ""})`);
           table(
             [
               { key: "address", header: "Address", width: pointerSize * 2 + 2 },
-              { key: "size", header: "Size", width: 8 },
+              { key: "size", header: "Size", width: 11 },
+              { key: "pattern", header: "Pattern", width: 7 },
               { key: "module", header: "Module", width: 16 },
               { key: "section", header: "Section", width: 8 },
               { key: "read", header: "R" },
@@ -7894,6 +7909,7 @@ var osed_bundle = (() => {
             caves.map((cave) => ({
               address: formatAddress(cave.address, pointerSize),
               size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
+              pattern: cave.pattern,
               module: cave.module,
               section: cave.section,
               read: flag(cave.readable),
@@ -7913,6 +7929,7 @@ var osed_bundle = (() => {
           findings: caves.map((cave) => ({
             address: formatAddress(cave.address, pointerSize),
             size: cave.size,
+            pattern: cave.pattern,
             module: cave.module,
             section: cave.section,
             sectionExecutable: cave.sectionExecutable,
@@ -10110,9 +10127,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-08-07T01:59:33.096Z",
-      gitCommit: "e5aa7687993e",
-      gitDirty: false
+      buildTime: "2026-08-07T02:21:30.648Z",
+      gitCommit: "6f962e3492c8",
+      gitDirty: true
     };
   }
 

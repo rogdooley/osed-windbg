@@ -4,9 +4,12 @@ import { tryReadMemory, getPointerSize } from "../core/memory";
 import { memoryRegion } from "../analysis/memory";
 import * as out from "../core/output";
 
+export type CavePattern = "NULL" | "INT3" | "PADDING";
+
 export type CodeCave = {
   address: bigint;
   size: number;
+  pattern: CavePattern;
   module: string;
   section: string;
   sectionExecutable: boolean;
@@ -14,6 +17,16 @@ export type CodeCave = {
   writable: boolean | null;
   executable: boolean | null;
 };
+
+function classifyRun(nullCount: number, int3Count: number): CavePattern {
+  if (int3Count === 0) return "NULL";
+  if (nullCount === 0) return "INT3";
+  return "PADDING";
+}
+
+function isCaveByte(byte: number): boolean {
+  return byte === 0x00 || byte === 0xcc;
+}
 
 function scanSectionForCaves(
   section: ModuleSection,
@@ -23,13 +36,17 @@ function scanSectionForCaves(
   const caves: CodeCave[] = [];
   let runStart: bigint | undefined;
   let runLength = 0;
+  let nullCount = 0;
+  let int3Count = 0;
+  const moduleName = section.module.name.replace(/^.*[\\\/]/, "");
 
   const flush = (): void => {
     if (runStart !== undefined && runLength >= minSize) {
       caves.push({
         address: runStart,
         size: runLength,
-        module: section.module.name.replace(/^.*[\\\/]/, ""),
+        pattern: classifyRun(nullCount, int3Count),
+        module: moduleName,
         section: section.name,
         sectionExecutable: section.executable,
         readable: null,
@@ -39,6 +56,8 @@ function scanSectionForCaves(
     }
     runStart = undefined;
     runLength = 0;
+    nullCount = 0;
+    int3Count = 0;
   };
 
   for (let offset = 0; offset < section.size; offset += chunkSize) {
@@ -52,13 +71,13 @@ function scanSectionForCaves(
     }
 
     for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] === 0x00) {
+      if (isCaveByte(bytes[i])) {
         if (runStart === undefined) {
           runStart = chunkStart + BigInt(i);
-          runLength = 1;
-        } else {
-          runLength++;
         }
+        runLength++;
+        if (bytes[i] === 0x00) nullCount++;
+        else int3Count++;
       } else {
         flush();
       }
@@ -121,11 +140,11 @@ export function findCodeCaves(
 export function createCodeCavesCommand(): Command {
   return {
     name: "code_caves",
-    description: "Find contiguous null-byte regions in PE sections suitable for shellcode placement.",
+    description: "Find contiguous null-byte and int3-padding regions in PE sections suitable for shellcode placement.",
     usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
     examples: [
       "dx @$osed().code_caves()",
-      'dx @$osed().code_caves("essfunc")',
+      'dx @$osed().code_caves("vulnserver")',
       'dx @$osed().code_caves("essfunc", 100)',
       'dx @$osed().code_caves("essfunc", 50, 20)',
     ],
@@ -145,13 +164,14 @@ export function createCodeCavesCommand(): Command {
       out.section("Code Caves");
 
       if (caves.length === 0) {
-        out.info(`No null-byte regions >= ${minSize} bytes found.`);
+        out.info(`No caves >= ${minSize} bytes found${module ? ` in '${module}'` : ""}.`);
       } else {
-        out.info(`Found ${caves.length} cave(s) (min ${minSize} bytes)`);
+        out.info(`Found ${caves.length} cave(s) (min ${minSize} bytes${module ? `, module: ${module}` : ""})`);
         out.table(
           [
             { key: "address", header: "Address", width: pointerSize * 2 + 2 },
-            { key: "size", header: "Size", width: 8 },
+            { key: "size", header: "Size", width: 11 },
+            { key: "pattern", header: "Pattern", width: 7 },
             { key: "module", header: "Module", width: 16 },
             { key: "section", header: "Section", width: 8 },
             { key: "read", header: "R" },
@@ -161,6 +181,7 @@ export function createCodeCavesCommand(): Command {
           caves.map((cave) => ({
             address: out.formatAddress(cave.address, pointerSize),
             size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
+            pattern: cave.pattern,
             module: cave.module,
             section: cave.section,
             read: flag(cave.readable),
@@ -183,6 +204,7 @@ export function createCodeCavesCommand(): Command {
         findings: caves.map((cave) => ({
           address: out.formatAddress(cave.address, pointerSize),
           size: cave.size,
+          pattern: cave.pattern,
           module: cave.module,
           section: cave.section,
           sectionExecutable: cave.sectionExecutable,
