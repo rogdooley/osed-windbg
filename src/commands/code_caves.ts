@@ -29,7 +29,7 @@ function scanSectionForCaves(
       caves.push({
         address: runStart,
         size: runLength,
-        module: section.module.name,
+        module: section.module.name.replace(/^.*[\\\/]/, ""),
         section: section.name,
         sectionExecutable: section.executable,
         readable: null,
