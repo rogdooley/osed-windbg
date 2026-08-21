@@ -43,6 +43,26 @@ function installPeBackedHost(image: Uint8Array, base: bigint): void {
   };
 }
 
+function installPartialRangeHost(base: bigint, bytes: Uint8Array, readableLength: number): void {
+  (globalThis as unknown as { host: unknown }).host = {
+    diagnostics: { debugLog: () => undefined },
+    currentProcess: { Is64Bit: false, Modules: [] },
+    memory: {
+      readMemoryValues(address: bigint | number, length: number) {
+        const current = typeof address === "bigint" ? address : BigInt(address);
+        const offset = Number(current - base);
+        if (offset < 0 || offset >= readableLength) {
+          throw new Error("partial read success");
+        }
+        if (offset + length > readableLength) {
+          throw new Error("partial read success");
+        }
+        return Array.from(bytes.slice(offset, offset + length));
+      },
+    },
+  };
+}
+
 function installStackHost(stackBase: bigint, stackLimit: bigint, stackPointer: bigint, stack: Uint8Array): void {
   const teb = BigInt("0x7ffde000");
   const memory = new Map<string, number>();
@@ -296,6 +316,26 @@ describe("rop_suggest command", () => {
 
     expect(api.find_mem_bytes(Number(base), 0x200, "43 43 43 43", 10)).toBe(true);
     expect(logs.join("")).toContain("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
+  });
+
+  test("find_mem_bytes scans readable prefixes inside a partially readable range", () => {
+    const base = BigInt("0x363ff88");
+    const bytes = new Uint8Array(0x80);
+    bytes.set([0x43, 0x43, 0x43, 0x43], 0x0);
+    installPartialRangeHost(base, bytes, 0x78);
+
+    const command = createFindMemBytesCommand();
+    const result = command.execute({
+      address: Number(base),
+      length: 0x500,
+      bytes: [0x43, 0x43, 0x43, 0x43],
+      maxResults: 10,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.findings).toEqual([base]);
+    expect(result.warnings.some((warning) => warning.includes("partially readable"))).toBe(true);
+    expect(result.stats?.readableBytes).toBe(0x78);
   });
 
   test("legacy suggestions do not print sections for patterns with no matches", () => {

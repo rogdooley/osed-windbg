@@ -10188,10 +10188,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-21T02:07:05.820Z" : globalThis[key2];
+        value = true ? "2026-08-21T02:10:57.585Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b952b3bc9749" : globalThis[key2];
+        value = true ? "072e3e359538" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -10789,6 +10789,69 @@ var osed_bundle = (() => {
     }
     return hits;
   }
+  function readLargestWindow(start, maxLength) {
+    let low = 1;
+    let high = maxLength;
+    let best;
+    while (low <= high) {
+      const mid = low + Math.floor((high - low) / 2);
+      try {
+        const chunk = readMemory(start, mid);
+        best = chunk;
+        low = mid + 1;
+      } catch (_error) {
+        high = mid - 1;
+      }
+    }
+    return best;
+  }
+  function scanReadableRange(start, length, pattern, maxResults) {
+    const hits = [];
+    const warnings = [];
+    const chunkSize = 4096;
+    const skipSize = 4096;
+    let offset = 0;
+    let scannedBytes = 0;
+    let previousTail = new Uint8Array(0);
+    let previousTailStart = start;
+    while (offset < length && hits.length < maxResults) {
+      const current = start + BigInt(offset);
+      const remaining = length - offset;
+      const requested = Math.min(chunkSize, remaining);
+      let chunk;
+      try {
+        chunk = readMemory(current, requested);
+      } catch (_error) {
+        chunk = readLargestWindow(current, requested);
+        if (!chunk) {
+          warnings.push(`Skipped unreadable range at ${formatAddress(current, getPointerSize())}.`);
+          previousTail = new Uint8Array(0);
+          offset += Math.min(skipSize, remaining);
+          continue;
+        }
+        warnings.push(
+          `Range at ${formatAddress(current, getPointerSize())} was only partially readable; scanned ${chunk.length} byte(s).`
+        );
+      }
+      scannedBytes += chunk.length;
+      const combined = new Uint8Array(previousTail.length + chunk.length);
+      combined.set(previousTail, 0);
+      combined.set(chunk, previousTail.length);
+      const combinedBase = previousTailStart;
+      const offsets = findPattern3(combined, pattern, maxResults - hits.length);
+      for (const matchOffset of offsets) {
+        const address = combinedBase + BigInt(matchOffset);
+        if (address >= current) {
+          hits.push(address);
+        }
+      }
+      const tailLength = Math.min(pattern.length - 1, chunk.length);
+      previousTail = tailLength > 0 ? chunk.slice(chunk.length - tailLength) : new Uint8Array(0);
+      previousTailStart = current + BigInt(chunk.length - tailLength);
+      offset += chunk.length;
+    }
+    return { hits, warnings, scannedBytes };
+  }
   function createFindMemBytesCommand() {
     return {
       name: "find_mem_bytes",
@@ -10812,8 +10875,8 @@ var osed_bundle = (() => {
           throw new Error("bytes must contain 0x00..0xFF integers.");
         }
         const pointerSize = getPointerSize();
-        const buffer = readMemory(address, length);
-        const offsets = findPattern3(buffer, Uint8Array.from(bytes), options.maxResults);
+        const pattern = Uint8Array.from(bytes);
+        const scan = scanReadableRange(address, length, pattern, options.maxResults);
         section("Find Memory Bytes");
         info(`Start: ${formatAddress(address, pointerSize)}`);
         info(`Length: 0x${length.toString(16).toUpperCase()} (${length}) byte(s)`);
@@ -10822,12 +10885,16 @@ var osed_bundle = (() => {
             { key: "address", header: "Address", width: 18 },
             { key: "offset", header: "Base+Offset", width: 12 }
           ],
-          offsets.map((offset) => ({
-            address: formatAddress(address + BigInt(offset), pointerSize),
-            offset: `0x${offset.toString(16).toUpperCase()}`
+          scan.hits.map((hit) => ({
+            address: formatAddress(hit, pointerSize),
+            offset: `0x${(hit - address).toString(16).toUpperCase()}`
           }))
         );
-        if (offsets.length === 0) {
+        info(`Scanned ${scan.scannedBytes} readable byte(s) in the requested range.`);
+        for (const warning of scan.warnings) {
+          warn(warning);
+        }
+        if (scan.hits.length === 0) {
           info("No byte matches found in the searched memory range.");
         }
         info("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
@@ -10836,12 +10903,13 @@ var osed_bundle = (() => {
           command: "find_mem_bytes",
           args: options,
           success: true,
-          findings: offsets.map((offset) => address + BigInt(offset)),
-          warnings: [],
+          findings: scan.hits,
+          warnings: scan.warnings,
           errors: [],
           stats: {
             searchedBytes: length,
-            results: offsets.length
+            readableBytes: scan.scannedBytes,
+            results: scan.hits.length
           }
         };
       }

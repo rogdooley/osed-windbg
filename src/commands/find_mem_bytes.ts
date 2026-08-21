@@ -27,6 +27,83 @@ function findPattern(buffer: Uint8Array, pattern: Uint8Array, maxResults: number
   return hits;
 }
 
+type ScanOutcome = {
+  hits: bigint[];
+  warnings: string[];
+  scannedBytes: number;
+};
+
+function readLargestWindow(start: bigint, maxLength: number): Uint8Array | undefined {
+  let low = 1;
+  let high = maxLength;
+  let best: Uint8Array | undefined;
+
+  while (low <= high) {
+    const mid = low + Math.floor((high - low) / 2);
+    try {
+      const chunk = readMemory(start, mid);
+      best = chunk;
+      low = mid + 1;
+    } catch (_error) {
+      high = mid - 1;
+    }
+  }
+
+  return best;
+}
+
+function scanReadableRange(start: bigint, length: number, pattern: Uint8Array, maxResults: number): ScanOutcome {
+  const hits: bigint[] = [];
+  const warnings: string[] = [];
+  const chunkSize = 0x1000;
+  const skipSize = 0x1000;
+  let offset = 0;
+  let scannedBytes = 0;
+  let previousTail = new Uint8Array(0);
+  let previousTailStart = start;
+
+  while (offset < length && hits.length < maxResults) {
+    const current = start + BigInt(offset);
+    const remaining = length - offset;
+    const requested = Math.min(chunkSize, remaining);
+    let chunk: Uint8Array | undefined;
+    try {
+      chunk = readMemory(current, requested);
+    } catch (_error) {
+      chunk = readLargestWindow(current, requested);
+      if (!chunk) {
+        warnings.push(`Skipped unreadable range at ${out.formatAddress(current, getPointerSize())}.`);
+        previousTail = new Uint8Array(0);
+        offset += Math.min(skipSize, remaining);
+        continue;
+      }
+      warnings.push(
+        `Range at ${out.formatAddress(current, getPointerSize())} was only partially readable; scanned ${chunk.length} byte(s).`,
+      );
+    }
+
+    scannedBytes += chunk.length;
+    const combined = new Uint8Array(previousTail.length + chunk.length);
+    combined.set(previousTail, 0);
+    combined.set(chunk, previousTail.length);
+    const combinedBase = previousTailStart;
+    const offsets = findPattern(combined, pattern, maxResults - hits.length);
+    for (const matchOffset of offsets) {
+      const address = combinedBase + BigInt(matchOffset);
+      if (address >= current) {
+        hits.push(address);
+      }
+    }
+
+    const tailLength = Math.min(pattern.length - 1, chunk.length);
+    previousTail = tailLength > 0 ? chunk.slice(chunk.length - tailLength) : new Uint8Array(0);
+    previousTailStart = current + BigInt(chunk.length - tailLength);
+    offset += chunk.length;
+  }
+
+  return { hits, warnings, scannedBytes };
+}
+
 export function createFindMemBytesCommand(): Command {
   return {
     name: "find_mem_bytes",
@@ -51,8 +128,8 @@ export function createFindMemBytesCommand(): Command {
       }
 
       const pointerSize = getPointerSize();
-      const buffer = readMemory(address, length);
-      const offsets = findPattern(buffer, Uint8Array.from(bytes), options.maxResults as number);
+      const pattern = Uint8Array.from(bytes);
+      const scan = scanReadableRange(address, length, pattern, options.maxResults as number);
 
       out.section("Find Memory Bytes");
       out.info(`Start: ${out.formatAddress(address, pointerSize)}`);
@@ -62,12 +139,16 @@ export function createFindMemBytesCommand(): Command {
           { key: "address", header: "Address", width: 18 },
           { key: "offset", header: "Base+Offset", width: 12 },
         ],
-        offsets.map((offset) => ({
-          address: out.formatAddress(address + BigInt(offset), pointerSize),
-          offset: `0x${offset.toString(16).toUpperCase()}`,
+        scan.hits.map((hit) => ({
+          address: out.formatAddress(hit, pointerSize),
+          offset: `0x${(hit - address).toString(16).toUpperCase()}`,
         })),
       );
-      if (offsets.length === 0) {
+      out.info(`Scanned ${scan.scannedBytes} readable byte(s) in the requested range.`);
+      for (const warning of scan.warnings) {
+        out.warn(warning);
+      }
+      if (scan.hits.length === 0) {
         out.info("No byte matches found in the searched memory range.");
       }
       out.info("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
@@ -77,12 +158,13 @@ export function createFindMemBytesCommand(): Command {
         command: "find_mem_bytes",
         args: options,
         success: true,
-        findings: offsets.map((offset) => address + BigInt(offset)),
-        warnings: [],
+        findings: scan.hits,
+        warnings: scan.warnings,
         errors: [],
         stats: {
           searchedBytes: length,
-          results: offsets.length,
+          readableBytes: scan.scannedBytes,
+          results: scan.hits.length,
         },
       };
     },
