@@ -10185,9 +10185,9 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-08-21T00:52:25.394Z",
-      gitCommit: "05faf164c16d",
-      gitDirty: true
+      buildTime: "2026-08-21T01:28:06.142Z",
+      gitCommit: "3e2d7fcc2188",
+      gitDirty: false
     };
   }
 
