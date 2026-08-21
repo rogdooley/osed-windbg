@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createBadcharFindCommand } from "../src/commands/badchars";
 import { createFindMspCommand } from "../src/commands/findmsp";
 import { createFindMemBytesCommand } from "../src/commands/find_mem_bytes";
 import { createRopCommands } from "../src/commands/rop";
@@ -336,6 +337,32 @@ describe("rop_suggest command", () => {
     expect(result.findings).toEqual([base]);
     expect(result.warnings.some((warning) => warning.includes("partially readable"))).toBe(true);
     expect(result.stats?.readableBytes).toBe(0x78);
+  });
+
+  test("badchar_find scans a readable prefix when the requested anchor window crosses into unreadable memory", () => {
+    const stackPointer = BigInt("0x3f1ff88");
+    const stackBase = BigInt("0x3f20000");
+    const stackLimit = BigInt("0x3f1f000");
+    const stack = new Uint8Array(0x78);
+    for (let i = 0; i < stack.length; i += 1) {
+      stack[i] = (i + 1) & 0xff;
+    }
+    installStackHost(stackBase, stackLimit, stackPointer, stack);
+
+    const command = createBadcharFindCommand();
+    const result = command.execute({
+      exclude: [0x00],
+      windowBytes: 2048,
+      minRun: 8,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.findings[0]).toMatchObject({
+      located: true,
+      landingAddress: stackPointer,
+      anchorOffset: 0,
+    });
+    expect(result.warnings.some((warning) => warning.includes("partially readable"))).toBe(true);
   });
 
   test("legacy suggestions do not print sections for patterns with no matches", () => {

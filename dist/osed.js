@@ -1867,6 +1867,22 @@ var osed_bundle = (() => {
   function result(command, args, findings, warnings = []) {
     return { command, args, success: true, findings, warnings, errors: [] };
   }
+  function readLargestWindow(start, maxLength) {
+    let low = 1;
+    let high = maxLength;
+    let best;
+    while (low <= high) {
+      const mid = low + Math.floor((high - low) / 2);
+      const chunk = tryReadMemory(start, mid);
+      if (chunk) {
+        best = chunk;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return best;
+  }
   function createBadcharsCommand() {
     return {
       name: "badchars",
@@ -1999,15 +2015,25 @@ var osed_bundle = (() => {
         }
         info(`Anchor: ${anchorLabel}`);
         info(`Window: ${windowBytes} bytes, expecting a ${expected.length}-byte array.`);
-        const window = tryReadMemory(anchor, windowBytes);
+        let window = tryReadMemory(anchor, windowBytes);
+        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+        if (!window) {
+          window = readLargestWindow(anchor, windowBytes);
+          if (window) {
+            warnings.push(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
+          }
+        }
         if (!window) {
           warn("Anchor memory was not readable.");
           return result("badchar_find", options, [{ located: false }], ["Anchor memory was not readable."]);
         }
+        if (window.length < windowBytes) {
+          warn(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
+        }
         const located = locateExpectedArray(window, expected, minRun);
         if (!located) {
           warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
-          return result("badchar_find", options, [{ located: false }], ["Test array not found near anchor."]);
+          return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
         }
         const landing2 = anchor + BigInt(located.offset);
         const observed = window.slice(located.offset);
@@ -2034,7 +2060,6 @@ var osed_bundle = (() => {
         );
         const suggestedExclude = compared.nextExpected !== void 0 ? [.../* @__PURE__ */ new Set([...normalizedExclude.values, compared.nextExpected])].sort((a, b) => a - b) : normalizedExclude.values;
         info(`Suggested next exclude: ${suggestedExclude.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
-        const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
           "badchar_find",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
@@ -10188,10 +10213,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-21T02:10:57.585Z" : globalThis[key2];
+        value = true ? "2026-08-21T02:19:41.405Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "072e3e359538" : globalThis[key2];
+        value = true ? "212e8c11303e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -10789,7 +10814,7 @@ var osed_bundle = (() => {
     }
     return hits;
   }
-  function readLargestWindow(start, maxLength) {
+  function readLargestWindow2(start, maxLength) {
     let low = 1;
     let high = maxLength;
     let best;
@@ -10822,7 +10847,7 @@ var osed_bundle = (() => {
       try {
         chunk = readMemory(current, requested);
       } catch (_error) {
-        chunk = readLargestWindow(current, requested);
+        chunk = readLargestWindow2(current, requested);
         if (!chunk) {
           warnings.push(`Skipped unreadable range at ${formatAddress(current, getPointerSize())}.`);
           previousTail = new Uint8Array(0);

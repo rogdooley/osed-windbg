@@ -9,6 +9,25 @@ function result(command: string, args: Record<string, unknown>, findings: unknow
   return { command, args, success: true, findings, warnings, errors: [] };
 }
 
+function readLargestWindow(start: bigint, maxLength: number): Uint8Array | undefined {
+  let low = 1;
+  let high = maxLength;
+  let best: Uint8Array | undefined;
+
+  while (low <= high) {
+    const mid = low + Math.floor((high - low) / 2);
+    const chunk = tryReadMemory(start, mid);
+    if (chunk) {
+      best = chunk;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return best;
+}
+
 export function createBadcharsCommand(): Command {
   return {
     name: "badchars",
@@ -153,16 +172,26 @@ export function createBadcharFindCommand(): Command {
       out.info(`Anchor: ${anchorLabel}`);
       out.info(`Window: ${windowBytes} bytes, expecting a ${expected.length}-byte array.`);
 
-      const window = tryReadMemory(anchor, windowBytes);
+      let window = tryReadMemory(anchor, windowBytes);
+      const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
+      if (!window) {
+        window = readLargestWindow(anchor, windowBytes);
+        if (window) {
+          warnings.push(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
+        }
+      }
       if (!window) {
         out.warn("Anchor memory was not readable.");
         return result("badchar_find", options, [{ located: false }], ["Anchor memory was not readable."]);
+      }
+      if (window.length < windowBytes) {
+        out.warn(`Anchor range was only partially readable; scanned ${window.length} byte(s).`);
       }
 
       const located = locateExpectedArray(window, expected, minRun);
       if (!located) {
         out.warn(`Test array not found within ${windowBytes} bytes of the anchor (min run ${minRun}).`);
-        return result("badchar_find", options, [{ located: false }], ["Test array not found near anchor."]);
+        return result("badchar_find", options, [{ located: false }], warnings.length > 0 ? warnings : ["Test array not found near anchor."]);
       }
 
       const landing = anchor + BigInt(located.offset);
@@ -197,7 +226,6 @@ export function createBadcharFindCommand(): Command {
         : normalizedExclude.values;
       out.info(`Suggested next exclude: ${suggestedExclude.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
 
-      const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
       return result(
         "badchar_find",
         { ...options, exclude: normalizedExclude.values },
