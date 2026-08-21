@@ -27,6 +27,7 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `rop_find` | `dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop_find("essfunc")` | Flat alias for legacy ROP exploration and module triage. |
 | `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("vulnserver", "FF E4")` | Finds byte sequences in PE sections of the named loaded module. By default this searches executable sections only. |
 | `find_stack_bytes` | `dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)` | `dx @$osed().find_stack_bytes("43 43 43 43")` | Finds byte sequences in the current thread stack only, starting at `ESP`/`RSP`. Does not search heap or arbitrary process memory. |
+| `find_mem_bytes` | `dx @$osed().find_mem_bytes(address, length, bytes, maxResults?)` | `dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43")` | Finds byte sequences in an explicit readable live-memory range. Use this for stack, heap, mapped regions, or module-backed memory when you already know the address window. |
 | `find_ptr` | `dx @$osed().find_ptr(instruction, module?, badchars?, maxResults?, executableOnly?)` | `dx @$osed().find_ptr("jmp esp", "essfunc", "00 0A 0D")` | Searches executable memory for an instruction and filters surviving pointers whose address contains no bad characters. Composable filter stack; the live-memory feed for the ROP layer. |
 | `rop_suggest` | `dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)` | `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")` | Suggests validated gadget patterns. |
 | `retn` | `dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().retn("essfunc")` | Finds `retn N` gadgets for stdcall chain adjustment. |
@@ -80,6 +81,7 @@ Use the byte-search helpers by memory scope:
 
 - `find_bytes(module, ...)`: loaded module PE sections, primarily for gadget and opcode discovery.
 - `find_stack_bytes(...)`: current-thread stack window only, primarily for confirming that live input landed near control data.
+- `find_mem_bytes(address, length, ...)`: explicit readable live-memory range, primarily for known stack, heap, or mapped-region windows.
 - `findmsp(...)`: cyclic-pattern correlation across registers, stack slots, pointer targets, and SEH fields.
 
 `find_bytes()` intentionally does not search stack or heap memory. On zero hits it prints a scope line to make that explicit.

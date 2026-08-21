@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { createFindMspCommand } from "../src/commands/findmsp";
+import { createFindMemBytesCommand } from "../src/commands/find_mem_bytes";
 import { createRopCommands } from "../src/commands/rop";
 import { createFindStackBytesCommand } from "../src/commands/find_stack_bytes";
 import { initializeScript } from "../src/index";
@@ -254,6 +255,47 @@ describe("rop_suggest command", () => {
 
     expect(api.find_stack_bytes("43 43 43 43", 10, 0x80)).toBe(true);
     expect(logs.join("")).toContain("Scope: current thread stack only; this does not search heap, modules outside the stack window, or arbitrary process memory.");
+  });
+
+  test("find_mem_bytes finds hits in an explicit live-memory range", () => {
+    const { image, base } = makeImageWithTextSection();
+    image.set([0x43, 0x43, 0x43, 0x43], 0x120);
+    image.set([0x43, 0x43, 0x43, 0x43], 0x1a0);
+    installPeBackedHost(image, base);
+
+    const command = createFindMemBytesCommand();
+    const result = command.execute({
+      address: Number(base),
+      length: 0x400,
+      bytes: [0x43, 0x43, 0x43, 0x43],
+      maxResults: 10,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.findings).toEqual([
+      base + BigInt(0x120),
+      base + BigInt(0x1a0),
+    ]);
+  });
+
+  test("find_mem_bytes executes through the public adapter", () => {
+    const logs: string[] = [];
+    const { image, base } = makeImageWithTextSection();
+    image.set([0x43, 0x43, 0x43, 0x43], 0x88);
+    installPeBackedHost(image, base);
+    ((globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host).diagnostics = {
+      debugLog: (line: string) => logs.push(line),
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        find_mem_bytes: (address: number, length: number, bytes: string, maxResults?: number) => boolean;
+      };
+    }).osed;
+
+    expect(api.find_mem_bytes(Number(base), 0x200, "43 43 43 43", 10)).toBe(true);
+    expect(logs.join("")).toContain("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
   });
 
   test("legacy suggestions do not print sections for patterns with no matches", () => {

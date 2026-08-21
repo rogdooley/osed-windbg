@@ -62,6 +62,7 @@ import { createVersionCommand } from "./commands/version";
 import { getVersionInfo } from "./core/version";
 import { createStringCommands } from "./commands/strings";
 import { createFindStackBytesCommand } from "./commands/find_stack_bytes";
+import { createFindMemBytesCommand } from "./commands/find_mem_bytes";
 import type { SerializedLandingEvidence } from "./analysis/landing";
 
 declare const self: Record<string, unknown> | undefined;
@@ -270,6 +271,7 @@ function registerAll(): void {
     createFindMspCommand(),
     createFindPtrCommand(),
     createMemoryCommand(),
+    createFindMemBytesCommand(),
     createFindStackBytesCommand(),
     createLandingCommand(),
     createMathCommand(),
@@ -1544,6 +1546,13 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
         bytes: parseHexByteList(args[0]),
         maxResults: args[1],
         stackBytes: args[2],
+      };
+    case "find_mem_bytes":
+      return {
+        address: args[0],
+        length: args[1],
+        bytes: parseHexByteList(args[2]),
+        maxResults: args[3],
       };
     case "find_ptr":
       return {

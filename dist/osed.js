@@ -10188,10 +10188,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-21T01:47:26.013Z" : globalThis[key2];
+        value = true ? "2026-08-21T02:07:05.820Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b07f2251830f" : globalThis[key2];
+        value = true ? "b952b3bc9749" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -10765,6 +10765,89 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/commands/find_mem_bytes.ts
+  function findPattern3(buffer, pattern, maxResults) {
+    const hits = [];
+    if (pattern.length === 0 || buffer.length < pattern.length) {
+      return hits;
+    }
+    const last = buffer.length - pattern.length;
+    for (let i = 0; i <= last; i += 1) {
+      let match = true;
+      for (let j = 0; j < pattern.length; j += 1) {
+        if (buffer[i + j] !== pattern[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        hits.push(i);
+        if (hits.length >= maxResults) {
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+  function createFindMemBytesCommand() {
+    return {
+      name: "find_mem_bytes",
+      description: "Find byte sequence hits in an explicit live-memory range.",
+      usage: "dx @$osed().find_mem_bytes(address, length, bytes, maxResults?)",
+      examples: [
+        'dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43")',
+        'dx @$osed().find_mem_bytes("14800000", 4096, "FF E4", 20)'
+      ],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        length: { type: "number", min: 1, max: 16777216, required: true },
+        bytes: { type: "array", elementType: "number", required: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 }
+      },
+      execute(options) {
+        const address = normalizeAddress(options.address);
+        const length = options.length;
+        const bytes = options.bytes;
+        if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error("bytes must contain 0x00..0xFF integers.");
+        }
+        const pointerSize = getPointerSize();
+        const buffer = readMemory(address, length);
+        const offsets = findPattern3(buffer, Uint8Array.from(bytes), options.maxResults);
+        section("Find Memory Bytes");
+        info(`Start: ${formatAddress(address, pointerSize)}`);
+        info(`Length: 0x${length.toString(16).toUpperCase()} (${length}) byte(s)`);
+        table(
+          [
+            { key: "address", header: "Address", width: 18 },
+            { key: "offset", header: "Base+Offset", width: 12 }
+          ],
+          offsets.map((offset) => ({
+            address: formatAddress(address + BigInt(offset), pointerSize),
+            offset: `0x${offset.toString(16).toUpperCase()}`
+          }))
+        );
+        if (offsets.length === 0) {
+          info("No byte matches found in the searched memory range.");
+        }
+        info("Scope: explicit live-memory range only; this can search stack, heap, modules, or any readable region if you provide the correct address and length.");
+        whyItMatters("Explicit live-memory searches let you confirm where controlled bytes landed without assuming they live in a module image or the current stack window.");
+        return {
+          command: "find_mem_bytes",
+          args: options,
+          success: true,
+          findings: offsets.map((offset) => address + BigInt(offset)),
+          warnings: [],
+          errors: [],
+          stats: {
+            searchedBytes: length,
+            results: offsets.length
+          }
+        };
+      }
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -10932,6 +11015,7 @@ var osed_bundle = (() => {
       createFindMspCommand(),
       createFindPtrCommand(),
       createMemoryCommand(),
+      createFindMemBytesCommand(),
       createFindStackBytesCommand(),
       createLandingCommand(),
       createMathCommand(),
@@ -12090,6 +12174,13 @@ var osed_bundle = (() => {
           bytes: parseHexByteList(args[0]),
           maxResults: args[1],
           stackBytes: args[2]
+        };
+      case "find_mem_bytes":
+        return {
+          address: args[0],
+          length: args[1],
+          bytes: parseHexByteList(args[2]),
+          maxResults: args[3]
         };
       case "find_ptr":
         return {

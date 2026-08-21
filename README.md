@@ -121,6 +121,7 @@ dx @$osed().add_esp("essfunc")                               ; add esp, N ; ret
 dx @$osed().pivots("essfunc")                                ; stack pivots
 dx @$osed().find_bytes("vulnserver", "FF E4")                ; module PE-section byte search
 dx @$osed().find_stack_bytes("43 43 43 43")                  ; current-thread stack byte search
+dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43") ; explicit live-memory range search
 dx @$osed().rop_template("VirtualProtect", "essfunc")        ; PUSHAD skeleton
 ```
 
@@ -128,7 +129,9 @@ dx @$osed().rop_template("VirtualProtect", "essfunc")        ; PUSHAD skeleton
 
 `find_stack_bytes(bytes, ...)` searches the current thread stack starting at `ESP`/`RSP`. It does not search the heap or arbitrary process memory.
 
-Use `findmsp()` when you need cyclic-pattern offsets, `find_bytes()` when you need module/image byte hits, and `find_stack_bytes()` when you need to confirm that live input bytes landed on the stack.
+`find_mem_bytes(address, length, bytes, ...)` searches an explicit readable memory range that you provide. Use it for stack, heap, mapped regions, or module-backed memory when you already know the address window you want to inspect.
+
+Use `findmsp()` when you need cyclic-pattern offsets, `find_bytes()` when you need module/image byte hits, `find_stack_bytes()` when you need to confirm that live input bytes landed on the current stack, and `find_mem_bytes()` when you need an explicit live-memory range search.
 
 ### Semantic ROP query (RP++ integration)
 
