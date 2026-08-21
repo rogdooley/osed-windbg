@@ -323,7 +323,7 @@ export function createRopCommands(): Command[] {
 
   const findBytes: Command = {
     name: "find_bytes",
-    description: "Find byte sequence hits in executable sections.",
+    description: "Find byte sequence hits in PE sections of a loaded module.",
     usage: 'dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)',
     examples: [
       'dx @$osed().find_bytes("vulnserver", "FF E4")',
@@ -373,6 +373,11 @@ export function createRopCommands(): Command[] {
       if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
         out.info(
           `Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`,
+        );
+        out.info(
+          scanOpts.executableOnly
+            ? "Scope: executable PE sections in the matched module only; this does not search stack, heap, or other live process buffers."
+            : "Scope: PE sections in the matched module only; this does not search stack, heap, or other live process buffers.",
         );
       }
       out.whyItMatters("Targeted byte matches accelerate practical gadget and pivot discovery.");

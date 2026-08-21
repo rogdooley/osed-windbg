@@ -5827,7 +5827,7 @@ var osed_bundle = (() => {
     };
     const findBytes = {
       name: "find_bytes",
-      description: "Find byte sequence hits in executable sections.",
+      description: "Find byte sequence hits in PE sections of a loaded module.",
       usage: "dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)",
       examples: [
         'dx @$osed().find_bytes("vulnserver", "FF E4")',
@@ -5874,6 +5874,9 @@ var osed_bundle = (() => {
         if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
           info(
             `Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`
+          );
+          info(
+            scanOpts.executableOnly ? "Scope: executable PE sections in the matched module only; this does not search stack, heap, or other live process buffers." : "Scope: PE sections in the matched module only; this does not search stack, heap, or other live process buffers."
           );
         }
         whyItMatters("Targeted byte matches accelerate practical gadget and pivot discovery.");
@@ -6385,7 +6388,7 @@ var osed_bundle = (() => {
     },
     {
       name: "code_caves",
-      description: "Finds contiguous null-byte regions in PE sections suitable for shellcode placement.",
+      description: "Finds contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
       usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
       examples: [
         "dx @$osed().code_caves()",
@@ -7925,7 +7928,7 @@ var osed_bundle = (() => {
   function createCodeCavesCommand() {
     return {
       name: "code_caves",
-      description: "Find contiguous null-byte and int3/nop-padding regions in PE sections suitable for shellcode placement.",
+      description: "Find contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
       usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
       examples: [
         "dx @$osed().code_caves()",
@@ -10182,8 +10185,8 @@ var osed_bundle = (() => {
     return {
       name: "osed-windbg",
       version: "1.0.4",
-      buildTime: "2026-08-07T12:26:59.174Z",
-      gitCommit: "dbd4afe3521f",
+      buildTime: "2026-08-21T00:52:25.394Z",
+      gitCommit: "05faf164c16d",
       gitDirty: true
     };
   }
@@ -11834,7 +11837,7 @@ var osed_bundle = (() => {
     }
     const parsed = [];
     for (const token of tokens) {
-      if (/^[0-9a-fA-F]{1,2}$/.test(token)) {
+      if (/^[0-9a-fA-F]{2}$/.test(token)) {
         parsed.push(parseInt(token, 16));
         continue;
       }

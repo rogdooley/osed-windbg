@@ -1426,7 +1426,7 @@ function parseHexByteList(value: unknown): number[] | unknown {
   }
   const parsed: number[] = [];
   for (const token of tokens) {
-    if (/^[0-9a-fA-F]{1,2}$/.test(token)) {
+    if (/^[0-9a-fA-F]{2}$/.test(token)) {
       parsed.push(parseInt(token, 16));
       continue;
     }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { createFindMspCommand } from "../src/commands/findmsp";
 import { createRopCommands } from "../src/commands/rop";
+import { initializeScript } from "../src/index";
 
 function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
   bytes[offset] = value & 0xff;
@@ -104,6 +105,59 @@ describe("rop_suggest command", () => {
     expect(result?.success).toBe(true);
     expect(result?.findings).toEqual([textStart + BigInt(0x1000)]);
     expect(result?.stats?.results).toBe(1);
+  });
+
+  test("find_bytes no-hit output states that the scope excludes stack and heap memory", () => {
+    const { image, base } = makeImageWithTextSection();
+    const logs: string[] = [];
+    installPeBackedHost(image, base);
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host.diagnostics = {
+      debugLog: (line: string) => logs.push(line),
+    };
+
+    const findBytes = createRopCommands().find((command) => command.name === "find_bytes");
+    const result = findBytes?.execute({
+      module: "target",
+      bytes: [0x43, 0x43, 0x43, 0x43],
+      executableOnly: true,
+      maxResults: 10,
+      mode: "fast",
+    });
+
+    expect(result?.success).toBe(true);
+    expect(result?.findings).toEqual([]);
+    expect(logs.join("")).toContain("Scope: executable PE sections in the matched module only; this does not search stack, heap, or other live process buffers.");
+  });
+
+  test("find_bytes rejects ambiguous single-nibble byte tokens through the public adapter", () => {
+    const { image, base } = makeImageWithTextSection();
+    const logs: string[] = [];
+    installPeBackedHost(image, base);
+    (globalThis as unknown as {
+      host: {
+        diagnostics: { debugLog: (line: string) => void };
+        functionAlias?: new (fn: (...args: unknown[]) => unknown, aliasName: string) => unknown;
+      };
+      osed?: {
+        find_bytes: (module: string, bytes: string) => boolean;
+        last_result: () => { success: boolean; errors: string[] };
+      };
+    }).host.diagnostics = {
+      debugLog: (line: string) => logs.push(line),
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        find_bytes: (module: string, bytes: string) => boolean;
+        last_result: () => { success: boolean; errors: string[] };
+      };
+    }).osed;
+
+    expect(api.find_bytes("target", "C C C C")).toBe(false);
+    expect(api.last_result().success).toBe(false);
+    expect(api.last_result().errors[0]).toContain("bytes");
+    expect(logs.join("")).toContain("Usage: dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)");
   });
 
   test("legacy suggestions do not print sections for patterns with no matches", () => {
