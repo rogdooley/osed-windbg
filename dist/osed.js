@@ -10182,11 +10182,22 @@ var osed_bundle = (() => {
 
   // src/core/version.ts
   function readBuildString(key2, fallback) {
-    const value = globalThis[key2];
+    let value;
+    switch (key2) {
+      case "__OSED_VERSION__":
+        value = true ? "1.0.4" : globalThis[key2];
+        break;
+      case "__OSED_BUILD_TIME__":
+        value = true ? "2026-08-21T01:41:30.133Z" : globalThis[key2];
+        break;
+      case "__OSED_GIT_COMMIT__":
+        value = true ? "ebd8fe50b82c" : globalThis[key2];
+        break;
+    }
     return typeof value === "string" && value.length > 0 ? value : fallback;
   }
   function readBuildBoolean(key2, fallback) {
-    const value = globalThis[key2];
+    const value = true ? true : globalThis[key2];
     return typeof value === "boolean" ? value : fallback;
   }
   function getVersionInfo() {

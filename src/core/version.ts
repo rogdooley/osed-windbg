@@ -12,12 +12,25 @@ export type VersionInfo = {
 };
 
 function readBuildString(key: "__OSED_VERSION__" | "__OSED_BUILD_TIME__" | "__OSED_GIT_COMMIT__", fallback: string): string {
-  const value = (globalThis as Record<string, unknown>)[key];
+  let value: unknown;
+  switch (key) {
+    case "__OSED_VERSION__":
+      value = typeof __OSED_VERSION__ !== "undefined" ? __OSED_VERSION__ : (globalThis as Record<string, unknown>)[key];
+      break;
+    case "__OSED_BUILD_TIME__":
+      value = typeof __OSED_BUILD_TIME__ !== "undefined" ? __OSED_BUILD_TIME__ : (globalThis as Record<string, unknown>)[key];
+      break;
+    case "__OSED_GIT_COMMIT__":
+      value = typeof __OSED_GIT_COMMIT__ !== "undefined" ? __OSED_GIT_COMMIT__ : (globalThis as Record<string, unknown>)[key];
+      break;
+  }
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
 function readBuildBoolean(key: "__OSED_GIT_DIRTY__", fallback: boolean): boolean {
-  const value = (globalThis as Record<string, unknown>)[key];
+  const value = typeof __OSED_GIT_DIRTY__ !== "undefined"
+    ? __OSED_GIT_DIRTY__
+    : (globalThis as Record<string, unknown>)[key];
   return typeof value === "boolean" ? value : fallback;
 }
 
