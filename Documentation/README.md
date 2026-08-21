@@ -8,8 +8,10 @@ If you only want to see the built JavaScript do something useful, use this path:
 
 1. Load the bundle in WinDbg Preview:
    - `.scriptload <full path>\\osed-windbg\\dist\\osed.js`
+   - confirm the load banner prints a real version, commit, and build time
 2. Confirm the command surface:
    - `dx @$osed().help()`
+   - `dx @$osed().version()`
 3. Pick a loaded module and inspect its mitigation state:
    - `dx @$osed().modules("kernel32")`
 4. Find a classic import target:
@@ -90,6 +92,9 @@ For the normative dependency and evidence rules governing `src/analysis/`, see `
 - `@$osed` is missing:
   - Re-run `.scriptload` and confirm `initializeScript()` executed.
   - If the script reports `functionAlias` registration failure, use the fallback global object directly: `dx osed.help()` or `dx osed.reload()`.
+- Load banner or `version()` shows `dev` / `unknown`:
+  - You are not loading a properly built `dist/osed.js`.
+  - Re-run `npm run build`, then reload the exact built file.
 - Command returns validation errors:
   - Use `dx @$osed().help("<name>")` and match schema exactly.
 - Memory read failures:

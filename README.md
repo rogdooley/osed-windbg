@@ -33,7 +33,16 @@ Verify:
 
 ```
 dx @$osed().help()
+dx @$osed().version()
 ```
+
+The load banner should print embedded build metadata, for example:
+
+```text
+[+] osed loaded: v1.0.4 (ebd8fe50b82c, dirty, built 2026-08-21T01:41:30.133Z)
+```
+
+If the banner or `version()` reports `dev` / `unknown`, you are not loading a properly built `dist/osed.js`.
 
 ---
 
@@ -110,9 +119,16 @@ dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")  ; semantic eng
 dx @$osed().retn("essfunc")                                  ; retn N gadgets
 dx @$osed().add_esp("essfunc")                               ; add esp, N ; ret
 dx @$osed().pivots("essfunc")                                ; stack pivots
-dx @$osed().find_bytes("vulnserver", "FF E4")                ; raw byte search
+dx @$osed().find_bytes("vulnserver", "FF E4")                ; module PE-section byte search
+dx @$osed().find_stack_bytes("43 43 43 43")                  ; current-thread stack byte search
 dx @$osed().rop_template("VirtualProtect", "essfunc")        ; PUSHAD skeleton
 ```
+
+`find_bytes(module, ...)` searches PE sections in the named loaded module. By default it searches executable sections only, which makes it useful for gadget hunting and opcode checks in module-backed memory.
+
+`find_stack_bytes(bytes, ...)` searches the current thread stack starting at `ESP`/`RSP`. It does not search the heap or arbitrary process memory.
+
+Use `findmsp()` when you need cyclic-pattern offsets, `find_bytes()` when you need module/image byte hits, and `find_stack_bytes()` when you need to confirm that live input bytes landed on the stack.
 
 ### Semantic ROP query (RP++ integration)
 
@@ -202,6 +218,13 @@ Verify the build:
 
 ```
 npm test
+```
+
+Then verify the loaded bundle in WinDbg:
+
+```text
+.scriptload C:\path\to\osed-windbg\dist\osed.js
+dx @$osed().version()
 ```
 
 TypeScript source is in `src/`. The build produces a single self-contained JS file via esbuild — no runtime dependencies.

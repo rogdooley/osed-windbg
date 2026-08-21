@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { createFindMspCommand } from "../src/commands/findmsp";
 import { createRopCommands } from "../src/commands/rop";
+import { createFindStackBytesCommand } from "../src/commands/find_stack_bytes";
 import { initializeScript } from "../src/index";
 
 function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
@@ -36,6 +37,55 @@ function installPeBackedHost(image: Uint8Array, base: bigint): void {
           throw new Error("out of range");
         }
         return Array.from(image.slice(offset, offset + length));
+      },
+    },
+  };
+}
+
+function installStackHost(stackBase: bigint, stackLimit: bigint, stackPointer: bigint, stack: Uint8Array): void {
+  const teb = BigInt("0x7ffde000");
+  const memory = new Map<string, number>();
+  const write32 = (address: bigint, value: bigint) => {
+    const raw = Number(value & BigInt(0xffffffff));
+    memory.set(`0x${address.toString(16)}`, raw & 0xff);
+    memory.set(`0x${(address + BigInt(1)).toString(16)}`, (raw >>> 8) & 0xff);
+    memory.set(`0x${(address + BigInt(2)).toString(16)}`, (raw >>> 16) & 0xff);
+    memory.set(`0x${(address + BigInt(3)).toString(16)}`, (raw >>> 24) & 0xff);
+  };
+
+  write32(teb + BigInt(0x4), stackBase);
+  write32(teb + BigInt(0x8), stackLimit);
+  write32(teb + BigInt(0x18), teb);
+  stack.forEach((byte, index) => {
+    memory.set(`0x${(stackPointer + BigInt(index)).toString(16)}`, byte);
+  });
+
+  (globalThis as unknown as { host: unknown }).host = {
+    diagnostics: { debugLog: () => undefined },
+    currentProcess: { Is64Bit: false, Modules: [] },
+    currentThread: {
+      Environment: {
+        EnvironmentBlock: { NtTib: { Self: teb } },
+      },
+      Registers: {
+        User: {
+          esp: { value: stackPointer },
+          eip: { value: BigInt(0x41414141) },
+        },
+      },
+    },
+    memory: {
+      readMemoryValues(address: bigint | number, length: number) {
+        const current = typeof address === "bigint" ? address : BigInt(address);
+        const bytes: number[] = [];
+        for (let i = 0; i < length; i += 1) {
+          const byte = memory.get(`0x${(current + BigInt(i)).toString(16)}`);
+          if (byte === undefined) {
+            throw new Error("out of range");
+          }
+          bytes.push(byte);
+        }
+        return bytes;
       },
     },
   };
@@ -158,6 +208,52 @@ describe("rop_suggest command", () => {
     expect(api.last_result().success).toBe(false);
     expect(api.last_result().errors[0]).toContain("bytes");
     expect(logs.join("")).toContain("Usage: dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)");
+  });
+
+  test("find_stack_bytes finds live stack hits without searching heap memory", () => {
+    const stackPointer = BigInt("0x12ff00");
+    const stackBase = BigInt("0x130000");
+    const stackLimit = BigInt("0x12f000");
+    const stack = new Uint8Array(0x100);
+    stack.set([0x43, 0x43, 0x43, 0x43], 0x20);
+    stack.set([0x43, 0x43, 0x43, 0x43], 0x60);
+    installStackHost(stackBase, stackLimit, stackPointer, stack);
+
+    const command = createFindStackBytesCommand();
+    const result = command.execute({
+      bytes: [0x43, 0x43, 0x43, 0x43],
+      maxResults: 10,
+      stackBytes: 0x100,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.findings).toEqual([
+      stackPointer + BigInt(0x20),
+      stackPointer + BigInt(0x60),
+    ]);
+  });
+
+  test("find_stack_bytes executes through the public adapter", () => {
+    const logs: string[] = [];
+    const stackPointer = BigInt("0x12ff00");
+    const stackBase = BigInt("0x130000");
+    const stackLimit = BigInt("0x12f000");
+    const stack = new Uint8Array(0x80);
+    stack.set([0x43, 0x43, 0x43, 0x43], 0x10);
+    installStackHost(stackBase, stackLimit, stackPointer, stack);
+    ((globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host).diagnostics = {
+      debugLog: (line: string) => logs.push(line),
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        find_stack_bytes: (bytes: string, maxResults?: number, stackBytes?: number) => boolean;
+      };
+    }).osed;
+
+    expect(api.find_stack_bytes("43 43 43 43", 10, 0x80)).toBe(true);
+    expect(logs.join("")).toContain("Scope: current thread stack only; this does not search heap, modules outside the stack window, or arbitrary process memory.");
   });
 
   test("legacy suggestions do not print sections for patterns with no matches", () => {

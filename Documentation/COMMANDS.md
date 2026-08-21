@@ -25,7 +25,8 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `math` | `dx @$osed().math(value, bits?)` | `dx @$osed().math(0xFFFFFFD6, 32)` | Formats integers as hex, signed, unsigned, little-endian bytes, and two's complement. |
 | `modules` | `dx @$osed().modules(filter?)` | `dx @$osed().modules("essfunc")` | Lists modules and mitigation state. |
 | `rop_find` | `dx @$osed().rop_find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop_find("essfunc")` | Flat alias for legacy ROP exploration and module triage. |
-| `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("vulnserver", "FF E4")` | Finds byte sequences in executable sections. |
+| `find_bytes` | `dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)` | `dx @$osed().find_bytes("vulnserver", "FF E4")` | Finds byte sequences in PE sections of the named loaded module. By default this searches executable sections only. |
+| `find_stack_bytes` | `dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)` | `dx @$osed().find_stack_bytes("43 43 43 43")` | Finds byte sequences in the current thread stack only, starting at `ESP`/`RSP`. Does not search heap or arbitrary process memory. |
 | `find_ptr` | `dx @$osed().find_ptr(instruction, module?, badchars?, maxResults?, executableOnly?)` | `dx @$osed().find_ptr("jmp esp", "essfunc", "00 0A 0D")` | Searches executable memory for an instruction and filters surviving pointers whose address contains no bad characters. Composable filter stack; the live-memory feed for the ROP layer. |
 | `rop_suggest` | `dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)` | `dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")` | Suggests validated gadget patterns. |
 | `retn` | `dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().retn("essfunc")` | Finds `retn N` gadgets for stdcall chain adjustment. |
@@ -55,6 +56,33 @@ dx @$osed().pattern.create("help")
 dx @$osed().sc.iat("help")
 dx @$osed().rop.query("help")
 ```
+
+## Build Verification
+
+After `.scriptload`, the toolkit prints a load banner with embedded build metadata. Confirm the loaded bundle with:
+
+```js
+dx @$osed().version()
+```
+
+Expected fields:
+
+- `Version`
+- `BuildTime`
+- `GitCommit`
+- `GitDirty`
+
+If `version()` reports `dev` / `unknown`, the loaded file is not a properly built `dist/osed.js`.
+
+## Byte Search Scope
+
+Use the byte-search helpers by memory scope:
+
+- `find_bytes(module, ...)`: loaded module PE sections, primarily for gadget and opcode discovery.
+- `find_stack_bytes(...)`: current-thread stack window only, primarily for confirming that live input landed near control data.
+- `findmsp(...)`: cyclic-pattern correlation across registers, stack slots, pointer targets, and SEH fields.
+
+`find_bytes()` intentionally does not search stack or heap memory. On zero hits it prints a scope line to make that explicit.
 
 ## Analysis Evidence Helpers
 

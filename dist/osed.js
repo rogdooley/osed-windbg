@@ -10188,10 +10188,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-21T01:41:30.133Z" : globalThis[key2];
+        value = true ? "2026-08-21T01:47:26.013Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "ebd8fe50b82c" : globalThis[key2];
+        value = true ? "b07f2251830f" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -10639,6 +10639,132 @@ var osed_bundle = (() => {
     return [readString, findString, refsString, stringBytes];
   }
 
+  // src/commands/find_stack_bytes.ts
+  function stackBounds2(pointerSize) {
+    if (pointerSize !== 4) {
+      return {};
+    }
+    const teb = resolveTeb32Address(host.currentThread);
+    if (!teb) {
+      return {};
+    }
+    try {
+      return {
+        base: readPointer(teb + BigInt(4), 4),
+        limit: readPointer(teb + BigInt(8), 4)
+      };
+    } catch (_error) {
+      return {};
+    }
+  }
+  function findPattern2(buffer, pattern, maxResults) {
+    const hits = [];
+    if (pattern.length === 0 || buffer.length < pattern.length) {
+      return hits;
+    }
+    const last = buffer.length - pattern.length;
+    for (let i = 0; i <= last; i += 1) {
+      let match = true;
+      for (let j = 0; j < pattern.length; j += 1) {
+        if (buffer[i + j] !== pattern[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        hits.push(i);
+        if (hits.length >= maxResults) {
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+  function createFindStackBytesCommand() {
+    return {
+      name: "find_stack_bytes",
+      description: "Find byte sequence hits in the current thread stack only.",
+      usage: "dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)",
+      examples: [
+        'dx @$osed().find_stack_bytes("43 43 43 43")',
+        'dx @$osed().find_stack_bytes("43 43 43 43", 20, 4096)'
+      ],
+      schema: {
+        bytes: { type: "array", elementType: "number", required: true },
+        maxResults: { type: "number", min: 1, max: 200, default: 50 },
+        stackBytes: { type: "number", min: 16, max: 1048576 }
+      },
+      execute(options) {
+        var _a;
+        const bytes = options.bytes;
+        if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error("bytes must contain 0x00..0xFF integers.");
+        }
+        const pointerSize = getPointerSize();
+        const regs = readRegisters(pointerSize);
+        if (regs.sp === void 0) {
+          throw new Error("Stack pointer is unavailable.");
+        }
+        const bounds = stackBounds2(pointerSize);
+        let searchBytes = options.stackBytes;
+        const warnings = [];
+        if (searchBytes === void 0 && bounds.base !== void 0 && bounds.base > regs.sp) {
+          searchBytes = Number(bounds.base - regs.sp);
+        }
+        if (searchBytes === void 0) {
+          searchBytes = 4096;
+          warnings.push("Stack bounds unavailable; defaulted to a 4096-byte search window from SP.");
+        }
+        if (bounds.base !== void 0 && bounds.base > regs.sp) {
+          const maxToBase = Number(bounds.base - regs.sp);
+          if (searchBytes > maxToBase) {
+            searchBytes = maxToBase;
+            warnings.push("stackBytes exceeded StackBase and was clamped to the current thread stack range.");
+          }
+        }
+        const buffer = readMemory(regs.sp, searchBytes);
+        const pattern = Uint8Array.from(bytes);
+        const offsets = findPattern2(buffer, pattern, options.maxResults);
+        section("Find Stack Bytes");
+        info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a = regs.spName) != null ? _a : "sp").toUpperCase()})`);
+        if (bounds.base !== void 0) {
+          info(`StackBase: ${formatAddress(bounds.base, pointerSize)}`);
+        }
+        if (bounds.limit !== void 0) {
+          info(`StackLimit: ${formatAddress(bounds.limit, pointerSize)}`);
+        }
+        info(`Searched ${searchBytes} byte(s) in the current thread stack.`);
+        table(
+          [
+            { key: "address", header: "Address", width: 18 },
+            { key: "offset", header: "SP+Offset", width: 12 }
+          ],
+          offsets.map((offset) => ({
+            address: formatAddress(regs.sp + BigInt(offset), pointerSize),
+            offset: `0x${offset.toString(16).toUpperCase()}`
+          }))
+        );
+        if (offsets.length === 0) {
+          info("No byte matches found in the searched stack window.");
+        }
+        info("Scope: current thread stack only; this does not search heap, modules outside the stack window, or arbitrary process memory.");
+        whyItMatters("Stack-local byte matches confirm whether your input landed near control data and help anchor overwrite offsets quickly.");
+        return {
+          command: "find_stack_bytes",
+          args: options,
+          success: true,
+          findings: offsets.map((offset) => regs.sp + BigInt(offset)),
+          warnings,
+          errors: [],
+          stats: {
+            searchedBytes: searchBytes,
+            results: offsets.length
+          }
+        };
+      }
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -10806,6 +10932,7 @@ var osed_bundle = (() => {
       createFindMspCommand(),
       createFindPtrCommand(),
       createMemoryCommand(),
+      createFindStackBytesCommand(),
       createLandingCommand(),
       createMathCommand(),
       createVersionCommand(),
@@ -11957,6 +12084,12 @@ var osed_bundle = (() => {
           maxResults: args[2],
           executableOnly: args[3],
           mode: args[4]
+        };
+      case "find_stack_bytes":
+        return {
+          bytes: parseHexByteList(args[0]),
+          maxResults: args[1],
+          stackBytes: args[2]
         };
       case "find_ptr":
         return {
