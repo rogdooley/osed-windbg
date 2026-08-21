@@ -135,4 +135,17 @@ describe("memory analysis", () => {
 
     expect(api.can_execute(0x41414141)).toBeNull();
   });
+
+  test("initializeScript prints a load banner with version metadata", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+      currentProcess: { Is64Bit: false, Modules: [] },
+    };
+
+    initializeScript();
+
+    expect(logs.some((line) => line.includes("[+] osed loaded: v"))).toBe(true);
+    expect(logs.some((line) => line.includes("built"))).toBe(true);
+  });
 });

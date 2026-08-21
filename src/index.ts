@@ -1619,5 +1619,13 @@ export function initializeScript(): unknown[] {
     }
   }
 
+  if (typeof host !== "undefined" && host.diagnostics && typeof host.diagnostics.debugLog === "function") {
+    const version = getVersionInfo();
+    const dirty = version.gitDirty ? "dirty" : "clean";
+    host.diagnostics.debugLog(
+      `[+] osed loaded: v${version.version} (${version.gitCommit}, ${dirty}, built ${version.buildTime})\n`,
+    );
+  }
+
   return registrations;
 }

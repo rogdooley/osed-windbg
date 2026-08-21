@@ -11,13 +11,22 @@ export type VersionInfo = {
   gitDirty: boolean;
 };
 
+function readBuildString(key: "__OSED_VERSION__" | "__OSED_BUILD_TIME__" | "__OSED_GIT_COMMIT__", fallback: string): string {
+  const value = (globalThis as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function readBuildBoolean(key: "__OSED_GIT_DIRTY__", fallback: boolean): boolean {
+  const value = (globalThis as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export function getVersionInfo(): VersionInfo {
   return {
     name: "osed-windbg",
-    version: __OSED_VERSION__,
-    buildTime: __OSED_BUILD_TIME__,
-    gitCommit: __OSED_GIT_COMMIT__,
-    gitDirty: __OSED_GIT_DIRTY__,
+    version: readBuildString("__OSED_VERSION__", "dev"),
+    buildTime: readBuildString("__OSED_BUILD_TIME__", "unknown"),
+    gitCommit: readBuildString("__OSED_GIT_COMMIT__", "unknown"),
+    gitDirty: readBuildBoolean("__OSED_GIT_DIRTY__", false),
   };
 }
-

@@ -10181,13 +10181,21 @@ var osed_bundle = (() => {
   }
 
   // src/core/version.ts
+  function readBuildString(key2, fallback) {
+    const value = globalThis[key2];
+    return typeof value === "string" && value.length > 0 ? value : fallback;
+  }
+  function readBuildBoolean(key2, fallback) {
+    const value = globalThis[key2];
+    return typeof value === "boolean" ? value : fallback;
+  }
   function getVersionInfo() {
     return {
       name: "osed-windbg",
-      version: "1.0.4",
-      buildTime: "2026-08-21T01:28:06.142Z",
-      gitCommit: "3e2d7fcc2188",
-      gitDirty: false
+      version: readBuildString("__OSED_VERSION__", "dev"),
+      buildTime: readBuildString("__OSED_BUILD_TIME__", "unknown"),
+      gitCommit: readBuildString("__OSED_GIT_COMMIT__", "unknown"),
+      gitDirty: readBuildBoolean("__OSED_GIT_DIRTY__", false)
     };
   }
 
@@ -12011,6 +12019,14 @@ var osed_bundle = (() => {
 `);
         }
       }
+    }
+    if (typeof host !== "undefined" && host.diagnostics && typeof host.diagnostics.debugLog === "function") {
+      const version = getVersionInfo();
+      const dirty = version.gitDirty ? "dirty" : "clean";
+      host.diagnostics.debugLog(
+        `[+] osed loaded: v${version.version} (${version.gitCommit}, ${dirty}, built ${version.buildTime})
+`
+      );
     }
     return registrations;
   }
