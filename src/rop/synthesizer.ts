@@ -171,12 +171,12 @@ function byteList(bytes: number[]): string {
   return bytes.map((b) => `0x${b.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
 }
 
-function firstKnownAddress(gadget: RopGadget): bigint | undefined {
+export function firstKnownAddress(gadget: RopGadget): bigint | undefined {
   const loc = gadget.locations.find((l) => l.virtualAddress !== undefined);
   return loc?.virtualAddress !== undefined ? BigInt(loc.virtualAddress) : undefined;
 }
 
-function gadgetSequence(gadget: RopGadget): string {
+export function gadgetSequence(gadget: RopGadget): string {
   return gadget.instructions.map((i) => i.normalizedText).join(" ; ");
 }
 
@@ -194,7 +194,7 @@ function findRetGadget(index: CapabilityIndex): RopGadget | undefined {
     .sort((a, b) => b.score - a.score)[0];
 }
 
-function classifyPivotSource(gadget: RopGadget): { source: PivotSource; sourceRegister?: X86Register; adjustment?: number; clobbers: X86Register[] } {
+export function classifyPivotSource(gadget: RopGadget): { source: PivotSource; sourceRegister?: X86Register; adjustment?: number; clobbers: X86Register[] } {
   const instrs = gadget.instructions;
   const first = instrs[0];
 

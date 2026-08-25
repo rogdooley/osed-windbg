@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, emissionRows, formatChainPython, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type ExploitState, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -399,24 +399,39 @@ function bindApi(): OsedApi {
     return toDxResult(`Help: ${name}`, rows);
   };
 
-  const scanCorpus = (text: string, options: RPPlusProviderOptions = {}): DxResult => {
+  const scanCorpus = (text: string, options: RPPlusProviderOptions = {}, badchars?: number[]): DxResult => {
     invalidateCorpusPlans();
     resetCorpusModules();
-    currentRopCorpus = buildCapabilityIndexFromRpPlusText(text, options);
+    const raw = buildCapabilityIndexFromRpPlusText(text, options);
+    const warnings: string[] = [];
+    let filteredCount = 0;
+    if (badchars && badchars.length > 0) {
+      const { filtered, removedCount } = filterCorpusByBadchars(raw, badchars);
+      filteredCount = removedCount;
+      currentRopCorpus = filtered;
+      if (removedCount > 0) {
+        const byteList = badchars.map((b) => `0x${(b & 0xff).toString(16).toUpperCase().padStart(2, "0")}`).join(" ");
+        warnings.push(`${removedCount} gadget(s) filtered — address contains badchar(s): ${byteList}`);
+      }
+    } else {
+      currentRopCorpus = raw;
+    }
     const rows = summarizeCapabilities(currentRopCorpus);
     out.section("ROP Corpus Loaded");
     out.info(`Gadgets: ${currentRopCorpus.gadgets.length}`);
+    if (filteredCount > 0) out.info(`Filtered: ${filteredCount} (badchar address)`);
     out.info(`Capabilities: ${rows.length}`);
+    for (const w of warnings) out.warn(w);
     setResult({
       command: "rop.scan",
       args: { text, ...options },
       success: true,
-      findings: [{ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length }],
-      warnings: [],
+      findings: [{ gadgets: currentRopCorpus.gadgets.length, capabilities: rows.length, filtered: filteredCount }],
+      warnings,
       errors: [],
     });
     return toDxResult("ROP Corpus Loaded", [
-      { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Capabilities: rows.length.toString() },
+      { Corpus: "loaded", Gadgets: currentRopCorpus.gadgets.length.toString(), Filtered: filteredCount.toString(), Capabilities: rows.length.toString() },
     ]);
   };
 
@@ -566,8 +581,11 @@ function bindApi(): OsedApi {
       return toDxResult("ROP Scan", rows);
     }
 
-    if (args.length === 1 && typeof args[0] === "string") {
-      return scanCorpus(args[0]);
+    if (args.length >= 1 && typeof args[0] === "string") {
+      const scanBadchars = typeof args[1] === "string"
+        ? parseHexByteList(args[1]) as number[] | undefined
+        : undefined;
+      return scanCorpus(args[0], {}, Array.isArray(scanBadchars) ? scanBadchars : undefined);
     }
 
     const options = isPlainObject(args[0]) ? args[0] : {};
@@ -585,11 +603,12 @@ function bindApi(): OsedApi {
       return toDxResult("ROP Scan", rows);
     }
 
+    const parsedBadchars = parseHexByteList(options.badchars);
     return scanCorpus(text, {
       source: options.source as RPPlusProviderOptions["source"],
       provenance: options.provenance as RPPlusProviderOptions["provenance"],
       preserveEmptyLines: options.preserveEmptyLines as boolean | undefined,
-    });
+    }, Array.isArray(parsedBadchars) ? parsedBadchars : undefined);
   };
 
   const executeRopQuery = (...args: unknown[]): DxResult => {
@@ -852,6 +871,292 @@ function bindApi(): OsedApi {
         ...result.warnings.map((w) => w.message),
       ],
       errors: result.blockers.map((b) => b.message),
+    });
+    return toDxResult(title, rows);
+  };
+
+  const executeRopExport = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.export");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Export", rows);
+      return toDxResult("ROP Export", rows);
+    }
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { planId: args[0], path: args[1] };
+    const planId = Number(options.planId ?? options.plan_id ?? args[0]);
+    const filePath = options.path ?? options.file ?? (typeof args[1] === "string" ? args[1] : undefined);
+    const entry = ropPlans.get(planId);
+    if (!entry) {
+      const rows = [{ Error: `ROP plan ${Number.isFinite(planId) ? planId : "<invalid>"} does not exist. Run rop.plan(...) first.` }];
+      renderRows("ROP Export", rows);
+      return toDxResult("ROP Export", rows);
+    }
+    if (entry.generation !== corpusGeneration) {
+      const rows = [{ Error: `ROP plan ${planId} is stale (corpus was reloaded). Run rop.plan(...) again.` }];
+      renderRows("ROP Export", rows);
+      return toDxResult("ROP Export", rows);
+    }
+
+    const emitResult: EmissionResult = ropEmitter.emit(currentRopCorpus, entry.plan);
+    if (!emitResult.success) {
+      const rows = [{ Error: `Emit failed for plan ${planId}: ${emitResult.diagnostics.join("; ")}` }];
+      renderRows("ROP Export", rows);
+      return toDxResult("ROP Export", rows);
+    }
+
+    const exportEmit: ExportableEmission = {
+      planId: emitResult.planId,
+      strategy: emitResult.strategy,
+      shape: emitResult.shape,
+      gadgets: emitResult.gadgets.map((g) => ({
+        capability: g.capability,
+        address: g.address,
+        module: g.module,
+        sequence: g.sequence,
+      })),
+    };
+
+    let exportSynth: ExportableSynthesis | undefined;
+    if (cachedExploitState) {
+      const synthResult: SynthesisResult = synthesize(currentRopCorpus, entry.plan, cachedExploitState);
+      if (synthResult.layoutProduced) {
+        exportSynth = {
+          planId: synthResult.planId,
+          strategy: synthResult.strategy,
+          shape: synthResult.shape,
+          entryPath: synthResult.entryPath,
+          status: synthResult.status,
+          slots: synthResult.slots,
+          placeholders: synthResult.placeholders,
+          violations: synthResult.violations.map((v) => v.message),
+        };
+      }
+    }
+
+    const pythonLines = formatExportPython(exportEmit, exportSynth);
+    const title = `ROP Export ${planId}`;
+
+    if (typeof filePath === "string" && filePath.length > 0) {
+      const hostAny = host as unknown as {
+        namespace?: { Debugger?: { Utility?: { Control?: { ExecuteCommand?: (cmd: string) => unknown } } } };
+      };
+      const exec = hostAny.namespace?.Debugger?.Utility?.Control?.ExecuteCommand;
+      if (typeof exec === "function") {
+        exec(`.logopen /u "${filePath}"`);
+        for (const line of pythonLines) {
+          host.diagnostics.debugLog(`${line}\n`);
+        }
+        exec(".logclose");
+        out.section(title);
+        out.info(`Written to ${filePath}`);
+        out.info(`${pythonLines.length} lines, ${exportEmit.gadgets.length} gadgets`);
+        if (exportSynth) {
+          out.info(`Includes stack layout (${exportSynth.slots.length} slots, ${exportSynth.entryPath})`);
+        }
+      } else {
+        out.section(title);
+        out.warn("File write unavailable (not running in WinDbg). Printing to console instead.");
+        for (const line of pythonLines) {
+          out.print(line);
+        }
+      }
+    } else {
+      out.section(title);
+      for (const line of pythonLines) {
+        out.print(line);
+      }
+    }
+
+    const rows = [
+      {
+        Plan: planId.toString(),
+        Strategy: `${exportEmit.strategy} / ${exportEmit.shape}`,
+        Gadgets: exportEmit.gadgets.length.toString(),
+        Layout: exportSynth ? `${exportSynth.slots.length} slots` : "no exploit state",
+        File: typeof filePath === "string" ? filePath : "(console)",
+      },
+    ];
+    renderRows(title, rows);
+    setResult({
+      command: "rop.export",
+      args: options,
+      success: true,
+      findings: [{ python: pythonLines, emit: exportEmit, synthesis: exportSynth }],
+      warnings: [],
+      errors: [],
+    });
+    return toDxResult(title, rows);
+  };
+
+  const formatExploitStateRows = (state: ExploitState): Array<Record<string, string>> => {
+    const rows: Array<Record<string, string>> = [];
+    rows.push({ Section: "Control", Field: "mechanism", Value: state.control.mechanism });
+    rows.push({ Section: "Control", Field: "eipControlled", Value: String(state.control.instructionPointerControlled) });
+    if (state.stack.espAtControl !== undefined) {
+      rows.push({ Section: "Stack", Field: "espAtControl", Value: `0x${(state.stack.espAtControl >>> 0).toString(16).toUpperCase().padStart(8, "0")}` });
+    }
+    rows.push({ Section: "Stack", Field: "controlledBeforeEsp", Value: state.stack.controlledBeforeEsp.toString() });
+    rows.push({ Section: "Stack", Field: "controlledAfterEsp", Value: state.stack.controlledAfterEsp.toString() });
+    rows.push({ Section: "Stack", Field: "contiguousControlledBytes", Value: state.stack.contiguousControlledBytes.toString() });
+    rows.push({ Section: "Stack", Field: "readable", Value: String(state.stack.readable) });
+    rows.push({ Section: "Stack", Field: "writable", Value: String(state.stack.writable) });
+    rows.push({ Section: "Stack", Field: "executable", Value: String(state.stack.executable) });
+    if (state.stack.alignment !== undefined) {
+      rows.push({ Section: "Stack", Field: "alignment", Value: state.stack.alignment.toString() });
+    }
+    const regNames = Object.keys(state.registers);
+    if (regNames.length > 0) {
+      for (const reg of regNames) {
+        const rs = state.registers[reg]!;
+        const val = rs.kind === "constant"
+          ? `constant: 0x${(rs.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`
+          : rs.kind === "pointer-into-controlled"
+            ? `pointer-into-controlled: offset ${rs.offset}`
+            : rs.kind;
+        rows.push({ Section: "Registers", Field: reg, Value: val });
+      }
+    }
+    const bc = state.constraints.badchars;
+    if (bc.length > 0) {
+      rows.push({ Section: "Constraints", Field: "badchars", Value: bc.map((b) => `0x${(b & 0xff).toString(16).toUpperCase().padStart(2, "0")}`).join(" ") });
+    }
+    rows.push({ Section: "Constraints", Field: "apiResolution", Value: state.constraints.apiResolution });
+    if (state.constraints.maximumPayloadLength !== undefined) {
+      rows.push({ Section: "Constraints", Field: "maximumPayloadLength", Value: state.constraints.maximumPayloadLength.toString() });
+    }
+    return rows;
+  };
+
+  const executeExploitState = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("exploit.state");
+    }
+
+    const overrides = isPlainObject(args[0]) ? args[0] as Record<string, unknown> : undefined;
+
+    if (overrides && Object.keys(overrides).length > 0) {
+      if (!cachedExploitState) {
+        cachedExploitState = {
+          control: {
+            mechanism: "saved-ret",
+            instructionPointerControlled: true,
+          },
+          stack: {
+            controlledBeforeEsp: 0,
+            controlledAfterEsp: 0,
+            contiguousControlledBytes: 0,
+            readable: true,
+            writable: true,
+            executable: false,
+          },
+          registers: {},
+          constraints: {
+            badchars: [],
+            apiResolution: "either",
+          },
+        };
+      }
+      cachedExploitState = mergeExploitStateOverrides(cachedExploitState, overrides);
+      out.section("Exploit State Updated");
+    } else if (!cachedExploitState) {
+      const rows = [{ Error: "No exploit state cached. Run triage() first, or set fields with exploit.state({...})." }];
+      renderRows("Exploit State", rows);
+      return toDxResult("Exploit State", rows);
+    } else {
+      out.section("Exploit State (cached)");
+    }
+
+    const rows = formatExploitStateRows(cachedExploitState);
+    renderRows("Exploit State", rows);
+    setResult({
+      command: "exploit.state",
+      args: overrides ?? {},
+      success: true,
+      findings: [cachedExploitState],
+      warnings: [],
+      errors: [],
+    });
+    return toDxResult("Exploit State", rows);
+  };
+
+  const executeExploitClear = (): DxResult => {
+    cachedExploitState = undefined;
+    const rows = [{ Status: "Exploit state cleared." }];
+    out.section("Exploit State");
+    out.info("Cached exploit state cleared.");
+    renderRows("Exploit State", rows);
+    return toDxResult("Exploit State", rows);
+  };
+
+  const executeRopPivots = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.pivots");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Pivots", rows);
+      return toDxResult("ROP Pivots", rows);
+    }
+    const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1] };
+    const filterRegister = typeof options.register === "string"
+      ? options.register.toLowerCase().trim()
+      : undefined;
+    const minDelta = typeof options.minDelta === "number" ? options.minDelta : undefined;
+
+    const candidates = currentRopCorpus.gadgets
+      .filter((g) =>
+        g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST")
+        && firstKnownAddress(g) !== undefined)
+      .sort((a, b) => {
+        const aLen = a.instructions.length;
+        const bLen = b.instructions.length;
+        if (aLen !== bLen) return aLen - bLen;
+        return b.score - a.score;
+      });
+
+    const rows: Array<Record<string, string>> = [];
+    for (const gadget of candidates) {
+      const addr = firstKnownAddress(gadget)!;
+      const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
+      const seq = gadgetSequence(gadget);
+      const module = gadget.locations.find((l) => l.virtualAddress !== undefined)?.module ?? "unknown";
+
+      if (filterRegister && sourceRegister !== filterRegister) continue;
+      if (minDelta !== undefined && source === "esp-adjust") {
+        if (adjustment === undefined || Math.abs(adjustment) < minDelta) continue;
+      }
+
+      const addrHex = `0x${addr.toString(16).toUpperCase().padStart(8, "0")}`;
+      rows.push({
+        Address: addrHex,
+        Type: source,
+        Source: sourceRegister ?? (adjustment !== undefined ? `ESP ${adjustment >= 0 ? "+" : ""}${adjustment}` : "indirect"),
+        Clobbers: clobbers.join(", "),
+        Module: module,
+        Sequence: seq,
+        Score: gadget.score.toString(),
+      });
+    }
+
+    const title = `ROP Pivots (${rows.length} found)`;
+    out.section(title);
+    if (rows.length === 0) {
+      out.warn("No pivot gadgets found in the corpus.");
+    } else {
+      out.info(`${rows.length} pivot gadget(s) ranked by instruction count and score.`);
+    }
+    renderRows(title, rows);
+    setResult({
+      command: "rop.pivots",
+      args: options,
+      success: rows.length > 0,
+      findings: rows,
+      warnings: [],
+      errors: [],
     });
     return toDxResult(title, rows);
   };
@@ -1284,6 +1589,8 @@ function bindApi(): OsedApi {
     plan: executeRopPlan,
     emit: executeRopEmit,
     synthesize: executeRopSynthesize,
+    export: executeRopExport,
+    pivots: executeRopPivots,
     chain: executeRopChain,
     chain_vp: executeRopChainVp,
     chain_wpm: executeRopChainWpm,
@@ -1293,6 +1600,11 @@ function bindApi(): OsedApi {
     frame_va: executeRopFrameVa,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
+
+  api.exploit = {
+    state: executeExploitState,
+    clear: executeExploitClear,
+  };
 
   api.pattern = {
     create: (...args: unknown[]) => invoke("pattern_create", args),

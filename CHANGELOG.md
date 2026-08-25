@@ -7,6 +7,30 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-08-24 - Semantic ROP pipeline completion and exploit state
+
+- Added `rop.plan()` to analyze semantic capabilities and produce feasible
+  exploit strategies with feasibility levels, preconditions, and ranked
+  recommendations for VirtualProtect, VirtualAlloc, and WriteProcessMemory.
+- Added `rop.emit()` to select and rank concrete gadgets for a planned strategy,
+  producing a gadget assignment with scores and side-effect counts.
+- Added `rop.synthesize()` to combine a plan with exploit state and produce a
+  concrete stack layout. Evaluates three entry paths (RET_TO_FRAME, DIRECT_API,
+  PIVOT_TO_FRAME) and reports status as complete, complete-with-violations, or
+  blocked.
+- Added `rop.export()` to write emitted gadgets and synthesized layouts as
+  Python exploit stubs with `struct.pack` lines. Supports console output or
+  file write via WinDbg `.logopen`/`.logclose`.
+- Added `rop.pivots()` to find, classify, and rank stack pivot gadgets from the
+  corpus. Classifies pivots as register (xchg/mov esp), esp-adjust (add/sub
+  esp), or memory (indirect). Supports filtering by source register or minimum
+  ESP delta.
+- Added `exploit.state()` and `exploit.clear()` to view, set, and manage the
+  cached exploit state used by the synthesizer. State is populated automatically
+  by `triage()` and individual fields can be overridden manually.
+- Added badchar address filtering to `rop.scan()` for RP++ text input, matching
+  the filtering already available in `rop.scan_live()`.
+
 ### 2026-07-22 - Live ROP indexing and native chain construction
 
 - Added `rop.scan_live()` to discover known gadget patterns directly from live

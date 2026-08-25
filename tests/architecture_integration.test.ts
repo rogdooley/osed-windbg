@@ -3,7 +3,11 @@ import {
   buildCapabilityIndex,
   buildCapabilityIndexFromRpPlusText,
   buildRopIndexFromSequences,
+  classifyPivotSource,
   emissionRows,
+  filterCorpusByBadchars,
+  filterGadgetsByBadchars,
+  firstKnownAddress,
   mergeCapabilityIndexes,
   normalizeExploitStrategy,
   planExploitStrategy,
@@ -449,5 +453,101 @@ describe("help catalog entries", () => {
     const { findHelpEntry } = await import("../src/core/help_catalog");
     const entry = findHelpEntry("rop.emit")!;
     expect(entry.description).toContain("assignment");
+  });
+});
+
+describe("badchar address filtering", () => {
+  const rpText = [
+    "0x10001000: pop eax ; ret ;",
+    "0x100A2000: pop ebx ; ret ;",
+    "0x10003000: pop ecx ; ret ;",
+  ].join("\n");
+
+  test("filterGadgetsByBadchars removes gadgets with tainted addresses", () => {
+    const corpus = buildCapabilityIndexFromRpPlusText(rpText);
+    const { kept, removedCount } = filterGadgetsByBadchars(corpus.gadgets, [0x0A]);
+    expect(removedCount).toBe(1);
+    expect(kept.length).toBe(corpus.gadgets.length - 1);
+    const addrs = kept.flatMap((g) => g.locations.map((l) => l.virtualAddress));
+    expect(addrs).not.toContain(0x100A2000);
+  });
+
+  test("filterCorpusByBadchars rebuilds capability index", () => {
+    const corpus = buildCapabilityIndexFromRpPlusText(rpText);
+    const original = corpus.gadgets.length;
+    const { filtered, removedCount } = filterCorpusByBadchars(corpus, [0x0A]);
+    expect(removedCount).toBe(1);
+    expect(filtered.gadgets.length).toBe(original - 1);
+  });
+
+  test("no badchars returns all gadgets unchanged", () => {
+    const corpus = buildCapabilityIndexFromRpPlusText(rpText);
+    const { kept, removedCount } = filterGadgetsByBadchars(corpus.gadgets, []);
+    expect(removedCount).toBe(0);
+    expect(kept.length).toBe(corpus.gadgets.length);
+  });
+
+  test("null byte filters addresses containing 0x00", () => {
+    const rpWithNull = "0x00401000: pop eax ; ret ;\n0x62511AF1: pop ebx ; ret ;";
+    const corpus = buildCapabilityIndexFromRpPlusText(rpWithNull);
+    const { kept, removedCount } = filterGadgetsByBadchars(corpus.gadgets, [0x00]);
+    expect(removedCount).toBe(1);
+    const addrs = kept.flatMap((g) => g.locations.map((l) => l.virtualAddress));
+    expect(addrs).not.toContain(0x00401000);
+    expect(addrs).toContain(0x62511AF1);
+  });
+});
+
+describe("pivot classification", () => {
+  test("xchg esp, eax classified as register pivot", () => {
+    const rpText = "0x10001000: xchg esp, eax ; ret ;";
+    const corpus = buildCapabilityIndexFromRpPlusText(rpText);
+    const pivots = corpus.gadgets.filter((g) =>
+      g.capabilities.some((c) => c.kind === "STACK_PIVOT"));
+    expect(pivots.length).toBeGreaterThan(0);
+    const result = classifyPivotSource(pivots[0]);
+    expect(result.source).toBe("register");
+    expect(result.sourceRegister).toBe("eax");
+    expect(result.clobbers).toContain("esp");
+  });
+
+  test("add esp, 0x100 classified as esp-adjust", () => {
+    const rpText = "0x10001000: add esp, 0x100 ; ret ;";
+    const corpus = buildCapabilityIndexFromRpPlusText(rpText);
+    const adjusts = corpus.gadgets.filter((g) =>
+      g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST"));
+    expect(adjusts.length).toBeGreaterThan(0);
+    const result = classifyPivotSource(adjusts[0]);
+    expect(result.source).toBe("esp-adjust");
+    expect(result.adjustment).toBe(0x100);
+  });
+
+  test("firstKnownAddress returns address from location", () => {
+    const rpText = "0x10001000: pop eax ; ret ;";
+    const corpus = buildCapabilityIndexFromRpPlusText(rpText);
+    const addr = firstKnownAddress(corpus.gadgets[0]);
+    expect(addr).toBe(BigInt(0x10001000));
+  });
+});
+
+describe("exploit state and pivots help entries", () => {
+  test("exploit.state help exists", async () => {
+    const { findHelpEntry } = await import("../src/core/help_catalog");
+    expect(findHelpEntry("exploit.state")).toBeDefined();
+    expect(findHelpEntry("exploit.clear")).toBeDefined();
+  });
+
+  test("rop.pivots help exists", async () => {
+    const { findHelpEntry } = await import("../src/core/help_catalog");
+    const entry = findHelpEntry("rop.pivots")!;
+    expect(entry).toBeDefined();
+    expect(entry.description).toContain("pivot");
+  });
+
+  test("rop.export help exists", async () => {
+    const { findHelpEntry } = await import("../src/core/help_catalog");
+    const entry = findHelpEntry("rop.export")!;
+    expect(entry).toBeDefined();
+    expect(entry.description).toContain("Python");
   });
 });

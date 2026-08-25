@@ -108,3 +108,38 @@ export function mergeCapabilityIndexes(indexes: Iterable<ReturnType<typeof build
 export function buildCapabilityIndexFromSequences(sequences: Iterable<InstructionSequence>) {
   return buildCapabilities(buildRopIndexFromSequences(sequences).gadgets);
 }
+
+export function filterCorpusByBadchars(
+  corpus: ReturnType<typeof buildCapabilities>,
+  badchars: number[],
+): { filtered: ReturnType<typeof buildCapabilities>; removedCount: number } {
+  const { kept, removedCount } = filterGadgetsByBadchars(corpus.gadgets, badchars);
+  return { filtered: buildCapabilities(kept), removedCount };
+}
+
+export function filterGadgetsByBadchars(
+  gadgets: RopGadget[],
+  badchars: number[],
+): { kept: RopGadget[]; removedCount: number } {
+  if (badchars.length === 0) return { kept: gadgets, removedCount: 0 };
+  const bad = new Set(badchars.map((b) => b & 0xff));
+  function addressClean(addr: number): boolean {
+    for (let i = 0; i < 4; i++) {
+      if (bad.has((addr >>> (i * 8)) & 0xff)) return false;
+    }
+    return true;
+  }
+  let removedCount = 0;
+  const kept: RopGadget[] = [];
+  for (const gadget of gadgets) {
+    const cleanLocations = gadget.locations.filter(
+      (loc) => loc.virtualAddress === undefined || addressClean(loc.virtualAddress),
+    );
+    if (cleanLocations.length > 0) {
+      kept.push({ ...gadget, locations: cleanLocations });
+    } else {
+      removedCount++;
+    }
+  }
+  return { kept, removedCount };
+}

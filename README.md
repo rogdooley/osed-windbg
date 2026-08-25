@@ -133,15 +133,114 @@ dx @$osed().rop_template("VirtualProtect", "essfunc")        ; PUSHAD skeleton
 
 Use `findmsp()` when you need cyclic-pattern offsets, `find_bytes()` when you need module/image byte hits, `find_stack_bytes()` when you need to confirm that live input bytes landed on the current stack, and `find_mem_bytes()` when you need an explicit live-memory range search.
 
-### Semantic ROP query (RP++ integration)
+### Semantic ROP pipeline
 
-Paste RP++ output into `rop.scan`, then query by effect:
+The semantic pipeline takes you from raw gadgets to a concrete stack layout in five stages: **scan** → **plan** → **emit** → **synthesize** → **export**.
+
+#### 1. Scan — build the corpus
+
+Load gadgets from RP++ text or live target memory. Both paths accept badchars to filter gadgets whose addresses contain prohibited bytes.
 
 ```
-dx @$osed().rop.scan("0x10014872: pop eax ; ret ;")
+; From RP++ output
+dx @$osed().rop.scan(rpOutput, "00 0A 0D")
+
+; From live target memory (discovers gadgets in-process)
+dx @$osed().rop.scan_live("essfunc", "00 0A 0D")
+dx @$osed().rop.scan_live(["essfunc", "compression"], "00 0A 0D")
+
+; Query and inspect the corpus
 dx @$osed().rop.query("capability", "LOAD_REGISTER")
 dx @$osed().rop.capabilities()
 ```
+
+#### 2. Plan — choose a strategy
+
+Plans feasible exploit strategies from semantic capabilities. Reports feasibility, preconditions, and recommended approaches.
+
+```
+dx @$osed().rop.plan("VirtualProtect")
+dx @$osed().rop.plan("VirtualAlloc", "iat")
+dx @$osed().rop.plan("WriteProcessMemory")
+```
+
+Each plan gets an ID for use in later stages.
+
+#### 3. Emit — assign concrete gadgets
+
+Selects and ranks concrete gadgets for a planned strategy. Produces a gadget assignment, not an executable chain.
+
+```
+dx @$osed().rop.emit(1)          ; emit for plan 1
+dx @$osed().rop.emit(1, 3)       ; emit for plan 1, strategy 3
+```
+
+#### 4. Synthesize — produce a stack layout
+
+Combines a plan with the current exploit state (crash geometry, registers, constraints) to produce a concrete stack layout. The exploit state is populated automatically by `triage()` or set manually with `exploit.state()`.
+
+```
+dx @$osed().triage(8000, "00 0A 0D")     ; auto-populates exploit state
+dx @$osed().rop.synthesize(1)
+dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 512})
+```
+
+Three entry paths are evaluated in order: RET_TO_FRAME (ret gadget in saved EIP), DIRECT_API (API address in saved EIP), PIVOT_TO_FRAME (stack pivot).
+
+Status is one of: `complete`, `complete-with-violations` (layout produced but a concrete value contains a badchar), or `blocked` (structural impossibility).
+
+#### 5. Export — write a Python exploit stub
+
+Exports the emitted gadgets and (if available) the synthesized stack layout as a Python script with `struct.pack` lines and semantic comments.
+
+```
+dx @$osed().rop.export(1)                            ; print to console
+dx @$osed().rop.export(1, "C:\\exploit\\rop.py")      ; write to file
+```
+
+#### Pivot finder
+
+Finds, classifies, and ranks stack pivot gadgets from the corpus. Pivots are classified as `register` (xchg/mov esp), `esp-adjust` (add/sub esp), or `memory` (indirect).
+
+```
+dx @$osed().rop.pivots()                ; all pivots
+dx @$osed().rop.pivots("eax")           ; only pivots sourced from EAX
+dx @$osed().rop.pivots(undefined, 0x100) ; only esp-adjust with delta >= 0x100
+```
+
+#### Flat frame builders
+
+Build stdcall API frames directly — no ROP gadgets needed. Useful with RET_TO_FRAME or DIRECT_API entry paths.
+
+```
+dx @$osed().rop.frame_vp(0x7C801AD0, 0x625011AF, 0x0012F800, 0x201, 0x40, 0x62506000, "00 0A 0D")
+dx @$osed().rop.frame_wpm(0x7C802213, 0x625011AF, 0xFFFFFFFF, 0x62502000, 0x0012F800, 0x200)
+dx @$osed().rop.frame_va(0x7C809AE1)
+```
+
+#### Legacy PUSHAD chain builders
+
+Build register-setup chains that end with PUSHAD. These operate independently of the planner and are the classic OSED approach.
+
+```
+dx @$osed().rop.chain_vp(0x7C801AD0, 0x62501010, 0x625011AF)
+dx @$osed().rop.chain_wpm(0x7C802213, 0x625011AF, 0x0012F800, 0x200)
+dx @$osed().rop.chain_va(0x7C809AE1)
+dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)
+```
+
+### Exploit state (`exploit`)
+
+The exploit state captures crash geometry — control mechanism, stack layout, register values, and constraints. It is populated automatically by `triage()` and consumed by `rop.synthesize()`.
+
+```
+dx @$osed().exploit.state()              ; view current state
+dx @$osed().exploit.state({mechanism: "saved-ret", controlledBytesAfterEsp: 512})
+dx @$osed().exploit.state({badchars: "00 0A 0D", apiResolution: "iat"})
+dx @$osed().exploit.clear()              ; reset
+```
+
+You can set or override any field without rerunning triage. This is useful when the debugger has continued past the crash point, or when you want to model a different scenario.
 
 ### Shellcode helpers
 

@@ -1,11 +1,14 @@
 import { describe, expect, test } from "vitest";
 import {
   buildCapabilityIndexFromRpPlusText,
+  formatExportPython,
   planExploitStrategy,
   synthesize,
   synthesisRows,
   validateExploitState,
   type ExploitState,
+  type ExportableEmission,
+  type ExportableSynthesis,
   type SynthesisResult,
 } from "../src/rop";
 
@@ -420,5 +423,87 @@ describe("synthesis display", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].Status).toBe("blocked");
     expect(rows[0].Diagnostic).toContain("EIP");
+  });
+});
+
+describe("formatExportPython", () => {
+  const emitFixture: ExportableEmission = {
+    planId: 1,
+    strategy: "VirtualProtect",
+    shape: "PUSHAD_DISPATCH",
+    gadgets: [
+      { capability: "LOAD_REGISTER", address: BigInt(0x10001000), module: "target.dll", sequence: "pop eax ; ret ;" },
+      { capability: "STACK_PIVOT", address: BigInt(0x10002000), module: "target.dll", sequence: "pushad ; ret ;" },
+    ],
+  };
+
+  test("emit-only export produces valid Python with gadget addresses", () => {
+    const lines = formatExportPython(emitFixture);
+    const text = lines.join("\n");
+    expect(text).toContain("#!/usr/bin/env python3");
+    expect(text).toContain("from struct import pack");
+    expect(text).toContain("0x10001000");
+    expect(text).toContain("pop eax ; ret ;");
+    expect(text).toContain("[target.dll]");
+    expect(text).toContain("rop.synthesize()");
+  });
+
+  test("export with synthesis includes stack layout", () => {
+    const synth: ExportableSynthesis = {
+      planId: 1,
+      strategy: "VirtualProtect",
+      shape: "PUSHAD_DISPATCH",
+      entryPath: "RET_TO_FRAME",
+      status: "complete",
+      slots: [
+        { offset: 0, role: "saved-eip", step: { kind: "gadget", address: BigInt(0x10001000), comment: "ret gadget" } },
+        { offset: 4, role: "api-address", step: { kind: "value", value: 0x7C801AD0, comment: "VirtualProtect" } },
+      ],
+      placeholders: [],
+      violations: [],
+    };
+    const lines = formatExportPython(emitFixture, synth);
+    const text = lines.join("\n");
+    expect(text).toContain("payload += pack");
+    expect(text).toContain("Entry path: RET_TO_FRAME");
+    expect(text).toContain("0x7C801AD0");
+    expect(text).not.toContain("rop.synthesize()");
+  });
+
+  test("export with violations includes warnings", () => {
+    const synth: ExportableSynthesis = {
+      planId: 1,
+      strategy: "VirtualProtect",
+      shape: "PUSHAD_DISPATCH",
+      entryPath: "DIRECT_API",
+      status: "complete-with-violations",
+      slots: [
+        { offset: 0, role: "api-address", step: { kind: "value", value: 0x00401000, comment: "VirtualProtect (contains null)" } },
+      ],
+      placeholders: [],
+      violations: ["address 0x00401000 contains badchar 0x00"],
+    };
+    const lines = formatExportPython(emitFixture, synth);
+    const text = lines.join("\n");
+    expect(text).toContain("WARNING: address 0x00401000 contains badchar 0x00");
+  });
+
+  test("export with placeholders includes TODO", () => {
+    const synth: ExportableSynthesis = {
+      planId: 1,
+      strategy: "VirtualProtect",
+      shape: "PUSHAD_DISPATCH",
+      entryPath: "RET_TO_FRAME",
+      status: "complete",
+      slots: [
+        { offset: 0, role: "saved-eip", step: { kind: "value", placeholder: "RET_GADGET", comment: "ret gadget (resolve)" } },
+      ],
+      placeholders: ["RET_GADGET"],
+      violations: [],
+    };
+    const lines = formatExportPython(emitFixture, synth);
+    const text = lines.join("\n");
+    expect(text).toContain("TODO: resolve placeholders: RET_GADGET");
+    expect(text).toContain("RET_GADGET");
   });
 });

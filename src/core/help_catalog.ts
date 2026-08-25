@@ -74,9 +74,12 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "rop.scan",
-    description: "Loads pasted RP++ output into the semantic ROP corpus.",
-    usage: "dx @$osed().rop.scan(text, options?)",
-    examples: ["dx @$osed().rop.scan(\"0x1000: pop eax ; ret ;\")"],
+    description: "Loads pasted RP++ output into the semantic ROP corpus. Optionally filters gadgets whose addresses contain bad characters.",
+    usage: "dx @$osed().rop.scan(text, badchars?)",
+    examples: [
+      "dx @$osed().rop.scan(\"0x1000: pop eax ; ret ;\")",
+      'dx @$osed().rop.scan(rpOutput, "00 0A 0D")',
+    ],
   },
   {
     name: "rop.scan_live",
@@ -121,6 +124,25 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.synthesize(1)",
       'dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 128})',
       'dx @$osed().rop.synthesize(1, {badchars: "00 0A 0D"})',
+    ],
+  },
+  {
+    name: "rop.export",
+    description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
+    usage: "dx @$osed().rop.export(planId, path?)",
+    examples: [
+      "dx @$osed().rop.export(1)",
+      'dx @$osed().rop.export(1, "C:\\\\exploit\\\\rop.py")',
+    ],
+  },
+  {
+    name: "rop.pivots",
+    description: "Finds, classifies, and ranks stack pivot gadgets from the semantic corpus. Optionally filters by source register or minimum ESP adjustment.",
+    usage: "dx @$osed().rop.pivots(register?, minDelta?)",
+    examples: [
+      "dx @$osed().rop.pivots()",
+      'dx @$osed().rop.pivots("eax")',
+      "dx @$osed().rop.pivots(undefined, 0x100)",
     ],
   },
   {
@@ -288,6 +310,22 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Buckets module pages by protection value.",
     usage: "dx @$osed().sc.page_summary(module)",
     examples: ["dx @$osed().sc.page_summary(\"kernel32\")"],
+  },
+  {
+    name: "exploit.state",
+    description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
+    usage: "dx @$osed().exploit.state(overrides?)",
+    examples: [
+      "dx @$osed().exploit.state()",
+      'dx @$osed().exploit.state({mechanism: "saved-ret", controlledBytesAfterEsp: 512})',
+      'dx @$osed().exploit.state({badchars: "00 0A 0D", apiResolution: "iat"})',
+    ],
+  },
+  {
+    name: "exploit.clear",
+    description: "Clears the cached exploit state.",
+    usage: "dx @$osed().exploit.clear()",
+    examples: ["dx @$osed().exploit.clear()"],
   },
 ];
 
