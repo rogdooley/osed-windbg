@@ -7,6 +7,24 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-08-26 - Backward scanner and arithmetic pipeline
+
+- Added backward scanner to `scan_live` that discovers multi-instruction gadgets,
+  `ret N` terminators, and register-register arithmetic the pattern scanner misses.
+  Scans executable memory for `C3`/`C2` terminators and decodes backward using a
+  lookup-table x86 mini-decoder (mod=11 register-register only). Covers ALU ops
+  (`add`/`sub`/`or`/`and`/`adc`/`sbb`/`xor`/`neg`/`not`/`inc`/`dec`), mov/xchg/test,
+  call/jmp reg, group-1 imm8, ALU eax-imm32 short forms, and FPU D9 ops.
+- Extended the semantic engine with rules for `or`, `and`, `not`, `adc`, and `sbb`
+  (register-register and register-immediate forms). These degrade to unknown net
+  transforms since bitwise and carry-dependent operations do not fit the affine model.
+- Added five new `CapabilityKind` values: `REGISTER_ADC`, `REGISTER_SBB`,
+  `REGISTER_OR`, `REGISTER_AND`, `REGISTER_NOT`.
+- Added `ARITHMETIC` query alias so `rop.query("capability", "ARITHMETIC")` matches
+  all eleven arithmetic capability kinds in a single query.
+- Backward scanner stats (terminators found, new gadgets) are now reported in the
+  `scan_live` corpus summary.
+
 ### 2026-08-24 - Semantic ROP pipeline completion and exploit state
 
 - Added `rop.plan()` to analyze semantic capabilities and produce feasible

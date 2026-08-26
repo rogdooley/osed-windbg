@@ -214,7 +214,7 @@ The `rop` runtime namespace includes semantic gadget queries, corpus-backed chai
 | --- | --- | --- | --- |
 | `rop.find` | `dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop.find("essfunc")` | Runs the legacy ROP helper/module triage from the ROP namespace. |
 | `rop.scan` | `dx @$osed().rop.scan(text, options?)` | `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")` | Builds a capability index from pasted RP++ output. |
-| `rop.scan_live` | `dx @$osed().rop.scan_live(module?, badchars?, maxPerPattern?)` | `dx @$osed().rop.scan_live("essfunc", "00 0A 0D")` | Discovers gadgets directly from live target memory (bad-char-filtered addresses), feeds them through the semantic pipeline, and loads the same queryable corpus — no RP++ text, reads only. |
+| `rop.scan_live` | `dx @$osed().rop.scan_live(module?, badchars?, maxPerPattern?)` | `dx @$osed().rop.scan_live("essfunc", "00 0A 0D")` | Discovers gadgets directly from live target memory (bad-char-filtered addresses), feeds them through the semantic pipeline, and loads the same queryable corpus — no RP++ text, reads only. Includes a backward scanner that finds multi-instruction gadgets (e.g. `add edx, ebx ; pop ebx ; ret 0x10`), `ret N` terminators, and register-register arithmetic that the pattern scanner misses. Reports backward scanner stats in the corpus summary. |
 | `rop.query` | `dx @$osed().rop.query(field, value, executableOnly?)` | `dx @$osed().rop.query("capability", "LOAD_REGISTER")` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
 | `rop.chain` | `dx @$osed().rop.chain(register, value, register2?, value2?, ...)` | `dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)` | Constructs a register-setup chain from the loaded corpus using real-address gadgets. It can zero value-0 targets with `xor reg, reg ; ret`, co-satisfy compatible registers with pure multi-pop gadgets, and fall back to single `pop reg ; ret`. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
@@ -235,6 +235,13 @@ dx @$osed().rop.query("memoryReads", true)
 ```
 
 `preserves` means the register is unchanged at gadget exit. `preservesThroughout` means no instruction writes the register. Transform queries match derived facts such as `esi = esi + 4`, `esi = eax`, fixed constants, and memory-loaded values; unknown net transforms do not satisfy positive predicates.
+
+`rop.query("capability", ...)` supports an `ARITHMETIC` alias that expands to all arithmetic capability kinds: `REGISTER_ADD`, `REGISTER_SUB`, `REGISTER_XOR`, `REGISTER_ADC`, `REGISTER_SBB`, `REGISTER_OR`, `REGISTER_AND`, `REGISTER_NOT`, `REGISTER_NEGATE`, `REGISTER_INCREMENT`, `REGISTER_DECREMENT`. This is useful for surveying the full set of value-construction gadgets available for DEP bypass chains.
+
+```js
+dx @$osed().rop.query("capability", "ARITHMETIC")
+dx @$osed().rop.query("capability", "REGISTER_ADD")
+```
 
 ## Command Shortcuts
 

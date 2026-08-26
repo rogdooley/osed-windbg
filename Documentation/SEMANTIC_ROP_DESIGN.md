@@ -92,29 +92,69 @@ Closure boundary:
 
 ## Supported instruction subset
 
-The semantic engine starts with a narrow x86 subset:
-- `pop reg`
-- `push reg`
-- `ret`
-- `retn imm`
-- `mov reg, reg`
-- `mov reg, [reg]`
-- `mov [reg], reg`
-- `xor reg, reg`
-- `add reg, reg`
-- `add reg, imm`
-- `sub reg, reg`
-- `sub reg, imm`
-- `neg reg`
-- `inc reg`
-- `dec reg`
+The semantic engine covers the x86 instructions relevant to ROP gadgets:
+
+### Core
+- `pop reg`, `push reg`, `pushad`
+- `ret`, `retn imm`
+- `mov reg, reg`, `mov reg, [reg]`, `mov [reg], reg`
 - `xchg reg, reg`
-- `leave`
-- `call target`
-- `jmp target`
-- `nop`
+- `leave`, `nop`
+- `call target`, `jmp target`
+
+### Arithmetic (affine-modeled)
+- `add reg, reg`, `add reg, imm`
+- `sub reg, reg`, `sub reg, imm`
+- `neg reg`, `inc reg`, `dec reg`
+- `xor reg, reg` (zero idiom tracked exactly)
+
+### Arithmetic (unknown-expression — no affine model)
+- `or reg, reg`, `or reg, imm`
+- `and reg, reg`, `and reg, imm`
+- `not reg`
+- `adc reg, reg`, `adc reg, imm` (CF-dependent)
+- `sbb reg, reg`, `sbb reg, imm` (CF-dependent)
+
+These instructions record correct register reads, writes, and capability tags but degrade the net register transform to `unknown` because bitwise and carry-dependent operations do not fit the affine model.
 
 Unsupported instructions are preserved but marked with unknown semantics.
+
+## Capability kinds
+
+The capability index tags each gadget with one or more `CapabilityKind` values:
+
+### Data movement
+- `LOAD_REGISTER`, `LOAD_CONSTANT`, `STACK_READ`, `STACK_WRITE`
+- `MOVE_REGISTER`, `REGISTER_TRANSFER`, `EXCHANGE_REGISTER`, `REGISTER_SWAP`
+- `ZERO_REGISTER`, `REGISTER_ZERO`
+- `MEMORY_READ`, `LOAD_MEMORY`, `MEMORY_WRITE`, `STORE_MEMORY`
+- `STACK_COPY`
+
+### Arithmetic
+- `REGISTER_ADD`, `REGISTER_SUB`, `REGISTER_XOR`
+- `REGISTER_ADC`, `REGISTER_SBB`
+- `REGISTER_OR`, `REGISTER_AND`, `REGISTER_NOT`
+- `REGISTER_NEGATE`, `REGISTER_INCREMENT`, `REGISTER_DECREMENT`
+
+### Control flow
+- `DISPATCH_RET`, `DISPATCH_PUSHAD`
+- `DISPATCH_CALL_REGISTER`, `DISPATCH_CALL_MEMORY`
+- `DISPATCH_JMP_REGISTER`
+- `STACK_PIVOT`, `STACK_ADJUST`
+
+The `ARITHMETIC` query alias expands to all arithmetic capability kinds.
+
+## Backward scanner
+
+`scan_live` includes a backward scanner that discovers gadgets the pattern scanner misses. Where the pattern scanner matches fixed byte sequences ending in `C3`, the backward scanner:
+
+1. Scans executable memory for `ret` (`C3`) and `ret N` (`C2 xx xx`) terminators
+2. Decodes backward from each terminator using a lookup-table x86 mini-decoder (up to 12 bytes, 3 instructions)
+3. Only decodes `mod=11` (register-register) ModRM to avoid variable-length memory operand ambiguity
+4. Covers: inc/dec/push/pop, all ALU reg-reg (`add`/`or`/`adc`/`sbb`/`and`/`sub`/`xor`/`cmp`/`test`/`xchg`/`mov`), `neg`/`not`, group-1 imm8 (`83`), ALU eax-imm32 short forms, `call`/`jmp` reg, FPU D9 ops
+5. Skips single-instruction gadgets already covered by the pattern scanner
+
+The backward scanner is x86-only (0x40–0x4F are REX prefixes in x64) and runs in O(memory) time.
 
 ## Confidence model
 
