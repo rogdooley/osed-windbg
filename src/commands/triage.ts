@@ -207,7 +207,7 @@ function scoreModule(module: ModuleMitigation): number {
   let score = 0;
   if (!module.system) score += 25;
   if (module.aslr === "disabled") score += 35;
-  if (module.dep === "disabled") score += 10;
+  if (module.nxcompat === "disabled") score += 10;
   if (module.safeseh === "disabled") score += 30;
   return score;
 }
@@ -345,7 +345,7 @@ export function createTriageCommand(): Command {
           module: module.name,
           score: scoreModule(module),
           aslr: module.aslr,
-          dep: module.dep,
+          nxcompat: module.nxcompat,
           safeseh: module.safeseh,
           system: module.system,
         }))
@@ -415,7 +415,7 @@ export function createTriageCommand(): Command {
           { key: "module", header: "Module", width: 20 },
           { key: "score", header: "Score", width: 6 },
           { key: "aslr", header: "ASLR", width: 8 },
-          { key: "dep", header: "DEP", width: 8 },
+          { key: "nxcompat", header: "NX_COMPAT", width: 10 },
           { key: "safeseh", header: "SafeSEH", width: 8 },
           { key: "system", header: "System", width: 8 },
         ],
@@ -423,7 +423,7 @@ export function createTriageCommand(): Command {
           module: item.module,
           score: `${item.score}`,
           aslr: item.aslr,
-          dep: item.dep,
+          nxcompat: item.nxcompat,
           safeseh: item.safeseh,
           system: item.system ? "yes" : "no",
         })),

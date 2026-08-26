@@ -36,7 +36,7 @@ describe("module mitigation parsing", () => {
     expect(listModulesWithMitigations()[0]).toMatchObject({
       name: "vulnserver.exe",
       aslr: "disabled",
-      dep: "disabled",
+      nxcompat: "disabled",
       safeseh: "disabled",
     });
   });

@@ -12,7 +12,7 @@ export type ModuleMitigation = {
   characteristics: number;
   dllCharacteristics: number;
   aslr: TriState;
-  dep: TriState;
+  nxcompat: TriState;
   safeseh: TriState;
   system: boolean;
 };
@@ -144,7 +144,7 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
       let characteristics = 0;
       let dllCharacteristics = 0;
       let aslr: TriState = "unknown";
-      let dep: TriState = "unknown";
+      let nxcompat: TriState = "unknown";
       let safeseh: TriState = "unknown";
 
       try {
@@ -159,7 +159,7 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
             dllCharacteristics = readUint16LE(pe + BigInt(0x5e));
 
             aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
-            dep = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
+            nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
             safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
           }
         }
@@ -177,7 +177,7 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
         characteristics,
         dllCharacteristics,
         aslr,
-        dep,
+        nxcompat,
         safeseh,
         system,
       };
@@ -222,7 +222,7 @@ export function createModulesCommand(): Command {
           { key: "base", header: "Base", width: 18 },
           { key: "size", header: "Size", width: 10 },
           { key: "aslr", header: "ASLR", width: 8 },
-          { key: "dep", header: "DEP", width: 8 },
+          { key: "nxcompat", header: "NX_COMPAT", width: 10 },
           { key: "safeseh", header: "SafeSEH", width: 8 },
           { key: "system", header: "System", width: 8 },
         ],
@@ -231,7 +231,7 @@ export function createModulesCommand(): Command {
           base: out.formatAddress(module.base, pointerSize),
           size: `0x${module.size.toString(16).toUpperCase()}`,
           aslr: module.aslr,
-          dep: module.dep,
+          nxcompat: module.nxcompat,
           safeseh: module.safeseh,
           system: module.system ? "yes" : "no",
         })),
