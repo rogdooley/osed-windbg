@@ -144,6 +144,7 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
       neg: "REGISTER_NEGATE",
       inc: "REGISTER_INCREMENT",
       dec: "REGISTER_DECREMENT",
+      not: "REGISTER_NOT",
     } as const;
     const unary = unaryKind[step.instruction.mnemonic as keyof typeof unaryKind];
     if (unary && operands.length === 1) {
@@ -152,6 +153,10 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
     const binaryKind = {
       add: "REGISTER_ADD",
       sub: "REGISTER_SUB",
+      adc: "REGISTER_ADC",
+      sbb: "REGISTER_SBB",
+      or: "REGISTER_OR",
+      and: "REGISTER_AND",
     } as const;
     const binary = binaryKind[step.instruction.mnemonic as keyof typeof binaryKind];
     if (binary && operands.length === 2) {

@@ -2980,7 +2980,7 @@ var osed_bundle = (() => {
   function hasExactFlow(semantic, kind) {
     return semantic.summary.flowEffects.values.exact.has(kind);
   }
-  var ARITHMETIC_MNEMONICS = /* @__PURE__ */ new Set(["add", "sub", "inc", "dec", "neg"]);
+  var ARITHMETIC_MNEMONICS = /* @__PURE__ */ new Set(["add", "sub", "inc", "dec", "neg", "xor", "adc", "sbb", "or", "and", "not"]);
   function zeroedRegisters(semantic) {
     const zeroed = [];
     for (const [register, expr] of Object.entries(semantic.summary.registerTransforms)) {
@@ -3232,12 +3232,36 @@ var osed_bundle = (() => {
   function matchesStackDelta(field, expected) {
     return fieldMatchesAny(field, expected);
   }
+  var CAPABILITY_ALIASES = {
+    ARITHMETIC: [
+      "REGISTER_ADD",
+      "REGISTER_SUB",
+      "REGISTER_XOR",
+      "REGISTER_ADC",
+      "REGISTER_SBB",
+      "REGISTER_OR",
+      "REGISTER_AND",
+      "REGISTER_NOT",
+      "REGISTER_NEGATE",
+      "REGISTER_INCREMENT",
+      "REGISTER_DECREMENT"
+    ]
+  };
   function matchesCapability(gadget, expected) {
     if (expected.length === 0) {
       return true;
     }
-    const expectedSet = new Set(expected.map((item) => item.trim().toUpperCase()));
-    return gadget.capabilities.some((capability) => expectedSet.has(capability.kind));
+    const expanded = /* @__PURE__ */ new Set();
+    for (const item of expected) {
+      const upper = item.trim().toUpperCase();
+      const aliases = CAPABILITY_ALIASES[upper];
+      if (aliases) {
+        for (const a of aliases) expanded.add(a);
+      } else {
+        expanded.add(upper);
+      }
+    }
+    return gadget.capabilities.some((capability) => expanded.has(capability.kind));
   }
   function matchesTerminator(gadget, expected) {
     if (expected.length === 0) {
@@ -3522,7 +3546,8 @@ var osed_bundle = (() => {
       const unaryKind = {
         neg: "REGISTER_NEGATE",
         inc: "REGISTER_INCREMENT",
-        dec: "REGISTER_DECREMENT"
+        dec: "REGISTER_DECREMENT",
+        not: "REGISTER_NOT"
       };
       const unary = unaryKind[step.instruction.mnemonic];
       if (unary && operands.length === 1) {
@@ -3530,7 +3555,11 @@ var osed_bundle = (() => {
       }
       const binaryKind = {
         add: "REGISTER_ADD",
-        sub: "REGISTER_SUB"
+        sub: "REGISTER_SUB",
+        adc: "REGISTER_ADC",
+        sbb: "REGISTER_SBB",
+        or: "REGISTER_OR",
+        and: "REGISTER_AND"
       };
       const binary = binaryKind[step.instruction.mnemonic];
       if (binary && operands.length === 2) {
@@ -5199,6 +5228,158 @@ var osed_bundle = (() => {
           writes: [operand.register],
           registerEffects: { [operand.register]: unknownExpr() },
           evidence: [`NEG ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "not-reg",
+      match: (instruction) => instruction.mnemonic === "not" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (!isRegisterOperand(operand)) {
+          return {};
+        }
+        return {
+          reads: [operand.register],
+          writes: [operand.register],
+          registerEffects: { [operand.register]: unknownExpr() },
+          evidence: [`NOT ${operand.register}`]
+        };
+      }
+    },
+    {
+      name: "or-reg-reg",
+      match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`OR ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "or-reg-imm",
+      match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`OR ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "and-reg-reg",
+      match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`AND ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "and-reg-imm",
+      match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`AND ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "adc-reg-reg",
+      match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`ADC ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "adc-reg-imm",
+      match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`ADC ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "sbb-reg-reg",
+      match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+          return {};
+        }
+        return {
+          reads: [left.register, right.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`SBB ${left.register}, ${right.register}`]
+        };
+      }
+    },
+    {
+      name: "sbb-reg-imm",
+      match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        if (!isRegisterOperand(left) || right.kind !== "immediate") {
+          return {};
+        }
+        return {
+          reads: [left.register],
+          writes: [left.register],
+          registerEffects: { [left.register]: unknownExpr() },
+          evidence: [`SBB ${left.register}, ${right.text}`]
         };
       }
     },
@@ -10087,9 +10268,234 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/core/backward_scanner.ts
+  var REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var ALU_REG_OPCODES = [
+    { opcode: 1, name: "add", form: "rm" },
+    { opcode: 3, name: "add", form: "reg" },
+    { opcode: 9, name: "or", form: "rm" },
+    { opcode: 11, name: "or", form: "reg" },
+    { opcode: 17, name: "adc", form: "rm" },
+    { opcode: 19, name: "adc", form: "reg" },
+    { opcode: 25, name: "sbb", form: "rm" },
+    { opcode: 27, name: "sbb", form: "reg" },
+    { opcode: 33, name: "and", form: "rm" },
+    { opcode: 35, name: "and", form: "reg" },
+    { opcode: 41, name: "sub", form: "rm" },
+    { opcode: 43, name: "sub", form: "reg" },
+    { opcode: 49, name: "xor", form: "rm" },
+    { opcode: 51, name: "xor", form: "reg" },
+    { opcode: 57, name: "cmp", form: "rm" },
+    { opcode: 59, name: "cmp", form: "reg" },
+    { opcode: 133, name: "test", form: "rm" },
+    { opcode: 135, name: "xchg", form: "rm" },
+    { opcode: 137, name: "mov", form: "rm" },
+    { opcode: 139, name: "mov", form: "reg" }
+  ];
+  var ALU_EAX_IMM32 = [
+    { opcode: 5, name: "add" },
+    { opcode: 13, name: "or" },
+    { opcode: 21, name: "adc" },
+    { opcode: 29, name: "sbb" },
+    { opcode: 37, name: "and" },
+    { opcode: 45, name: "sub" },
+    { opcode: 53, name: "xor" }
+  ];
+  var GRP1_NAMES = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+  var FPU_D9_MNEMONICS = {
+    224: "fchs",
+    225: "fabs",
+    228: "ftst",
+    229: "fxam",
+    232: "fld1",
+    233: "fldl2t",
+    234: "fldl2e",
+    235: "fldpi",
+    236: "fldlg2",
+    237: "fldln2",
+    238: "fldz",
+    240: "f2xm1",
+    241: "fyl2x",
+    242: "fptan",
+    243: "fpatan",
+    244: "fxtract",
+    245: "fprem1",
+    246: "fdecstp",
+    247: "fincstp",
+    248: "fprem",
+    249: "fyl2xp1",
+    250: "fsqrt",
+    251: "fsincos",
+    252: "frndint",
+    253: "fscale",
+    254: "fsin",
+    255: "fcos"
+  };
+  function formatHex(value) {
+    return `0x${(value >>> 0).toString(16)}`;
+  }
+  function decodeModRM11(modrm) {
+    if ((modrm & 192) !== 192) return void 0;
+    return { reg: modrm >> 3 & 7, rm: modrm & 7 };
+  }
+  function tryDecodeInsn(bytes, offset) {
+    if (offset >= bytes.length) return void 0;
+    const b0 = bytes[offset];
+    if (b0 >= 64 && b0 <= 71) return { length: 1, mnemonic: `inc ${REG_NAMES[b0 - 64]}` };
+    if (b0 >= 72 && b0 <= 79) return { length: 1, mnemonic: `dec ${REG_NAMES[b0 - 72]}` };
+    if (b0 >= 80 && b0 <= 87) return { length: 1, mnemonic: `push ${REG_NAMES[b0 - 80]}` };
+    if (b0 >= 88 && b0 <= 95) return { length: 1, mnemonic: `pop ${REG_NAMES[b0 - 88]}` };
+    if (b0 === 96) return { length: 1, mnemonic: "pushad" };
+    if (b0 === 97) return { length: 1, mnemonic: "popad" };
+    if (b0 === 144) return { length: 1, mnemonic: "nop" };
+    if (b0 >= 145 && b0 <= 151) return { length: 1, mnemonic: `xchg eax, ${REG_NAMES[b0 - 144]}` };
+    if (b0 === 201) return { length: 1, mnemonic: "leave" };
+    if (b0 === 248) return { length: 1, mnemonic: "clc" };
+    if (b0 === 249) return { length: 1, mnemonic: "stc" };
+    if (offset + 1 >= bytes.length) return void 0;
+    const b1 = bytes[offset + 1];
+    for (const entry of ALU_REG_OPCODES) {
+      if (b0 === entry.opcode) {
+        const decoded = decodeModRM11(b1);
+        if (!decoded) return void 0;
+        const dst = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
+        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+        return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
+      }
+    }
+    if (b0 === 247) {
+      const decoded = decodeModRM11(b1);
+      if (!decoded) return void 0;
+      const op = b1 >> 3 & 7;
+      if (op === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
+      if (op === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
+      return void 0;
+    }
+    if (b0 === 255) {
+      const decoded = decodeModRM11(b1);
+      if (!decoded) return void 0;
+      const op = b1 >> 3 & 7;
+      if (op === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
+      if (op === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
+      return void 0;
+    }
+    if (b0 === 217) {
+      const name = FPU_D9_MNEMONICS[b1];
+      if (name) return { length: 2, mnemonic: name };
+      return void 0;
+    }
+    if (b0 === 131) {
+      if (offset + 2 >= bytes.length) return void 0;
+      const decoded = decodeModRM11(b1);
+      if (!decoded) return void 0;
+      const op = b1 >> 3 & 7;
+      const imm8 = bytes[offset + 2];
+      const signed = imm8 > 127 ? imm8 - 256 : imm8;
+      const name = GRP1_NAMES[op];
+      return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
+    }
+    for (const entry of ALU_EAX_IMM32) {
+      if (b0 === entry.opcode) {
+        if (offset + 4 >= bytes.length) return void 0;
+        const imm = bytes[offset + 1] | bytes[offset + 2] << 8 | bytes[offset + 3] << 16 | bytes[offset + 4] << 24 >>> 0;
+        return { length: 5, mnemonic: `${entry.name} eax, ${formatHex(imm >>> 0)}` };
+      }
+    }
+    return void 0;
+  }
+  function tryDecodeSequence(bytes, startOffset, targetOffset, maxInsns) {
+    const insns = [];
+    let pos = startOffset;
+    while (pos < targetOffset && insns.length < maxInsns) {
+      const decoded = tryDecodeInsn(bytes, pos);
+      if (!decoded) return void 0;
+      pos += decoded.length;
+      insns.push(decoded);
+    }
+    return pos === targetOffset ? insns : void 0;
+  }
+  function hasUsefulEffect(insns) {
+    return insns.some((insn) => insn.mnemonic !== "nop");
+  }
+  function scanBackward(options) {
+    var _a, _b, _c;
+    if (getPointerSize() !== 4) {
+      return { gadgets: [], warnings: ["Backward scanning is x86-only."], stats: {} };
+    }
+    const maxResults = (_a = options.maxResults) != null ? _a : 500;
+    const maxInsns = (_b = options.maxInstructionsPerGadget) != null ? _b : 3;
+    const maxBack = (_c = options.maxBackwardBytes) != null ? _c : 12;
+    const scanOpts = {
+      module: options.module,
+      executableOnly: true,
+      maxResults: 200,
+      chunkSize: 16384
+    };
+    const scope = forEachSection(scanOpts);
+    const warnings = scope.warnings.map((w) => w);
+    const seen = /* @__PURE__ */ new Set();
+    const gadgets = [];
+    let terminatorsFound = 0;
+    for (const section2 of scope.sections) {
+      const readAhead = maxBack + 6;
+      for (let offset = 0; offset < section2.size; offset += 16384) {
+        const chunkStart = section2.start + BigInt(offset);
+        const remaining = section2.size - offset;
+        const size = Math.min(remaining, 16384 + readAhead);
+        const bytes = tryReadMemory(chunkStart, size);
+        if (!bytes) continue;
+        const scanLimit = Math.min(bytes.length, remaining < 16384 ? remaining : 16384);
+        for (let i = 0; i < scanLimit; i++) {
+          let retMnemonic;
+          let retLen;
+          let retImm = 0;
+          if (bytes[i] === 195) {
+            retMnemonic = "ret";
+            retLen = 1;
+          } else if (bytes[i] === 194 && i + 2 < bytes.length) {
+            retImm = bytes[i + 1] | bytes[i + 2] << 8;
+            if (retImm === 0 || retImm > 4096) continue;
+            retMnemonic = `ret ${formatHex(retImm)}`;
+            retLen = 3;
+          } else {
+            continue;
+          }
+          terminatorsFound++;
+          const termStart = i;
+          const lookBack = Math.min(termStart, maxBack);
+          for (let back = 1; back <= lookBack; back++) {
+            const candidateStart = termStart - back;
+            const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
+            if (!insns || insns.length === 0) continue;
+            if (!hasUsefulEffect(insns)) continue;
+            const addr = chunkStart + BigInt(candidateStart);
+            const key2 = addr.toString();
+            if (seen.has(key2)) continue;
+            seen.add(key2);
+            const parts = insns.map((insn) => insn.mnemonic);
+            parts.push(retMnemonic);
+            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm });
+            if (gadgets.length >= maxResults) {
+              return {
+                gadgets,
+                warnings,
+                stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, stoppedEarly: 1 }
+              };
+            }
+          }
+        }
+      }
+    }
+    return {
+      gadgets,
+      warnings,
+      stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, stoppedEarly: 0 }
+    };
+  }
+
   // src/analysis/live_gadgets.ts
   function discoverLiveGadgets(options = {}) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d, _e;
     const pointerSize = getPointerSize();
     const patterns = knownPatternsForPointerSize(pointerSize);
     const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
@@ -10118,10 +10524,38 @@ var osed_bundle = (() => {
         hits.push({ mnemonic: pattern.mnemonic, address, module: (_c = findModuleByAddress(address)) == null ? void 0 : _c.name });
       }
     }
+    const seenAddresses = new Set(hits.map((h) => h.address.toString()));
+    const backward = scanBackward({
+      module: options.module,
+      maxResults: maxPerPattern * 100,
+      maxInstructionsPerGadget: 3,
+      maxBackwardBytes: 12
+    });
+    for (const w of backward.warnings) warningSet.add(w);
+    let backwardAdded = 0;
+    for (const gadget of backward.gadgets) {
+      const key2 = gadget.address.toString();
+      if (seenAddresses.has(key2)) continue;
+      seenAddresses.add(key2);
+      const outcome = applyFilters([gadget.address], [filter]);
+      if (outcome.kept.length === 0) {
+        rejected++;
+        continue;
+      }
+      hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: (_d = findModuleByAddress(gadget.address)) == null ? void 0 : _d.name });
+      backwardAdded++;
+    }
     return {
       hits,
       warnings: [...warningSet],
-      stats: { patterns: patterns.length, scanned, rejected, discovered: hits.length }
+      stats: {
+        patterns: patterns.length,
+        scanned,
+        rejected,
+        discovered: hits.length,
+        backwardTerminators: (_e = backward.stats.terminatorsFound) != null ? _e : 0,
+        backwardGadgets: backwardAdded
+      }
     };
   }
 
@@ -10366,10 +10800,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-26T00:39:00.989Z" : globalThis[key2];
+        value = true ? "2026-08-26T03:17:39.002Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "35dc37869b7b" : globalThis[key2];
+        value = true ? "b58d0c4e5e0a" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

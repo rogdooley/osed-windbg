@@ -1,5 +1,6 @@
 import { getPointerSize } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
+import { scanBackward } from "../core/backward_scanner";
 import { knownPatternsForPointerSize } from "../logic/instruction_validation";
 import { applyFilters, badcharAddressFilter } from "../logic/pointer_filter_logic";
 import { findModuleByAddress } from "../commands/modules";
@@ -55,9 +56,38 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
     }
   }
 
+  const seenAddresses = new Set(hits.map((h) => h.address.toString()));
+  const backward = scanBackward({
+    module: options.module,
+    maxResults: maxPerPattern * 100,
+    maxInstructionsPerGadget: 3,
+    maxBackwardBytes: 12,
+  });
+  for (const w of backward.warnings) warningSet.add(w);
+  let backwardAdded = 0;
+  for (const gadget of backward.gadgets) {
+    const key = gadget.address.toString();
+    if (seenAddresses.has(key)) continue;
+    seenAddresses.add(key);
+    const outcome = applyFilters([gadget.address], [filter]);
+    if (outcome.kept.length === 0) {
+      rejected++;
+      continue;
+    }
+    hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: findModuleByAddress(gadget.address)?.name });
+    backwardAdded++;
+  }
+
   return {
     hits,
     warnings: [...warningSet],
-    stats: { patterns: patterns.length, scanned, rejected, discovered: hits.length },
+    stats: {
+      patterns: patterns.length,
+      scanned,
+      rejected,
+      discovered: hits.length,
+      backwardTerminators: backward.stats.terminatorsFound ?? 0,
+      backwardGadgets: backwardAdded,
+    },
   };
 }

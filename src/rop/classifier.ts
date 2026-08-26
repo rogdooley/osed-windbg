@@ -6,7 +6,7 @@ function hasExactFlow(semantic: SemanticSequence, kind: "CALL" | "JUMP" | "RETUR
   return semantic.summary.flowEffects.values.exact.has(kind);
 }
 
-const ARITHMETIC_MNEMONICS = new Set(["add", "sub", "inc", "dec", "neg"]);
+const ARITHMETIC_MNEMONICS = new Set(["add", "sub", "inc", "dec", "neg", "xor", "adc", "sbb", "or", "and", "not"]);
 
 // A register is zeroed when its aggregated net transform is exactly the constant
 // 0. More precise than matching `xor reg, reg` text: it also rejects a later

@@ -75,12 +75,30 @@ function matchesStackDelta(field: SemanticField<number> | undefined, expected: n
   return fieldMatchesAny(field, expected);
 }
 
+const CAPABILITY_ALIASES: Record<string, string[]> = {
+  ARITHMETIC: [
+    "REGISTER_ADD", "REGISTER_SUB", "REGISTER_XOR",
+    "REGISTER_ADC", "REGISTER_SBB", "REGISTER_OR",
+    "REGISTER_AND", "REGISTER_NOT", "REGISTER_NEGATE",
+    "REGISTER_INCREMENT", "REGISTER_DECREMENT",
+  ],
+};
+
 function matchesCapability(gadget: RopGadget, expected: string[]): boolean {
   if (expected.length === 0) {
     return true;
   }
-  const expectedSet = new Set(expected.map((item) => item.trim().toUpperCase()));
-  return gadget.capabilities.some((capability) => expectedSet.has(capability.kind));
+  const expanded = new Set<string>();
+  for (const item of expected) {
+    const upper = item.trim().toUpperCase();
+    const aliases = CAPABILITY_ALIASES[upper];
+    if (aliases) {
+      for (const a of aliases) expanded.add(a);
+    } else {
+      expanded.add(upper);
+    }
+  }
+  return gadget.capabilities.some((capability) => expanded.has(capability.kind));
 }
 
 function matchesTerminator(gadget: RopGadget, expected: TerminatorKind[]): boolean {

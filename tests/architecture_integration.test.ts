@@ -551,3 +551,90 @@ describe("exploit state and pivots help entries", () => {
     expect(entry.description).toContain("Python");
   });
 });
+
+describe("arithmetic capability derivation and query", () => {
+  test("or reg, reg produces REGISTER_OR capability", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: or edx, ebx ; ret ;",
+      { provenance },
+    );
+    expect(index.gadgets).toHaveLength(1);
+    const caps = index.gadgets[0].capabilities.map((c) => c.kind);
+    expect(caps).toContain("REGISTER_OR");
+  });
+
+  test("and reg, reg produces REGISTER_AND capability", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: and eax, ecx ; ret ;",
+      { provenance },
+    );
+    expect(index.gadgets[0].capabilities.map((c) => c.kind)).toContain("REGISTER_AND");
+  });
+
+  test("not reg produces REGISTER_NOT capability", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: not eax ; ret ;",
+      { provenance },
+    );
+    expect(index.gadgets[0].capabilities.map((c) => c.kind)).toContain("REGISTER_NOT");
+  });
+
+  test("adc reg, reg produces REGISTER_ADC capability", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: adc esi, edi ; ret ;",
+      { provenance },
+    );
+    expect(index.gadgets[0].capabilities.map((c) => c.kind)).toContain("REGISTER_ADC");
+  });
+
+  test("sbb reg, reg produces REGISTER_SBB capability", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: sbb eax, eax ; ret ;",
+      { provenance },
+    );
+    expect(index.gadgets[0].capabilities.map((c) => c.kind)).toContain("REGISTER_SBB");
+  });
+
+  test("ARITHMETIC query alias matches all arithmetic capabilities", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      [
+        "0x1000: add edx, ebx ; ret ;",
+        "0x1001: sub eax, ecx ; ret ;",
+        "0x1002: or esi, edi ; ret ;",
+        "0x1003: and eax, ecx ; ret ;",
+        "0x1004: not eax ; ret ;",
+        "0x1005: adc edx, esi ; ret ;",
+        "0x1006: sbb eax, eax ; ret ;",
+        "0x1007: xor ecx, ecx ; ret ;",
+        "0x1008: inc eax ; ret ;",
+        "0x1009: dec ebx ; ret ;",
+        "0x100A: neg edx ; ret ;",
+      ].join("\n"),
+      { provenance },
+    );
+    const results = index.query({ capability: "ARITHMETIC" });
+    expect(results.length).toBeGreaterThanOrEqual(11);
+  });
+
+  test("exact capability query still works alongside ARITHMETIC alias", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: or edx, ebx ; ret ;\n0x2000: pop eax ; ret ;",
+      { provenance },
+    );
+    const orResults = index.query({ capability: "REGISTER_OR" });
+    expect(orResults).toHaveLength(1);
+    const loadResults = index.query({ capability: "LOAD_REGISTER" });
+    expect(loadResults.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("multi-instruction gadget with side effect is classifiable", () => {
+    const index = buildCapabilityIndexFromRpPlusText(
+      "0x1000: inc ecx ; and eax, 0x8 ; ret ;",
+      { provenance },
+    );
+    expect(index.gadgets).toHaveLength(1);
+    const caps = index.gadgets[0].capabilities.map((c) => c.kind);
+    expect(caps).toContain("REGISTER_INCREMENT");
+    expect(caps).toContain("REGISTER_AND");
+  });
+});

@@ -473,6 +473,158 @@ const RULES: Rule[] = [
     },
   },
   {
+    name: "not-reg",
+    match: (instruction) => instruction.mnemonic === "not" && instruction.operands.length === 1,
+    evaluate: (instruction) => {
+      const operand = parseOperand(instruction.operands[0]);
+      if (!isRegisterOperand(operand)) {
+        return {};
+      }
+      return {
+        reads: [operand.register],
+        writes: [operand.register],
+        registerEffects: { [operand.register]: unknownExpr() },
+        evidence: [`NOT ${operand.register}`],
+      };
+    },
+  },
+  {
+    name: "or-reg-reg",
+    match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+        return {};
+      }
+      return {
+        reads: [left.register, right.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`OR ${left.register}, ${right.register}`],
+      };
+    },
+  },
+  {
+    name: "or-reg-imm",
+    match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || right.kind !== "immediate") {
+        return {};
+      }
+      return {
+        reads: [left.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`OR ${left.register}, ${right.text}`],
+      };
+    },
+  },
+  {
+    name: "and-reg-reg",
+    match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+        return {};
+      }
+      return {
+        reads: [left.register, right.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`AND ${left.register}, ${right.register}`],
+      };
+    },
+  },
+  {
+    name: "and-reg-imm",
+    match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || right.kind !== "immediate") {
+        return {};
+      }
+      return {
+        reads: [left.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`AND ${left.register}, ${right.text}`],
+      };
+    },
+  },
+  {
+    name: "adc-reg-reg",
+    match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+        return {};
+      }
+      return {
+        reads: [left.register, right.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`ADC ${left.register}, ${right.register}`],
+      };
+    },
+  },
+  {
+    name: "adc-reg-imm",
+    match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || right.kind !== "immediate") {
+        return {};
+      }
+      return {
+        reads: [left.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`ADC ${left.register}, ${right.text}`],
+      };
+    },
+  },
+  {
+    name: "sbb-reg-reg",
+    match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
+        return {};
+      }
+      return {
+        reads: [left.register, right.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`SBB ${left.register}, ${right.register}`],
+      };
+    },
+  },
+  {
+    name: "sbb-reg-imm",
+    match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      if (!isRegisterOperand(left) || right.kind !== "immediate") {
+        return {};
+      }
+      return {
+        reads: [left.register],
+        writes: [left.register],
+        registerEffects: { [left.register]: unknownExpr() },
+        evidence: [`SBB ${left.register}, ${right.text}`],
+      };
+    },
+  },
+  {
     name: "inc-reg",
     match: (instruction) => instruction.mnemonic === "inc" && instruction.operands.length === 1,
     evaluate: (instruction) => {
