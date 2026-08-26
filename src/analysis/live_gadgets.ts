@@ -59,7 +59,7 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
   const seenAddresses = new Set(hits.map((h) => h.address.toString()));
   const backward = scanBackward({
     module: options.module,
-    maxResults: maxPerPattern * 100,
+    maxResults: 10000,
     maxInstructionsPerGadget: 3,
     maxBackwardBytes: 12,
   });

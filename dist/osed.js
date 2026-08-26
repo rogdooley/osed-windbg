@@ -10414,8 +10414,17 @@ var osed_bundle = (() => {
     }
     return pos === targetOffset ? insns : void 0;
   }
+  var PATTERN_SCANNER_PREFIXES = /* @__PURE__ */ new Set(["pop ", "push ", "pushad", "popad", "nop", "xchg eax, "]);
+  function isPatternScannerGadget(mnemonic) {
+    for (const prefix of PATTERN_SCANNER_PREFIXES) {
+      if (mnemonic.startsWith(prefix) || mnemonic === prefix.trimEnd()) return true;
+    }
+    return false;
+  }
   function hasUsefulEffect(insns) {
-    return insns.some((insn) => insn.mnemonic !== "nop");
+    if (insns.every((insn) => insn.mnemonic === "nop")) return false;
+    if (insns.length === 1 && isPatternScannerGadget(insns[0].mnemonic)) return false;
+    return true;
   }
   function scanBackward(options) {
     var _a, _b, _c;
@@ -10527,7 +10536,7 @@ var osed_bundle = (() => {
     const seenAddresses = new Set(hits.map((h) => h.address.toString()));
     const backward = scanBackward({
       module: options.module,
-      maxResults: maxPerPattern * 100,
+      maxResults: 1e4,
       maxInstructionsPerGadget: 3,
       maxBackwardBytes: 12
     });
@@ -10800,10 +10809,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-26T03:17:39.002Z" : globalThis[key2];
+        value = true ? "2026-08-26T03:28:47.616Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b58d0c4e5e0a" : globalThis[key2];
+        value = true ? "528417a0b0db" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11858,13 +11867,18 @@ var osed_bundle = (() => {
       currentRopCorpus = mergeCapabilityIndexes(indexes);
       const capRows = summarizeCapabilities(currentRopCorpus);
       const stats = discoveries.reduce(
-        (total, discovery) => ({
-          patterns: total.patterns + discovery.stats.patterns,
-          scanned: total.scanned + discovery.stats.scanned,
-          discovered: total.discovered + discovery.stats.discovered,
-          rejected: total.rejected + discovery.stats.rejected
-        }),
-        { patterns: 0, scanned: 0, discovered: 0, rejected: 0 }
+        (total, discovery) => {
+          var _a2, _b;
+          return {
+            patterns: total.patterns + discovery.stats.patterns,
+            scanned: total.scanned + discovery.stats.scanned,
+            discovered: total.discovered + discovery.stats.discovered,
+            rejected: total.rejected + discovery.stats.rejected,
+            backwardTerminators: total.backwardTerminators + ((_a2 = discovery.stats.backwardTerminators) != null ? _a2 : 0),
+            backwardGadgets: total.backwardGadgets + ((_b = discovery.stats.backwardGadgets) != null ? _b : 0)
+          };
+        },
+        { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0 }
       );
       const warnings = discoveries.flatMap((discovery) => discovery.warnings);
       const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
@@ -11908,6 +11922,9 @@ var osed_bundle = (() => {
       info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
       info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
       info(`Capabilities: ${capRows.length}`);
+      if (stats.backwardTerminators > 0) {
+        info(`Backward scanner: ${stats.backwardTerminators} terminators, ${stats.backwardGadgets} new gadgets`);
+      }
       for (const warning of warnings) {
         warn(warning);
       }

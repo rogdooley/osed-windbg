@@ -167,8 +167,19 @@ function tryDecodeSequence(
   return pos === targetOffset ? insns : undefined;
 }
 
+const PATTERN_SCANNER_PREFIXES = new Set(["pop ", "push ", "pushad", "popad", "nop", "xchg eax, "]);
+
+function isPatternScannerGadget(mnemonic: string): boolean {
+  for (const prefix of PATTERN_SCANNER_PREFIXES) {
+    if (mnemonic.startsWith(prefix) || mnemonic === prefix.trimEnd()) return true;
+  }
+  return false;
+}
+
 function hasUsefulEffect(insns: DecodedInsn[]): boolean {
-  return insns.some((insn) => insn.mnemonic !== "nop");
+  if (insns.every((insn) => insn.mnemonic === "nop")) return false;
+  if (insns.length === 1 && isPatternScannerGadget(insns[0].mnemonic)) return false;
+  return true;
 }
 
 export function scanBackward(options: BackwardScanOptions): {

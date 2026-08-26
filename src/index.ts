@@ -456,8 +456,10 @@ function bindApi(): OsedApi {
         scanned: total.scanned + discovery.stats.scanned,
         discovered: total.discovered + discovery.stats.discovered,
         rejected: total.rejected + discovery.stats.rejected,
+        backwardTerminators: total.backwardTerminators + (discovery.stats.backwardTerminators ?? 0),
+        backwardGadgets: total.backwardGadgets + (discovery.stats.backwardGadgets ?? 0),
       }),
-      { patterns: 0, scanned: 0, discovered: 0, rejected: 0 },
+      { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0 },
     );
     const warnings = discoveries.flatMap((discovery) => discovery.warnings);
     const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
@@ -503,6 +505,9 @@ function bindApi(): OsedApi {
     out.info(`Modules: ${corpusModules.map((m) => m.name).join(", ")}`);
     out.info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
     out.info(`Capabilities: ${capRows.length}`);
+    if (stats.backwardTerminators > 0) {
+      out.info(`Backward scanner: ${stats.backwardTerminators} terminators, ${stats.backwardGadgets} new gadgets`);
+    }
 
     for (const warning of warnings) {
       out.warn(warning);
