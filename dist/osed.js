@@ -1376,7 +1376,7 @@ var osed_bundle = (() => {
       let characteristics = 0;
       let dllCharacteristics = 0;
       let aslr = "unknown";
-      let dep = "unknown";
+      let nxcompat = "unknown";
       let safeseh = "unknown";
       try {
         const mz = readUint16LE(base);
@@ -1389,7 +1389,7 @@ var osed_bundle = (() => {
             const optionalHeaderMagic = readUint16LE(pe + BigInt(24));
             dllCharacteristics = readUint16LE(pe + BigInt(94));
             aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
-            dep = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
+            nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
             safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
           }
         }
@@ -1404,7 +1404,7 @@ var osed_bundle = (() => {
         characteristics,
         dllCharacteristics,
         aslr,
-        dep,
+        nxcompat,
         safeseh,
         system
       };
@@ -1443,7 +1443,7 @@ var osed_bundle = (() => {
             { key: "base", header: "Base", width: 18 },
             { key: "size", header: "Size", width: 10 },
             { key: "aslr", header: "ASLR", width: 8 },
-            { key: "dep", header: "DEP", width: 8 },
+            { key: "nxcompat", header: "NX_COMPAT", width: 10 },
             { key: "safeseh", header: "SafeSEH", width: 8 },
             { key: "system", header: "System", width: 8 }
           ],
@@ -1452,7 +1452,7 @@ var osed_bundle = (() => {
             base: formatAddress(module.base, pointerSize),
             size: `0x${module.size.toString(16).toUpperCase()}`,
             aslr: module.aslr,
-            dep: module.dep,
+            nxcompat: module.nxcompat,
             safeseh: module.safeseh,
             system: module.system ? "yes" : "no"
           }))
@@ -1616,7 +1616,7 @@ var osed_bundle = (() => {
     let score = 0;
     if (!module.system) score += 25;
     if (module.aslr === "disabled") score += 35;
-    if (module.dep === "disabled") score += 10;
+    if (module.nxcompat === "disabled") score += 10;
     if (module.safeseh === "disabled") score += 30;
     return score;
   }
@@ -1738,7 +1738,7 @@ var osed_bundle = (() => {
           module: module.name,
           score: scoreModule(module),
           aslr: module.aslr,
-          dep: module.dep,
+          nxcompat: module.nxcompat,
           safeseh: module.safeseh,
           system: module.system
         })).sort((a, b) => b.score - a.score).slice(0, 6);
@@ -1796,7 +1796,7 @@ var osed_bundle = (() => {
             { key: "module", header: "Module", width: 20 },
             { key: "score", header: "Score", width: 6 },
             { key: "aslr", header: "ASLR", width: 8 },
-            { key: "dep", header: "DEP", width: 8 },
+            { key: "nxcompat", header: "NX_COMPAT", width: 10 },
             { key: "safeseh", header: "SafeSEH", width: 8 },
             { key: "system", header: "System", width: 8 }
           ],
@@ -1804,7 +1804,7 @@ var osed_bundle = (() => {
             module: item.module,
             score: `${item.score}`,
             aslr: item.aslr,
-            dep: item.dep,
+            nxcompat: item.nxcompat,
             safeseh: item.safeseh,
             system: item.system ? "yes" : "no"
           }))
@@ -10332,16 +10332,16 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-25T02:13:13.733Z" : globalThis[key2];
+        value = true ? "2026-08-26T00:31:45.764Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3e0c2823f882" : globalThis[key2];
+        value = true ? "7621aa21976f" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
   }
   function readBuildBoolean(key2, fallback) {
-    const value = true ? true : globalThis[key2];
+    const value = true ? false : globalThis[key2];
     return typeof value === "boolean" ? value : fallback;
   }
   function getVersionInfo() {
