@@ -498,6 +498,74 @@ var osed_bundle = (() => {
   function readPointer(address, pointerSize) {
     return pointerSize === 8 ? readUint64LE(address) : BigInt(readUint32LE(address));
   }
+  function executeDebuggerCommand(command) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const hostAny = host;
+    const exec = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control) == null ? void 0 : _d.ExecuteCommand;
+    if (typeof exec !== "function") {
+      throw new Error("WinDbg command execution is unavailable in this host.");
+    }
+    const control = (_g = (_f = (_e = hostAny.namespace) == null ? void 0 : _e.Debugger) == null ? void 0 : _f.Utility) == null ? void 0 : _g.Control;
+    const result3 = exec.call(control, command);
+    if (Array.isArray(result3)) {
+      return result3.map((line) => String(line));
+    }
+    if (result3 && typeof result3[Symbol.iterator] === "function") {
+      try {
+        return Array.from(result3).map((line) => String(line));
+      } catch (_error) {
+        return [];
+      }
+    }
+    return [];
+  }
+  function parseProtectFromVprot(lines) {
+    for (const line of lines) {
+      const match = line.match(/^\s*Protect:\s+([0-9a-f`]+)\s+/i);
+      if (match) {
+        return Number(BigInt(`0x${match[1].replace(/`/g, "")}`) & BigInt(4294967295));
+      }
+    }
+    return void 0;
+  }
+  function decodeProtectValue(value) {
+    const protect = value & 255;
+    switch (protect) {
+      case 1:
+        return { name: "PAGE_NOACCESS", executable: false, writable: false };
+      case 2:
+        return { name: "PAGE_READONLY", executable: false, writable: false };
+      case 4:
+        return { name: "PAGE_READWRITE", executable: false, writable: true };
+      case 8:
+        return { name: "PAGE_WRITECOPY", executable: false, writable: true };
+      case 16:
+        return { name: "PAGE_EXECUTE", executable: true, writable: false };
+      case 32:
+        return { name: "PAGE_EXECUTE_READ", executable: true, writable: false };
+      case 64:
+        return { name: "PAGE_EXECUTE_READWRITE", executable: true, writable: true };
+      case 128:
+        return { name: "PAGE_EXECUTE_WRITECOPY", executable: true, writable: true };
+      default:
+        return { name: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`, executable: false, writable: false };
+    }
+  }
+  function queryStackProtection(sp, pointerSize) {
+    try {
+      const output = executeDebuggerCommand(`!vprot ${formatAddress(sp, pointerSize)}`);
+      const protect = parseProtectFromVprot(output);
+      if (protect === void 0) return void 0;
+      const decoded = decodeProtectValue(protect);
+      return __spreadProps(__spreadValues({
+        protect
+      }, decoded), {
+        depEnforced: !decoded.executable
+      });
+    } catch (_error) {
+      return void 0;
+    }
+  }
   function getPointerSize() {
     var _a;
     const process = host.currentProcess;
@@ -1751,6 +1819,7 @@ var osed_bundle = (() => {
           exceptionCode: regs.exceptionCode
         }) ? "yes" : "no";
         const badSp = stackBytes ? "no" : "yes";
+        const stackProt = regs.sp !== void 0 ? queryStackProtection(regs.sp, pointerSize) : void 0;
         section("CONTROL");
         print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
         print(`Offset: ${patternOffset ? patternOffset.offset : "n/a"}`);
@@ -1768,6 +1837,13 @@ var osed_bundle = (() => {
         print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
         print(`Bad stack pointer: ${badSp}`);
         print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? findOffset(regs.sp, patternLength) ? "yes" : "no" : "unknown"}`);
+        if (stackProt) {
+          print(`Stack protect: ${stackProt.name}`);
+          print(`DEP enforced: ${stackProt.depEnforced ? "yes" : "no"}`);
+        } else {
+          print("Stack protect: unknown");
+          print("DEP enforced: unknown");
+        }
         if (shellcode.length > 0) {
           print("Shellcode candidates:");
           for (const candidate of shellcode) {
@@ -1843,7 +1919,8 @@ var osed_bundle = (() => {
               spName: regs.spName,
               badPointer: badSp === "yes",
               shellcodeCandidates: shellcode,
-              landing: landingEvidence
+              landing: landingEvidence,
+              stackExecutable: stackProt ? stackProt.executable : void 0
             },
             gadgets,
             modules,
@@ -9819,49 +9896,6 @@ var osed_bundle = (() => {
     }
     return [];
   }
-  function executeDebuggerCommand(command) {
-    var _a, _b, _c, _d, _e, _f, _g;
-    const hostAny = host;
-    const exec = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control) == null ? void 0 : _d.ExecuteCommand;
-    if (typeof exec !== "function") {
-      throw new Error("WinDbg command execution is unavailable in this host.");
-    }
-    const control = (_g = (_f = (_e = hostAny.namespace) == null ? void 0 : _e.Debugger) == null ? void 0 : _f.Utility) == null ? void 0 : _g.Control;
-    const result3 = exec.call(control, command);
-    return toArray2(result3).map((line) => String(line));
-  }
-  function parseProtectFromVprot(lines) {
-    for (const line of lines) {
-      const match = line.match(/^\s*Protect:\s+([0-9a-f`]+)\s+/i);
-      if (match) {
-        return Number(BigInt(`0x${match[1].replace(/`/g, "")}`) & BigInt(4294967295));
-      }
-    }
-    return void 0;
-  }
-  function decodeProtectValue(value) {
-    const protect = value & 255;
-    switch (protect) {
-      case 1:
-        return { name: "PAGE_NOACCESS", executable: false, writable: false };
-      case 2:
-        return { name: "PAGE_READONLY", executable: false, writable: false };
-      case 4:
-        return { name: "PAGE_READWRITE", executable: false, writable: true };
-      case 8:
-        return { name: "PAGE_WRITECOPY", executable: false, writable: true };
-      case 16:
-        return { name: "PAGE_EXECUTE", executable: true, writable: false };
-      case 32:
-        return { name: "PAGE_EXECUTE_READ", executable: true, writable: false };
-      case 64:
-        return { name: "PAGE_EXECUTE_READWRITE", executable: true, writable: true };
-      case 128:
-        return { name: "PAGE_EXECUTE_WRITECOPY", executable: true, writable: true };
-      default:
-        return { name: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`, executable: false, writable: false };
-    }
-  }
   function tryToBigInt(value) {
     var _a;
     if (typeof value === "bigint") {
@@ -10332,16 +10366,16 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-26T00:33:24.639Z" : globalThis[key2];
+        value = true ? "2026-08-26T00:39:00.989Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "9e6752db8de9" : globalThis[key2];
+        value = true ? "35dc37869b7b" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
   }
   function readBuildBoolean(key2, fallback) {
-    const value = true ? false : globalThis[key2];
+    const value = true ? true : globalThis[key2];
     return typeof value === "boolean" ? value : fallback;
   }
   function getVersionInfo() {
@@ -11112,7 +11146,7 @@ var osed_bundle = (() => {
         contiguousControlledBytes: controlledAfterEsp,
         readable: true,
         writable: true,
-        executable: false
+        executable: typeof (stack == null ? void 0 : stack.stackExecutable) === "boolean" ? stack.stackExecutable : false
       },
       registers,
       constraints: {

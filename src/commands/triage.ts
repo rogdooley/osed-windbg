@@ -1,6 +1,6 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
-import { getPointerSize } from "../core/memory";
+import { getPointerSize, queryStackProtection } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
 import { decodeOffsetNeedle, generateCyclicPattern, generateMsfPattern } from "../logic/pattern_logic";
 import { LandingEvidence, landing } from "../analysis/landing";
@@ -364,6 +364,7 @@ export function createTriageCommand(): Command {
         ? "yes"
         : "no";
       const badSp = stackBytes ? "no" : "yes";
+      const stackProt = regs.sp !== undefined ? queryStackProtection(regs.sp, pointerSize) : undefined;
 
       out.section("CONTROL");
       out.print(`${pointerSize === 8 ? "RIP" : "EIP"} controlled: ${eipControlled}`);
@@ -384,6 +385,13 @@ export function createTriageCommand(): Command {
       out.print(`${regs.spName ?? "SP"}: ${regs.sp !== undefined ? out.formatAddress(regs.sp, pointerSize) : "n/a"}`);
       out.print(`Bad stack pointer: ${badSp}`);
       out.print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? (findOffset(regs.sp, patternLength) ? "yes" : "no") : "unknown"}`);
+      if (stackProt) {
+        out.print(`Stack protect: ${stackProt.name}`);
+        out.print(`DEP enforced: ${stackProt.depEnforced ? "yes" : "no"}`);
+      } else {
+        out.print("Stack protect: unknown");
+        out.print("DEP enforced: unknown");
+      }
       if (shellcode.length > 0) {
         out.print("Shellcode candidates:");
         for (const candidate of shellcode) {
@@ -466,6 +474,7 @@ export function createTriageCommand(): Command {
             badPointer: badSp === "yes",
             shellcodeCandidates: shellcode,
             landing: landingEvidence,
+            stackExecutable: stackProt ? stackProt.executable : undefined,
           },
           gadgets,
           modules,

@@ -1,4 +1,4 @@
-import { getPointerSize, readMemory, readUint16LE, readUint32LE, readPointer, tryReadMemory } from "../core/memory";
+import { getPointerSize, readMemory, readUint16LE, readUint32LE, readPointer, tryReadMemory, executeDebuggerCommand, parseProtectFromVprot, decodeProtectValue } from "../core/memory";
 import { formatAddress } from "../core/output";
 import * as out from "../core/output";
 import { DxResult, toDxResult } from "../core/dx_result";
@@ -1490,63 +1490,6 @@ function toArray(value: unknown): unknown[] {
     }
   }
   return [];
-}
-
-function executeDebuggerCommand(command: string): string[] {
-  const hostAny = host as unknown as {
-    namespace?: {
-      Debugger?: {
-        Utility?: {
-          Control?: {
-            ExecuteCommand?: (input: string) => unknown;
-          };
-        };
-      };
-    };
-  };
-
-  const exec = hostAny.namespace?.Debugger?.Utility?.Control?.ExecuteCommand;
-  if (typeof exec !== "function") {
-    throw new Error("WinDbg command execution is unavailable in this host.");
-  }
-
-  const control = hostAny.namespace?.Debugger?.Utility?.Control;
-  const result = exec.call(control, command);
-  return toArray(result).map((line) => String(line));
-}
-
-function parseProtectFromVprot(lines: string[]): number | undefined {
-  for (const line of lines) {
-    const match = line.match(/^\s*Protect:\s+([0-9a-f`]+)\s+/i);
-    if (match) {
-      return Number(BigInt(`0x${match[1].replace(/`/g, "")}`) & BigInt(0xffffffff));
-    }
-  }
-  return undefined;
-}
-
-function decodeProtectValue(value: number): { name: string; executable: boolean; writable: boolean } {
-  const protect = value & 0xff;
-  switch (protect) {
-    case 0x01:
-      return { name: "PAGE_NOACCESS", executable: false, writable: false };
-    case 0x02:
-      return { name: "PAGE_READONLY", executable: false, writable: false };
-    case 0x04:
-      return { name: "PAGE_READWRITE", executable: false, writable: true };
-    case 0x08:
-      return { name: "PAGE_WRITECOPY", executable: false, writable: true };
-    case 0x10:
-      return { name: "PAGE_EXECUTE", executable: true, writable: false };
-    case 0x20:
-      return { name: "PAGE_EXECUTE_READ", executable: true, writable: false };
-    case 0x40:
-      return { name: "PAGE_EXECUTE_READWRITE", executable: true, writable: true };
-    case 0x80:
-      return { name: "PAGE_EXECUTE_WRITECOPY", executable: true, writable: true };
-    default:
-      return { name: `0x${protect.toString(16).toUpperCase().padStart(2, "0")}`, executable: false, writable: false };
-  }
 }
 
 function tryToBigInt(value: unknown): bigint | undefined {

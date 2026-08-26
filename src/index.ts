@@ -138,7 +138,7 @@ function buildExploitStateFromTriage(findings: Record<string, unknown>): Exploit
       contiguousControlledBytes: controlledAfterEsp,
       readable: true,
       writable: true,
-      executable: false,
+      executable: typeof (stack as Record<string, unknown>)?.stackExecutable === "boolean" ? (stack as Record<string, unknown>).stackExecutable as boolean : false,
     },
     registers,
     constraints: {
