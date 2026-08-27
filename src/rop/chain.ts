@@ -45,14 +45,14 @@ export interface ChainPlan {
   stackBytes: number;
 }
 
-function firstKnownAddress(gadget: RopGadget): bigint | undefined {
+export function firstKnownAddress(gadget: RopGadget): bigint | undefined {
   const location = gadget.locations.find((entry) => entry.virtualAddress !== undefined);
   return location?.virtualAddress !== undefined ? BigInt(location.virtualAddress) : undefined;
 }
 
 // Returns the number of extra bytes `ret imm` skips (0 for plain `ret`, -1 if
 // the gadget doesn't end in ret at all).
-function retImmBytes(gadget: RopGadget): number {
+export function retImmBytes(gadget: RopGadget): number {
   const last = gadget.instructions[gadget.instructions.length - 1];
   if (!last || last.mnemonic !== "ret") return -1;
   if (last.operands.length === 0) return 0;
@@ -61,12 +61,12 @@ function retImmBytes(gadget: RopGadget): number {
   return Number.isFinite(value) && value >= 0 ? value : -1;
 }
 
-interface GadgetSelection {
+export interface GadgetSelection {
   gadget: RopGadget;
   retImm: number;
 }
 
-function retImmPadding(retImm: number): ChainStep[] {
+export function retImmPadding(retImm: number): ChainStep[] {
   if (retImm <= 0) return [];
   const padWords = retImm / 4;
   const steps: ChainStep[] = [];
@@ -155,7 +155,9 @@ function valueComment(register: string, value: number): string {
 // the chain is clobber-free regardless of gadget order. Three passes, cheapest
 // first: zero via `xor reg, reg ; ret`; co-satisfy several registers with one
 // multi-pop gadget; then a single `pop reg ; ret` per remaining register.
-export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]): ChainPlan {
+export type ValueSolverFn = (index: CapabilityIndex, register: string, value: number, badchars: number[]) => { steps: ChainStep[] } | undefined;
+
+export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[], badchars: number[] = [], valueSolver?: ValueSolverFn): ChainPlan {
   const steps: ChainStep[] = [];
   const satisfied: string[] = [];
   const unsatisfied: Array<{ register: string; reason: string }> = [];
@@ -247,10 +249,29 @@ export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]
     remaining.delete(register);
   }
 
+  // Pass 3: try arithmetic value construction for unsatisfied registers.
+  if (valueSolver && unsatisfied.length > 0) {
+    const resolved: number[] = [];
+    for (let i = 0; i < unsatisfied.length; i++) {
+      const { register } = unsatisfied[i];
+      const target = targets.find((t) => t.register.toLowerCase() === register.toLowerCase());
+      if (!target) continue;
+      const recipe = valueSolver(index, register, target.value, badchars);
+      if (recipe) {
+        steps.push(...recipe.steps);
+        satisfied.push(register);
+        resolved.push(i);
+      }
+    }
+    for (let j = resolved.length - 1; j >= 0; j--) {
+      unsatisfied.splice(resolved[j], 1);
+    }
+  }
+
   return { steps, satisfied, unsatisfied, stackBytes: steps.length * 4 };
 }
 
-function hex32(value: bigint | number): string {
+export function hex32(value: bigint | number): string {
   const asBig = typeof value === "bigint" ? value : BigInt(value >>> 0);
   return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
 }

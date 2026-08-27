@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1281,6 +1281,55 @@ function bindApi(): OsedApi {
     return toDxResult("ROP Chain", rows);
   };
 
+  const executeRopConstruct = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.construct");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("Value Construction", rows);
+      setResult({ command: "rop.construct", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("Value Construction", rows);
+    }
+    const register = typeof args[0] === "string" ? args[0].toLowerCase() : undefined;
+    const value = typeof args[1] === "number" ? args[1] >>> 0 : undefined;
+    const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) as number[] : [];
+    if (!register || value === undefined) {
+      const rows = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
+      renderRows("Value Construction", rows);
+      setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
+      return toDxResult("Value Construction", rows);
+    }
+    const recipe = solveValue(currentRopCorpus, register, value, badchars);
+    if (!recipe) {
+      const rows = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}` }];
+      renderRows("Value Construction", rows);
+      setResult({ command: "rop.construct", args: { register, value, badchars }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}`] });
+      return toDxResult("Value Construction", rows);
+    }
+    out.section(`Value Construction: ${register} = ${hex32(value)}`);
+    out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""}`);
+    const python = formatChainPython({ steps: recipe.steps });
+    for (const line of python) {
+      out.print(line);
+    }
+    const rows = recipe.steps.map((step) => ({
+      Type: step.kind,
+      Value: step.address !== undefined ? hex32(step.address) : step.value !== undefined ? hex32(step.value) : step.placeholder ?? "",
+      Meaning: step.comment,
+    }));
+    renderRows("Value Construction", rows);
+    setResult({
+      command: "rop.construct",
+      args: { register, value, badchars },
+      success: true,
+      findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes }],
+      warnings: [],
+      errors: [],
+    });
+    return toDxResult("Value Construction", rows);
+  };
+
   const executeRopChainVp = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.chain_vp");
@@ -1597,6 +1646,7 @@ function bindApi(): OsedApi {
     export: executeRopExport,
     pivots: executeRopPivots,
     chain: executeRopChain,
+    construct: executeRopConstruct,
     chain_vp: executeRopChainVp,
     chain_wpm: executeRopChainWpm,
     chain_va: executeRopChainVa,

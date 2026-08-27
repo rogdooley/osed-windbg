@@ -4,6 +4,7 @@ export * from "./scoring";
 export * from "./capabilities";
 export * from "./query";
 export * from "./chain";
+export * from "./value_solver";
 export * from "./planner";
 export * from "./emitter";
 export * from "./synthesizer";

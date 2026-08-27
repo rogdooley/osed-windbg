@@ -3658,7 +3658,7 @@ var osed_bundle = (() => {
   function valueComment(register, value) {
     return `${register} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
-  function planRegisterSetup(index, targets) {
+  function planRegisterSetup(index, targets, badchars = [], valueSolver) {
     const steps = [];
     const satisfied = [];
     const unsatisfied = [];
@@ -3730,6 +3730,23 @@ var osed_bundle = (() => {
       steps.push(...retImmPadding(selection.retImm));
       satisfied.push(register);
       remaining.delete(register);
+    }
+    if (valueSolver && unsatisfied.length > 0) {
+      const resolved = [];
+      for (let i = 0; i < unsatisfied.length; i++) {
+        const { register } = unsatisfied[i];
+        const target = targets.find((t) => t.register.toLowerCase() === register.toLowerCase());
+        if (!target) continue;
+        const recipe = valueSolver(index, register, target.value, badchars);
+        if (recipe) {
+          steps.push(...recipe.steps);
+          satisfied.push(register);
+          resolved.push(i);
+        }
+      }
+      for (let j = resolved.length - 1; j >= 0; j--) {
+        unsatisfied.splice(resolved[j], 1);
+      }
     }
     return { steps, satisfied, unsatisfied, stackBytes: steps.length * 4 };
   }
@@ -4030,6 +4047,260 @@ var osed_bundle = (() => {
     return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
       "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
     ]);
+  }
+
+  // src/rop/value_solver.ts
+  var SCRATCH_CANDIDATES = ["eax", "ecx", "edx", "ebx", "esi", "edi"];
+  function isBadcharFree(value, badchars) {
+    if (badchars.size === 0) return true;
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(w >>> i * 8 & 255)) return false;
+    }
+    return true;
+  }
+  function selectBest(candidates2) {
+    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g) })).filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== void 0);
+    if (withAddr.length === 0) return void 0;
+    withAddr.sort((a, b) => {
+      if (a.retImm !== b.retImm) return a.retImm - b.retImm;
+      return b.gadget.score - a.gadget.score;
+    });
+    return withAddr[0];
+  }
+  function gadgetStep(sel, comment) {
+    return { kind: "gadget", address: firstKnownAddress(sel.gadget), comment };
+  }
+  function valueStep(value, comment) {
+    return { kind: "value", value: value >>> 0, comment };
+  }
+  function extraPopSteps(gadget) {
+    var _a, _b;
+    const steps = [];
+    const insns = gadget.instructions;
+    for (let i = 0; i < insns.length; i++) {
+      const insn = insns[i];
+      if (insn.mnemonic === "pop" && i > 0 && insns[i - 1].mnemonic !== "ret") {
+      }
+    }
+    let foundPrimary = false;
+    for (const insn of insns) {
+      if (insn.mnemonic === "ret") break;
+      if (!foundPrimary && insn.mnemonic !== "pop") {
+        foundPrimary = true;
+        continue;
+      }
+      if (foundPrimary && insn.mnemonic === "pop") {
+        const reg = (_b = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase()) != null ? _b : "?";
+        steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg} side effect)` });
+      }
+    }
+    return steps;
+  }
+  function capKey(kind, register, targetRegister) {
+    return [kind, register != null ? register : "", targetRegister != null ? targetRegister : ""].join(":");
+  }
+  function findPopGadget(index, reg) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a : [];
+    const purePopRet = candidates2.filter((g) => {
+      var _a2;
+      if (g.instructions.length < 2) return false;
+      const last = g.instructions[g.instructions.length - 1];
+      if (last.mnemonic !== "ret") return false;
+      return g.instructions[0].mnemonic === "pop" && ((_a2 = g.instructions[0].operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg;
+    });
+    return selectBest(purePopRet);
+  }
+  function findZeroGadget(index, reg) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a : [];
+    const pureXorRet = candidates2.filter((g) => {
+      var _a2, _b;
+      if (g.instructions.length !== 2) return false;
+      const [xor, ret] = g.instructions;
+      return xor.mnemonic === "xor" && ((_a2 = xor.operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && ((_b = xor.operands[1]) == null ? void 0 : _b.trim().toLowerCase()) === reg && ret.mnemonic === "ret";
+    });
+    return selectBest(pureXorRet);
+  }
+  function findUnaryGadget(index, kind, reg) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey(kind, reg))) != null ? _a : [];
+    const valid = candidates2.filter((g) => {
+      const last = g.instructions[g.instructions.length - 1];
+      return (last == null ? void 0 : last.mnemonic) === "ret";
+    });
+    return selectBest(valid);
+  }
+  function findBinaryGadget(index, kind, dst, src) {
+    var _a;
+    const candidates2 = (_a = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a : [];
+    const valid = candidates2.filter((g) => {
+      const last = g.instructions[g.instructions.length - 1];
+      return (last == null ? void 0 : last.mnemonic) === "ret";
+    });
+    return selectBest(valid);
+  }
+  function emitGadgetWithSideEffects(sel, comment) {
+    const steps = [gadgetStep(sel, comment)];
+    steps.push(...extraPopSteps(sel.gadget));
+    steps.push(...retImmPadding(sel.retImm));
+    return steps;
+  }
+  function findTwoValueDecomposition(target, badchars, mode) {
+    const t = target >>> 0;
+    const probes = [
+      16843009,
+      33686018,
+      50529027,
+      67372036,
+      84215045,
+      101058054,
+      117901063,
+      134744072,
+      151587081,
+      185273099,
+      202116108,
+      235802126,
+      252645135,
+      269488144,
+      286331153,
+      538976288,
+      808464432,
+      1077952576,
+      1347440720,
+      2139062143,
+      2155905152,
+      4278124286,
+      305419896,
+      1431655765,
+      2863311530
+    ];
+    for (const a of probes) {
+      if (!isBadcharFree(a, badchars)) continue;
+      const b = mode === "add" ? t - a >>> 0 : a - t >>> 0;
+      if (isBadcharFree(b, badchars)) return { a, b };
+    }
+    for (let ab0 = 1; ab0 < 256; ab0++) {
+      if (badchars.has(ab0)) continue;
+      const a = ab0 | ab0 << 8 | ab0 << 16 | ab0 << 24;
+      const b = mode === "add" ? t - a >>> 0 : a - t >>> 0;
+      if (isBadcharFree(b, badchars)) return { a, b };
+    }
+    return void 0;
+  }
+  function valueComment2(reg, value) {
+    return `${reg} = ${hex32(value >>> 0)}`;
+  }
+  function tryDirect(index, reg, value, badchars) {
+    if (!isBadcharFree(value, badchars)) return void 0;
+    const pop = findPopGadget(index, reg);
+    if (!pop) return void 0;
+    const steps = [
+      ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
+    ];
+    steps.splice(1, 0, valueStep(value, valueComment2(reg, value)));
+    return { steps, recipe: "direct", stackBytes: steps.length * 4 };
+  }
+  function tryNegate(index, reg, value, badchars) {
+    const negValue = -value >>> 0;
+    if (!isBadcharFree(negValue, badchars)) return void 0;
+    const pop = findPopGadget(index, reg);
+    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg);
+    if (!pop || !neg) return void 0;
+    const steps = [
+      ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
+    ];
+    steps.splice(1, 0, valueStep(negValue, `${reg} = neg(${hex32(value >>> 0)}) = ${hex32(negValue)}`));
+    steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
+    return { steps, recipe: "negate", stackBytes: steps.length * 4 };
+  }
+  function tryComplement(index, reg, value, badchars) {
+    const notValue = ~value >>> 0;
+    if (!isBadcharFree(notValue, badchars)) return void 0;
+    const pop = findPopGadget(index, reg);
+    const not = findUnaryGadget(index, "REGISTER_NOT", reg);
+    if (!pop || !not) return void 0;
+    const steps = [
+      ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
+    ];
+    steps.splice(1, 0, valueStep(notValue, `${reg} = not(${hex32(value >>> 0)}) = ${hex32(notValue)}`));
+    steps.push(...emitGadgetWithSideEffects(not, `not ${reg} -> ${hex32(value >>> 0)}`));
+    return { steps, recipe: "complement", stackBytes: steps.length * 4 };
+  }
+  function tryTwoOp(index, reg, value, badchars, mode) {
+    const decomp = findTwoValueDecomposition(value, badchars, mode);
+    if (!decomp) return void 0;
+    const capKind = mode === "add" ? "REGISTER_ADD" : "REGISTER_SUB";
+    const pop = findPopGadget(index, reg);
+    if (!pop) return void 0;
+    for (const scratch of SCRATCH_CANDIDATES) {
+      if (scratch === reg) continue;
+      const binGadget = findBinaryGadget(index, capKind, reg, scratch);
+      if (!binGadget) continue;
+      const scratchPop = findPopGadget(index, scratch);
+      if (!scratchPop) continue;
+      const steps = [];
+      const popSteps = emitGadgetWithSideEffects(pop, `pop ${reg}`);
+      popSteps.splice(1, 0, valueStep(decomp.a, `${reg} = ${hex32(decomp.a)}`));
+      steps.push(...popSteps);
+      const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
+      scratchSteps.splice(1, 0, valueStep(decomp.b, `${scratch} = ${hex32(decomp.b)}`));
+      steps.push(...scratchSteps);
+      const op = mode === "add" ? "add" : "sub";
+      steps.push(...emitGadgetWithSideEffects(binGadget, `${op} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      return { steps, recipe: mode === "add" ? "two-add" : "two-sub", scratchRegister: scratch, stackBytes: steps.length * 4 };
+    }
+    return void 0;
+  }
+  function tryZeroAdd(index, reg, value, badchars) {
+    if (!isBadcharFree(value, badchars)) return void 0;
+    const zero = findZeroGadget(index, reg);
+    if (!zero) return void 0;
+    for (const scratch of SCRATCH_CANDIDATES) {
+      if (scratch === reg) continue;
+      const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch);
+      if (!addGadget) continue;
+      const scratchPop = findPopGadget(index, scratch);
+      if (!scratchPop) continue;
+      const steps = [];
+      steps.push(...emitGadgetWithSideEffects(zero, `xor ${reg}, ${reg}`));
+      const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
+      scratchSteps.splice(1, 0, valueStep(value, `${scratch} = ${hex32(value >>> 0)}`));
+      steps.push(...scratchSteps);
+      steps.push(...emitGadgetWithSideEffects(addGadget, `add ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      return { steps, recipe: "zero-add", scratchRegister: scratch, stackBytes: steps.length * 4 };
+    }
+    return void 0;
+  }
+  function tryZeroSubNeg(index, reg, value, badchars) {
+    if (!isBadcharFree(value, badchars)) return void 0;
+    const zero = findZeroGadget(index, reg);
+    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg);
+    if (!zero || !neg) return void 0;
+    for (const scratch of SCRATCH_CANDIDATES) {
+      if (scratch === reg) continue;
+      const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch);
+      if (!subGadget) continue;
+      const scratchPop = findPopGadget(index, scratch);
+      if (!scratchPop) continue;
+      const steps = [];
+      steps.push(...emitGadgetWithSideEffects(zero, `xor ${reg}, ${reg}`));
+      const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
+      scratchSteps.splice(1, 0, valueStep(value, `${scratch} = ${hex32(value >>> 0)}`));
+      steps.push(...scratchSteps);
+      steps.push(...emitGadgetWithSideEffects(subGadget, `sub ${reg}, ${scratch} -> neg(${hex32(value >>> 0)})`));
+      steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
+      return { steps, recipe: "zero-sub-neg", scratchRegister: scratch, stackBytes: steps.length * 4 };
+    }
+    return void 0;
+  }
+  function solveValue(index, register, value, badchars) {
+    var _a, _b, _c, _d, _e, _f;
+    const reg = register.trim().toLowerCase();
+    const v = value >>> 0;
+    const bc = new Set(badchars.map((b) => b & 255));
+    return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc)) != null ? _a : tryNegate(index, reg, v, bc)) != null ? _b : tryComplement(index, reg, v, bc)) != null ? _c : tryTwoOp(index, reg, v, bc, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc)) != null ? _f : tryZeroSubNeg(index, reg, v, bc);
   }
 
   // src/rop/planner.ts
@@ -4333,16 +4604,12 @@ var osed_bundle = (() => {
   function byteList2(bytes) {
     return bytes.map((b) => `0x${b.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
   }
-  function firstKnownAddress2(gadget) {
-    const loc = gadget.locations.find((l) => l.virtualAddress !== void 0);
-    return (loc == null ? void 0 : loc.virtualAddress) !== void 0 ? BigInt(loc.virtualAddress) : void 0;
-  }
   function gadgetSequence(gadget) {
     return gadget.instructions.map((i) => i.normalizedText).join(" ; ");
   }
   var GP_REGISTERS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
   function findRetGadget(index) {
-    return index.gadgets.filter((g) => g.instructions.length === 1 && g.instructions[0].mnemonic === "ret" && g.instructions[0].operands.length === 0 && firstKnownAddress2(g) !== void 0).sort((a, b) => b.score - a.score)[0];
+    return index.gadgets.filter((g) => g.instructions.length === 1 && g.instructions[0].mnemonic === "ret" && g.instructions[0].operands.length === 0 && firstKnownAddress(g) !== void 0).sort((a, b) => b.score - a.score)[0];
   }
   function classifyPivotSource(gadget) {
     const instrs = gadget.instructions;
@@ -4385,14 +4652,14 @@ var osed_bundle = (() => {
     return { source: "memory", clobbers: ["esp"] };
   }
   function selectPivotGadget(index, state) {
-    const candidates2 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress2(g) !== void 0).sort((a, b) => {
+    const candidates2 = index.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0).sort((a, b) => {
       const aLen = a.instructions.length;
       const bLen = b.instructions.length;
       if (aLen !== bLen) return aLen - bLen;
       return b.score - a.score;
     });
     for (const gadget of candidates2) {
-      const addr = firstKnownAddress2(gadget);
+      const addr = firstKnownAddress(gadget);
       const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
       if (source === "register" && sourceRegister) {
         const regState = state.registers[sourceRegister];
@@ -4511,7 +4778,7 @@ var osed_bundle = (() => {
     }
     const pivotSelection = selectPivotGadget(index, state);
     if (!pivotSelection) {
-      const hasPivotGadgets = index.gadgets.some((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress2(g) !== void 0);
+      const hasPivotGadgets = index.gadgets.some((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT") && firstKnownAddress(g) !== void 0);
       if (hasPivotGadgets) {
         blockers.push({ kind: "blocker", source: "pivot", message: "Pivot gadgets exist but none have a source register in a known state. Declare the register state in ExploitState.registers." });
       } else {
@@ -4666,7 +4933,7 @@ var osed_bundle = (() => {
   }
   function synthesizeRetToFrame(index, plan, state, badchars) {
     const retGadget = findRetGadget(index);
-    const retAddr = firstKnownAddress2(retGadget);
+    const retAddr = firstKnownAddress(retGadget);
     const violations = [];
     const warnings = [];
     const retCheck = checkAddressBadchars(retAddr, badchars, "ret gadget");
@@ -10809,10 +11076,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-26T03:28:47.616Z" : globalThis[key2];
+        value = true ? "2026-08-26T23:45:32.961Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "528417a0b0db" : globalThis[key2];
+        value = true ? "b8b65582aaee" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12474,7 +12741,7 @@ var osed_bundle = (() => {
       const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1] };
       const filterRegister = typeof options.register === "string" ? options.register.toLowerCase().trim() : void 0;
       const minDelta = typeof options.minDelta === "number" ? options.minDelta : void 0;
-      const candidates2 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress2(g) !== void 0).sort((a, b) => {
+      const candidates2 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
         const aLen = a.instructions.length;
         const bLen = b.instructions.length;
         if (aLen !== bLen) return aLen - bLen;
@@ -12482,7 +12749,7 @@ var osed_bundle = (() => {
       });
       const rows = [];
       for (const gadget of candidates2) {
-        const addr = firstKnownAddress2(gadget);
+        const addr = firstKnownAddress(gadget);
         const { source, sourceRegister, adjustment, clobbers } = classifyPivotSource(gadget);
         const seq = gadgetSequence(gadget);
         const module = (_b = (_a = gadget.locations.find((l) => l.virtualAddress !== void 0)) == null ? void 0 : _a.module) != null ? _b : "unknown";
@@ -12621,6 +12888,57 @@ var osed_bundle = (() => {
         errors: []
       });
       return toDxResult("ROP Chain", rows);
+    };
+    const executeRopConstruct = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.construct");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("Value Construction", rows2);
+        setResult({ command: "rop.construct", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("Value Construction", rows2);
+      }
+      const register = typeof args[0] === "string" ? args[0].toLowerCase() : void 0;
+      const value = typeof args[1] === "number" ? args[1] >>> 0 : void 0;
+      const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
+      if (!register || value === void 0) {
+        const rows2 = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
+        renderRows("Value Construction", rows2);
+        setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
+        return toDxResult("Value Construction", rows2);
+      }
+      const recipe = solveValue(currentRopCorpus, register, value, badchars);
+      if (!recipe) {
+        const rows2 = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}` }];
+        renderRows("Value Construction", rows2);
+        setResult({ command: "rop.construct", args: { register, value, badchars }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}`] });
+        return toDxResult("Value Construction", rows2);
+      }
+      section(`Value Construction: ${register} = ${hex32(value)}`);
+      info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""}`);
+      const python = formatChainPython({ steps: recipe.steps });
+      for (const line of python) {
+        print(line);
+      }
+      const rows = recipe.steps.map((step) => {
+        var _a;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a = step.placeholder) != null ? _a : "",
+          Meaning: step.comment
+        };
+      });
+      renderRows("Value Construction", rows);
+      setResult({
+        command: "rop.construct",
+        args: { register, value, badchars },
+        success: true,
+        findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes }],
+        warnings: [],
+        errors: []
+      });
+      return toDxResult("Value Construction", rows);
     };
     const executeRopChainVp = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -12904,6 +13222,7 @@ var osed_bundle = (() => {
       export: executeRopExport,
       pivots: executeRopPivots,
       chain: executeRopChain,
+      construct: executeRopConstruct,
       chain_vp: executeRopChainVp,
       chain_wpm: executeRopChainWpm,
       chain_va: executeRopChainVa,

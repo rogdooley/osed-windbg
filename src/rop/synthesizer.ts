@@ -1,5 +1,5 @@
 import { CapabilityIndex } from "./capabilities";
-import { ChainStep } from "./chain";
+import { ChainStep, firstKnownAddress } from "./chain";
 import { ExploitStrategy, RopStrategyPlan, StrategyPlan } from "./planner";
 import { RopGadget } from "./types";
 
@@ -171,10 +171,6 @@ function byteList(bytes: number[]): string {
   return bytes.map((b) => `0x${b.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
 }
 
-export function firstKnownAddress(gadget: RopGadget): bigint | undefined {
-  const loc = gadget.locations.find((l) => l.virtualAddress !== undefined);
-  return loc?.virtualAddress !== undefined ? BigInt(loc.virtualAddress) : undefined;
-}
 
 export function gadgetSequence(gadget: RopGadget): string {
   return gadget.instructions.map((i) => i.normalizedText).join(" ; ");
