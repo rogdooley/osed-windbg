@@ -156,6 +156,26 @@ The `ARITHMETIC` query alias expands to all arithmetic capability kinds.
 
 The backward scanner is x86-only (0x40–0x4F are REX prefixes in x64) and runs in O(memory) time.
 
+## Value construction solver
+
+`solveValue()` in `src/rop/value_solver.ts` addresses the common DEP-bypass problem where a target register value contains badchar bytes (e.g. `0x00001000` for `dwSize` or `0x40` for `PAGE_EXECUTE_READWRITE`). It searches the capability index for arithmetic gadgets and constructs the value using a short gadget chain where all stack-placed immediates are badchar-free.
+
+Seven fixed-shape recipes are tried in preference order (shortest chain first):
+
+1. **direct** — `pop dst ; ret` with the raw value (when it happens to be clean)
+2. **negate** — `pop dst ; ret` with −V, then `neg dst ; ret`
+3. **complement** — `pop dst ; ret` with ~V, then `not dst ; ret`
+4. **two-add** — `pop dst` A + `pop scratch` B + `add dst, scratch` where A + B = V
+5. **two-sub** — same shape with `sub` where A − B = V
+6. **zero-add** — `xor dst, dst` + `pop scratch` V + `add dst, scratch` (when `pop dst` is unavailable)
+7. **zero-sub-neg** — `xor dst, dst` + `pop scratch` V + `sub dst, scratch` + `neg dst`
+
+Two-value decomposition (recipes 4–5) probes ~25 uniform-byte candidates then falls back to a single-byte exhaustive sweep — O(256) worst case, instant in practice.
+
+The solver accounts for `ret N` padding and side-effect pops from multi-instruction gadgets. Output is a `ChainStep[]` array compatible with `formatChainPython()` and the synthesis pipeline.
+
+Exposed to WinDbg as `rop.construct(register, value, badchars?)`. Also available as a callback parameter to `planRegisterSetup()` for automatic fallback when a register cannot be satisfied by direct pop.
+
 ## Confidence model
 
 Each semantic field carries:

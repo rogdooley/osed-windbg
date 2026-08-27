@@ -7,6 +7,19 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-08-26 - Arithmetic value solver and backward scanner
+
+- Added `rop.construct(register, value, badchars?)` to find short gadget sequences
+  that construct arbitrary 32-bit values when the raw value contains badchar bytes.
+  Seven recipes tried in preference order: direct pop, negate, complement, two-add
+  decomposition, two-sub decomposition, zero-add, zero-sub-neg. Reports recipe used,
+  scratch register, stack bytes, and emits Python pack lines.
+- Added `planRegisterSetup` solver integration: accepts an optional `badchars` array
+  and value-solver callback for automatic arithmetic fallback on registers that
+  cannot be satisfied by direct pop.
+- Deduplicated `firstKnownAddress` (previously duplicated in chain.ts and
+  synthesizer.ts).
+
 ### 2026-08-26 - Backward scanner and arithmetic pipeline
 
 - Added backward scanner to `scan_live` that discovers multi-instruction gadgets,

@@ -217,6 +217,7 @@ The `rop` runtime namespace includes semantic gadget queries, corpus-backed chai
 | `rop.scan_live` | `dx @$osed().rop.scan_live(module?, badchars?, maxPerPattern?)` | `dx @$osed().rop.scan_live("essfunc", "00 0A 0D")` | Discovers gadgets directly from live target memory (bad-char-filtered addresses), feeds them through the semantic pipeline, and loads the same queryable corpus — no RP++ text, reads only. Includes a backward scanner that finds multi-instruction gadgets (e.g. `add edx, ebx ; pop ebx ; ret 0x10`), `ret N` terminators, and register-register arithmetic that the pattern scanner misses. Reports backward scanner stats in the corpus summary. |
 | `rop.query` | `dx @$osed().rop.query(field, value, executableOnly?)` | `dx @$osed().rop.query("capability", "LOAD_REGISTER")` | Filters the loaded corpus by semantic fields and capabilities. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
+| `rop.construct` | `dx @$osed().rop.construct(register, value, badchars?)` | `dx @$osed().rop.construct("edx", 0x1000, [0x00])` | Finds a short gadget sequence to construct a 32-bit value in a register when the value contains badchar bytes. Tries seven recipes in order: direct pop, negate, bitwise complement, two-add decomposition, two-sub decomposition, zero-add, zero-sub-neg. Reports the recipe used, scratch register (if any), total stack bytes, and emits Python `pack()` lines. Requires a loaded corpus. |
 | `rop.chain` | `dx @$osed().rop.chain(register, value, register2?, value2?, ...)` | `dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)` | Constructs a register-setup chain from the loaded corpus using real-address gadgets. It can zero value-0 targets with `xor reg, reg ; ret`, co-satisfy compatible registers with pure multi-pop gadgets, and fall back to single `pop reg ; ret`. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |
 | `rop.chain_vp` | `dx @$osed().rop.chain_vp(virtualProtect?, retGadget?, returnAddress?, lpAddress?, dwSize?, writable?, flNewProtect?, mode?)` | `dx @$osed().rop.chain_vp(0x7C801AD0)` | VirtualProtect PUSHAD chain built from the loaded corpus. Default `mode` is `ret-slide`: `EDI = ret`, `ESI = VirtualProtect`, saved ESP becomes `lpAddress`, `EBX = dwSize` (default `0x201`), `EDX = 0x40`, and `ECX = WRITABLE`. `mode: "direct"` is available but warns that saved ESP becomes `dwSize`. Read-only. |
 | `rop.chain_wpm` | `dx @$osed().rop.chain_wpm(writeProcessMemory?, returnAddress?, lpBuffer?, nSize?, writable?)` | `dx @$osed().rop.chain_wpm(0x7C802213)` | Constrained WriteProcessMemory PUSHAD chain. Hard-codes `hProcess = 0xFFFFFFFF`; leaves `WRITEPROCESSMEMORY`, `RETURN_ADDR`, `LP_BUFFER`, `NSIZE`, `WRITABLE` as placeholders when not supplied. Warns that direct PUSHAD uses saved ESP as `lpBaseAddress`, so the chain is only a DEP bypass if that saved ESP is already an executable destination. Read-only. |
@@ -242,6 +243,39 @@ dx @$osed().rop.query("memoryReads", true)
 dx @$osed().rop.query("capability", "ARITHMETIC")
 dx @$osed().rop.query("capability", "REGISTER_ADD")
 ```
+
+### Automatic value construction
+
+`rop.construct(register, value, badchars?)` solves the common DEP-bypass problem of loading a register with a value whose raw bytes contain badchars (e.g. `0x00001000` has three null bytes). It searches the loaded capability index for a short arithmetic gadget sequence that produces the target value with all stack-placed data badchar-free.
+
+Seven recipes are tried in preference order (shortest chain first):
+
+| # | Recipe | Gadgets | Stack data | How it works |
+|---|--------|---------|-----------|--------------|
+| 1 | direct | `pop dst` | V | V itself is badchar-free |
+| 2 | negate | `pop dst` + `neg dst` | −V | Two's complement negation avoids the bad bytes |
+| 3 | complement | `pop dst` + `not dst` | ~V | Bitwise complement avoids the bad bytes |
+| 4 | two-add | `pop dst` + `pop scratch` + `add dst, scratch` | A, B | A + B = V, both A and B badchar-free |
+| 5 | two-sub | `pop dst` + `pop scratch` + `sub dst, scratch` | A, B | A − B = V, both badchar-free |
+| 6 | zero-add | `xor dst, dst` + `pop scratch` + `add dst, scratch` | V | When `pop dst` is unavailable but `xor` + `add` works |
+| 7 | zero-sub-neg | `xor dst, dst` + `pop scratch` + `sub dst, scratch` + `neg dst` | V | 0 − V = −V, then neg(−V) = V |
+
+For two-value decomposition (recipes 4–5), the solver tries ~25 candidate A values with uniform byte patterns (0x01010101, 0x11111111, etc.), then falls back to a single-byte exhaustive sweep. Each candidate is O(1) to check, so the search is instant.
+
+The solver handles `ret N` padding and side-effect pops from multi-instruction gadgets automatically — junk values are emitted for clobbered registers and padding words compensate for stack adjustments.
+
+```js
+// Construct 0x1000 in edx avoiding null bytes
+dx @$osed().rop.construct("edx", 0x1000, [0x00])
+
+// Construct 0x40 in ecx avoiding nulls and newlines
+dx @$osed().rop.construct("ecx", 0x40, [0x00, 0x0A, 0x0D])
+
+// Direct construction when value is already clean
+dx @$osed().rop.construct("eax", 0xDEADBEEF, [0x00])
+```
+
+`planRegisterSetup` also accepts an optional `badchars` array and solver callback, enabling automatic arithmetic fallback when a register value contains badchar bytes — instead of reporting the register as unsatisfied, it tries the solver recipes.
 
 ## Command Shortcuts
 
