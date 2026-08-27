@@ -1292,7 +1292,8 @@ function bindApi(): OsedApi {
       return toDxResult("Value Construction", rows);
     }
     const register = typeof args[0] === "string" ? args[0].toLowerCase() : undefined;
-    const value = typeof args[1] === "number" ? args[1] >>> 0 : undefined;
+    const rawValue = args[1] !== undefined ? Number(args[1]) : NaN;
+    const value = Number.isFinite(rawValue) ? rawValue >>> 0 : undefined;
     const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) as number[] : [];
     if (!register || value === undefined) {
       const rows = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];

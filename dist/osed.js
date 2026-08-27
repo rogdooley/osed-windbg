@@ -11076,10 +11076,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-26T23:45:32.961Z" : globalThis[key2];
+        value = true ? "2026-08-27T01:01:48.208Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b8b65582aaee" : globalThis[key2];
+        value = true ? "848c707b1a1e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12900,7 +12900,8 @@ var osed_bundle = (() => {
         return toDxResult("Value Construction", rows2);
       }
       const register = typeof args[0] === "string" ? args[0].toLowerCase() : void 0;
-      const value = typeof args[1] === "number" ? args[1] >>> 0 : void 0;
+      const rawValue = args[1] !== void 0 ? Number(args[1]) : NaN;
+      const value = Number.isFinite(rawValue) ? rawValue >>> 0 : void 0;
       const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
       if (!register || value === void 0) {
         const rows2 = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
