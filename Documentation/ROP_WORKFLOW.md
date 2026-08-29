@@ -4,6 +4,10 @@ This guide walks through the end-to-end process of discovering ROP gadgets,
 planning a DEP bypass strategy, and constructing an exploit chain using the
 `osed-windbg` toolkit. Each step builds on the previous one.
 
+Companion references: [GADGET_DISCOVERY.md](GADGET_DISCOVERY.md) for finding
+specific gadgets, and [ROP_API_REFERENCE.md](ROP_API_REFERENCE.md) for API
+prototypes, constant values, and the PUSHAD register maps.
+
 ## Prerequisites
 
 - WinDbg Preview with `osed.js` loaded
@@ -75,6 +79,9 @@ You can scan multiple modules — results accumulate into a single corpus:
 dx @$osed().rop.scan_live("module1.dll", "00 0A 0D", true)
 dx @$osed().rop.scan_live("module2.dll", "00 0A 0D", true)
 ```
+
+To hunt for a *specific* gadget in the corpus (e.g. a clean `pop eax ; ret`)
+with `rop.query`, see [GADGET_DISCOVERY.md](GADGET_DISCOVERY.md).
 
 ## Step 4: Survey available capabilities
 
