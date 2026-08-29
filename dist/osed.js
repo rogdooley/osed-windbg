@@ -4433,6 +4433,230 @@ var osed_bundle = (() => {
     return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
   }
 
+  // src/rop/register_setup.ts
+  var SUBREGISTER_PARENT2 = {
+    ax: "eax",
+    al: "eax",
+    ah: "eax",
+    bx: "ebx",
+    bl: "ebx",
+    bh: "ebx",
+    cx: "ecx",
+    cl: "ecx",
+    ch: "ecx",
+    dx: "edx",
+    dl: "edx",
+    dh: "edx",
+    si: "esi",
+    di: "edi",
+    bp: "ebp",
+    sp: "esp"
+  };
+  var X86_REGISTERS2 = /* @__PURE__ */ new Set([
+    "eax",
+    "ebx",
+    "ecx",
+    "edx",
+    "esi",
+    "edi",
+    "ebp",
+    "esp",
+    ...Object.keys(SUBREGISTER_PARENT2)
+  ]);
+  var STACK_UNSAFE_MNEMONICS2 = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
+  function parent(reg) {
+    var _a;
+    return (_a = SUBREGISTER_PARENT2[reg]) != null ? _a : reg;
+  }
+  function normalizeRegister2(operand) {
+    const reg = operand == null ? void 0 : operand.trim().toLowerCase();
+    if (!reg || !X86_REGISTERS2.has(reg)) return void 0;
+    return parent(reg);
+  }
+  function parseImmediate2(operand) {
+    if (operand === void 0) return void 0;
+    const t = operand.trim().toLowerCase();
+    if (/^0x[0-9a-f]+$/.test(t)) return parseInt(t, 16);
+    if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+    if (/^[0-9a-f]+h$/.test(t)) return parseInt(t.slice(0, -1), 16);
+    return void 0;
+  }
+  function analyzeGadget(gadget) {
+    var _a, _b;
+    const popRegs = [];
+    const writes = /* @__PURE__ */ new Set();
+    const espFillers = [];
+    const lastWriteWasPop = /* @__PURE__ */ new Map();
+    let safe = true;
+    const insns = gadget.instructions;
+    for (let i = 0; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn") break;
+      const rawDst = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+      const dst = normalizeRegister2(insn.operands[0]);
+      if (mnemonic === "pop") {
+        const reg = (_b = dst != null ? dst : rawDst) != null ? _b : "?";
+        popRegs.push(reg);
+        writes.add(reg);
+        lastWriteWasPop.set(reg, true);
+        continue;
+      }
+      if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+        const imm = parseImmediate2(insn.operands[1]);
+        if (imm === void 0 || imm % 4 !== 0 || mnemonic === "sub") {
+          safe = false;
+          continue;
+        }
+        for (let k = 0; k < imm / 4; k++) {
+          espFillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm.toString(16)})` });
+        }
+        continue;
+      }
+      if (STACK_UNSAFE_MNEMONICS2.has(mnemonic)) {
+        safe = false;
+        continue;
+      }
+      if (dst === "esp") {
+        safe = false;
+        continue;
+      }
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister2(insn.operands[0]);
+        const b = normalizeRegister2(insn.operands[1]);
+        if (a === "esp" || b === "esp") {
+          safe = false;
+          continue;
+        }
+        if (a) {
+          writes.add(a);
+          lastWriteWasPop.set(a, false);
+        }
+        if (b) {
+          writes.add(b);
+          lastWriteWasPop.set(b, false);
+        }
+        continue;
+      }
+      if (mnemonic === "cmp" || mnemonic === "test" || mnemonic === "nop") continue;
+      if (dst) {
+        writes.add(dst);
+        lastWriteWasPop.set(dst, false);
+      }
+    }
+    const cleanPops = /* @__PURE__ */ new Set();
+    for (const [reg, wasPop] of lastWriteWasPop) {
+      if (wasPop) cleanPops.add(reg);
+    }
+    return { popRegs, cleanPops, writes, espFillers, safe };
+  }
+  function describeGadget(gadget) {
+    return gadget.instructions.map((insn) => insn.operands.length > 0 ? `${insn.mnemonic} ${insn.operands.join(", ")}` : insn.mnemonic).join(" ; ");
+  }
+  function isBadcharFree2(value, badchars) {
+    if (badchars.size === 0) return true;
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(w >>> i * 8 & 255)) return false;
+    }
+    return true;
+  }
+  function addressBadcharFree(address, badchars) {
+    return isBadcharFree2(Number(address & BigInt(4294967295)), badchars);
+  }
+  function planRegisterSetupPacking(index, targets, badchars = []) {
+    var _a, _b;
+    const bc = new Set(badchars.map((b) => b & 255));
+    const targetValues = /* @__PURE__ */ new Map();
+    for (const [reg, value] of Object.entries(targets)) {
+      targetValues.set(parent(reg.trim().toLowerCase()), value >>> 0);
+    }
+    const candidates2 = index.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
+    const clobberFrequency = /* @__PURE__ */ new Map();
+    for (const c of candidates2) {
+      for (const reg of c.shape.writes) clobberFrequency.set(reg, ((_a = clobberFrequency.get(reg)) != null ? _a : 0) + 1);
+    }
+    const pending = new Set(targetValues.keys());
+    const done = /* @__PURE__ */ new Set();
+    const steps = [];
+    const ordered = [];
+    const keyGreater = (a, b) => {
+      if (!b) return true;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return a[i] > b[i];
+      }
+      return false;
+    };
+    while (pending.size > 0) {
+      let best;
+      let bestKey;
+      for (const candidate2 of candidates2) {
+        if (!addressBadcharFree(candidate2.address, bc)) continue;
+        let corrupts = false;
+        for (const reg of candidate2.shape.writes) {
+          if (done.has(reg)) {
+            corrupts = true;
+            break;
+          }
+        }
+        if (corrupts) continue;
+        const cover2 = /* @__PURE__ */ new Set();
+        for (const reg of candidate2.shape.cleanPops) {
+          if (!pending.has(reg)) continue;
+          if (!isBadcharFree2(targetValues.get(reg), bc)) continue;
+          cover2.add(reg);
+        }
+        if (cover2.size === 0) continue;
+        const waste = candidate2.shape.writes.size - cover2.size + candidate2.shape.espFillers.length;
+        let deferSum = 0;
+        for (const reg of cover2) deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
+        const key2 = [cover2.size, -deferSum, -waste, candidate2.score, -candidate2.retImm];
+        if (keyGreater(key2, bestKey)) {
+          bestKey = key2;
+          best = { candidate: candidate2, cover: cover2 };
+        }
+      }
+      if (!best) break;
+      const { candidate, cover } = best;
+      steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
+      const lastIndexOf = /* @__PURE__ */ new Map();
+      candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
+      candidate.shape.popRegs.forEach((reg, idx) => {
+        if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
+          steps.push({ kind: "value", value: targetValues.get(reg) >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg))}` });
+        } else {
+          steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg})` });
+        }
+      });
+      steps.push(...candidate.shape.espFillers);
+      steps.push(...retImmPadding(candidate.retImm));
+      for (const reg of cover) {
+        pending.delete(reg);
+        done.add(reg);
+        ordered.push(reg);
+      }
+    }
+    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, candidates2, done, targetValues, bc) }));
+    return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
+  }
+  function reasonFor(reg, candidates2, done, targetValues, badchars) {
+    const setters = candidates2.filter((c) => c.shape.cleanPops.has(reg));
+    if (setters.length === 0) return `no safe gadget cleanly pops ${reg}`;
+    if (!isBadcharFree2(targetValues.get(reg), badchars)) {
+      return `value ${hex32(targetValues.get(reg))} contains badchars; build it with rop.construct("${reg}", ...) and set it separately`;
+    }
+    const blockers = /* @__PURE__ */ new Set();
+    for (const setter of setters) {
+      for (const w of setter.shape.writes) {
+        if (w !== reg && done.has(w)) blockers.add(w);
+      }
+    }
+    if (blockers.size > 0) {
+      return `every gadget that sets ${reg} also writes already-finalized ${[...blockers].join(", ")}; no ordering avoids the clobber`;
+    }
+    return `no gadget sets ${reg} without a badchar in its address`;
+  }
+
   // src/rop/planner.ts
   var STDCALL_ARG_COUNT = {
     VirtualProtect: 4,
@@ -7154,6 +7378,15 @@ var osed_bundle = (() => {
         'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D")',
         'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D", "eax")',
         'dx @$osed().rop.construct("edx", 0x1000, "00 0A 0D", "eax ecx")'
+      ]
+    },
+    {
+      name: "rop.setup",
+      description: "Packs a whole set of target registers into a clobber-safe load sequence \u2014 the tool for staging a PUSHAD or stdcall frame. Exploits multi-pop gadgets to set several registers per gadget and orders gadgets so none overwrites an already-finalized register; reports honest conflicts when no ordering works. Values must be badchar-free (build tainted values with rop.construct first). Unlike rop.construct, it reasons about all target registers at once.",
+      usage: "dx @$osed().rop.setup({reg: value, ...}, badchars?)",
+      examples: [
+        'dx @$osed().rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")',
+        'dx @$osed().rop.setup({edi: 0x10030000, esi: 0x10040000, ebp: 0x10050000, ebx: 0x00000201, edx: 0x40}, "00 0A 0D")'
       ]
     },
     {
@@ -11264,10 +11497,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T18:35:42.850Z" : globalThis[key2];
+        value = true ? "2026-08-29T20:47:31.558Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "26195de978c2" : globalThis[key2];
+        value = true ? "5278e737f1e7" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13424,6 +13657,10 @@ var osed_bundle = (() => {
       }
       section(`Value Construction: ${register} = ${hex32(value)}`);
       info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
+      const collateral = recipe.clobbers.filter((r) => r !== register);
+      if (collateral.length > 0) {
+        warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup({reg: value, ...}), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
+      }
       const python = formatChainPython({ steps: recipe.steps });
       for (const line of python) {
         print(line);
@@ -13446,6 +13683,61 @@ var osed_bundle = (() => {
         errors: []
       });
       return toDxResult("Value Construction", rows);
+    };
+    const executeRopSetup = (...args) => {
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.setup");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("Register Setup", rows2);
+        setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("Register Setup", rows2);
+      }
+      const targets = {};
+      if (isPlainObject(args[0])) {
+        for (const [key2, raw] of Object.entries(args[0])) {
+          const n = Number(raw);
+          if (Number.isFinite(n)) targets[key2.trim().toLowerCase()] = n >>> 0;
+        }
+      }
+      const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) : [];
+      if (Object.keys(targets).length === 0) {
+        const rows2 = [{ Error: 'rop.setup requires a register->value map, e.g. rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")' }];
+        renderRows("Register Setup", rows2);
+        setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
+        return toDxResult("Register Setup", rows2);
+      }
+      const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars);
+      section(`Register Setup: ${Object.keys(targets).join(", ")}`);
+      info(`Packed into ${plan.ordered.length} register(s) via multi-pop gadgets | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
+      if (plan.steps.length > 0) {
+        const python = formatChainPython({ steps: plan.steps });
+        for (const line of python) print(line);
+      }
+      if (!plan.success) {
+        warn("Some registers could not be set without clobbering a finalized one:");
+        for (const item of plan.unresolved) warn(`  ${item.register}: ${item.reason}`);
+      }
+      const rows = plan.steps.map((step) => {
+        var _a;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a = step.placeholder) != null ? _a : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: "no gadgets selected" });
+      renderRows("Register Setup", rows);
+      setResult({
+        command: "rop.setup",
+        args: { targets, badchars },
+        success: plan.success,
+        findings: [{ ordered: plan.ordered, unresolved: plan.unresolved, steps: plan.steps, stackBytes: plan.stackBytes }],
+        warnings: plan.unresolved.map((item) => `${item.register}: ${item.reason}`),
+        errors: []
+      });
+      return toDxResult("Register Setup", rows);
     };
     const executeRopChainVp = (...args) => {
       if (args.length === 1 && args[0] === "help") {
@@ -13730,6 +14022,7 @@ var osed_bundle = (() => {
       pivots: executeRopPivots,
       chain: executeRopChain,
       construct: executeRopConstruct,
+      setup: executeRopSetup,
       chain_vp: executeRopChainVp,
       chain_wpm: executeRopChainWpm,
       chain_va: executeRopChainVa,

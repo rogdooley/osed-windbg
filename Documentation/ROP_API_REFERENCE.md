@@ -200,6 +200,54 @@ address (dummy out-param), `0x90909090` = junk filler.
 | `ECX` | `WRITABLE` | lpNumberOfBytesWritten |
 | `EAX` | `0x90909090` | unused |
 
+## Register-setup safety (read before building a frame)
+
+Every register in a PUSHAD frame is live at `pushad` time, so **any collateral
+write to an already-staged register corrupts the frame.** Two rules:
+
+**1. `rop.construct` is single-register. Do not use it blindly for a frame.**
+It builds one register and reports what it clobbers, but it cannot pack several
+frame registers into one gadget. On a corpus with no clean `pop reg ; ret`
+gadgets (common — e.g. every pop in MSA2Mfilter03 is a multi-pop or carries an
+`add eax`), constructing register B will clobber register A. `preserve` only
+moves the collateral onto a *different* register; it does not make the problem
+go away. When `construct` prints a "This recipe also alters ..." warning, treat
+the named registers as unusable until after this step runs.
+
+**2. Multi-pop gadgets are the tool for frames, not the enemy.** A
+`pop ecx ; pop ebx ; ret` loads **both** ECX and EBX in one gadget with zero
+collateral — you just supply both values as consecutive stack words. Build a
+frame by picking gadgets whose pops all land on registers you need:
+
+```
+pop edi ; pop ebp ; pop ecx ; ret     ; sets EDI, EBP, ECX in one shot
+pop ebx ; pop esi ; ret               ; sets EBX, ESI
+```
+
+Order the gadgets so that if a gadget does have a stray write, it lands on a
+register you set *later* (or don't need). Find candidates with:
+
+```js
+dx @$osed().rop.query({capability: "LOAD_REGISTER", writes: ["ecx","ebx"]})
+```
+
+and read the full `Writes` column of each row to confirm it touches nothing
+else. This is the mona-style register-packing approach, and on a dirty corpus it
+is the only reliable way to set up a frame.
+
+**`rop.setup` automates this.** Give it the whole target map and it packs
+targets into multi-pop gadgets and orders them so none clobbers a finalized
+register:
+
+```js
+dx @$osed().rop.setup({edi: 0x10030000, esi: 0x10040000, ebp: 0x10050000, ebx: 0x00000201, edx: 0x40}, "00 0A 0D")
+```
+
+It prints the finalize order and, when a register cannot be set without
+clobbering an already-final one, reports the conflict instead of emitting a
+corrupt chain. Values must be badchar-free; build tainted values with
+`rop.construct` first and set that register on its own.
+
 ## When PUSHAD is not available
 
 A `pushad ; ret` gadget is convenient enough that it is often absent. The

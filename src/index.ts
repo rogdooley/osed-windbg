@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1314,6 +1314,10 @@ function bindApi(): OsedApi {
     }
     out.section(`Value Construction: ${register} = ${hex32(value)}`);
     out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
+    const collateral = recipe.clobbers.filter((r) => r !== register);
+    if (collateral.length > 0) {
+      out.warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup({reg: value, ...}), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
+    }
     const python = formatChainPython({ steps: recipe.steps });
     for (const line of python) {
       out.print(line);
@@ -1333,6 +1337,59 @@ function bindApi(): OsedApi {
       errors: [],
     });
     return toDxResult("Value Construction", rows);
+  };
+
+  const executeRopSetup = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.setup");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("Register Setup", rows);
+      setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("Register Setup", rows);
+    }
+    const targets: Record<string, number> = {};
+    if (isPlainObject(args[0])) {
+      for (const [key, raw] of Object.entries(args[0] as Record<string, unknown>)) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) targets[key.trim().toLowerCase()] = n >>> 0;
+      }
+    }
+    const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) as number[] : [];
+    if (Object.keys(targets).length === 0) {
+      const rows = [{ Error: 'rop.setup requires a register->value map, e.g. rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")' }];
+      renderRows("Register Setup", rows);
+      setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
+      return toDxResult("Register Setup", rows);
+    }
+    const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars);
+    out.section(`Register Setup: ${Object.keys(targets).join(", ")}`);
+    out.info(`Packed into ${plan.ordered.length} register(s) via multi-pop gadgets | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
+    if (plan.steps.length > 0) {
+      const python = formatChainPython({ steps: plan.steps });
+      for (const line of python) out.print(line);
+    }
+    if (!plan.success) {
+      out.warn("Some registers could not be set without clobbering a finalized one:");
+      for (const item of plan.unresolved) out.warn(`  ${item.register}: ${item.reason}`);
+    }
+    const rows: Array<Record<string, string>> = plan.steps.map((step) => ({
+      Type: step.kind,
+      Value: step.address !== undefined ? hex32(step.address) : step.value !== undefined ? hex32(step.value) : step.placeholder ?? "",
+      Meaning: step.comment,
+    }));
+    if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: "no gadgets selected" });
+    renderRows("Register Setup", rows);
+    setResult({
+      command: "rop.setup",
+      args: { targets, badchars },
+      success: plan.success,
+      findings: [{ ordered: plan.ordered, unresolved: plan.unresolved, steps: plan.steps, stackBytes: plan.stackBytes }],
+      warnings: plan.unresolved.map((item) => `${item.register}: ${item.reason}`),
+      errors: [],
+    });
+    return toDxResult("Register Setup", rows);
   };
 
   const executeRopChainVp = (...args: unknown[]): DxResult => {
@@ -1652,6 +1709,7 @@ function bindApi(): OsedApi {
     pivots: executeRopPivots,
     chain: executeRopChain,
     construct: executeRopConstruct,
+    setup: executeRopSetup,
     chain_vp: executeRopChainVp,
     chain_wpm: executeRopChainWpm,
     chain_va: executeRopChainVa,
