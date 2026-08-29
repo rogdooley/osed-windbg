@@ -128,6 +128,21 @@ describe("register setup packing", () => {
     expect(plan.steps.some((s) => s.value === 0xffffffc0)).toBe(true);
   });
 
+  it("builds a register before the pending target it borrows as scratch", () => {
+    // edx can only be built via two-add using ebx as scratch; ebx uses esi.
+    // The planner must build edx BEFORE ebx is finalized.
+    const index = buildMockIndex([
+      makeGadget([insn("pop", ["edx"]), insn("ret", [])], 0x11223344),
+      makeGadget([insn("pop", ["ebx"]), insn("ret", [])], 0x22334455),
+      makeGadget([insn("pop", ["esi"]), insn("ret", [])], 0x33445566),
+      makeGadget([insn("add", ["edx", "ebx"]), insn("ret", [])], 0x44556677),
+      makeGadget([insn("add", ["ebx", "esi"]), insn("ret", [])], 0x55667788),
+    ]);
+    const plan = planRegisterSetupPacking(index, { edx: 0x00001000, ebx: 0x00001000 }, [0x00]);
+    expect(plan.success).toBe(true);
+    expect(plan.ordered.indexOf("edx")).toBeLessThan(plan.ordered.indexOf("ebx"));
+  });
+
   it("reports an unbuildable tainted value honestly", () => {
     // Only a direct pop; 0x41 is null-heavy and there is no neg/add gadget.
     const index = buildMockIndex([

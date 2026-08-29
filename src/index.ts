@@ -1359,7 +1359,7 @@ function bindApi(): OsedApi {
     }
     const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars);
     out.section(`Register Setup: ${Object.keys(targets).join(", ")}`);
-    out.info(`Packed into ${plan.ordered.length} register(s) via multi-pop gadgets | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
+    out.info(`Set ${plan.ordered.length}/${Object.keys(targets).length} register(s) | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
     if (plan.steps.length > 0) {
       const python = formatChainPython({ steps: plan.steps });
       for (const line of python) out.print(line);

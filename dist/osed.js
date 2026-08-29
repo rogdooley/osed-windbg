@@ -4742,9 +4742,9 @@ var osed_bundle = (() => {
     for (const reg of pending) {
       const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve);
       if (!recipe) continue;
+      const scratchIsPendingTarget = recipe.scratchRegister && pending.has(recipe.scratchRegister) ? 1 : 0;
       const usesScratch = recipe.scratchRegister ? 1 : 0;
-      const pendingCollateral = recipe.clobbers.filter((c) => c !== reg && pending.has(c)).length;
-      const key2 = [usesScratch, -pendingCollateral, -recipe.stackBytes];
+      const key2 = [scratchIsPendingTarget, usesScratch, -recipe.stackBytes];
       if (keyGreater(key2, bestKey)) {
         bestKey = key2;
         best = { register: reg, recipe };
@@ -11618,10 +11618,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T21:09:42.746Z" : globalThis[key2];
+        value = true ? "2026-08-29T21:29:31.521Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "cd9312f4fd01" : globalThis[key2];
+        value = true ? "fe6c96ef328f" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13825,7 +13825,7 @@ var osed_bundle = (() => {
       }
       const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars);
       section(`Register Setup: ${Object.keys(targets).join(", ")}`);
-      info(`Packed into ${plan.ordered.length} register(s) via multi-pop gadgets | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
+      info(`Set ${plan.ordered.length}/${Object.keys(targets).length} register(s) | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
       if (plan.steps.length > 0) {
         const python = formatChainPython({ steps: plan.steps });
         for (const line of python) print(line);

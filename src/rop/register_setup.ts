@@ -288,14 +288,14 @@ function pickArithmeticBuild(
   for (const reg of pending) {
     const recipe = solveValue(index, reg, targetValues.get(reg)!, badchars, preserve);
     if (!recipe) continue;
-    // solveValue already prefers scratch-free recipes (direct/negate/complement)
-    // over two-op, so a defined scratchRegister means this register genuinely
-    // needs one. Build scratch-needing registers first, while other pending
-    // registers are still available to borrow; then fewest pending clobbers;
-    // then the smallest recipe.
+    // Dependency-driven ordering. If this register's build borrows another
+    // pending TARGET as scratch, it must run before that target is finalized
+    // (once finalized, preserve would forbid using it) — so build it first.
+    // Then prefer scratch-needing builds over scratch-free ones (which never
+    // need a borrow and can safely go last); then the smallest recipe.
+    const scratchIsPendingTarget = recipe.scratchRegister && pending.has(recipe.scratchRegister) ? 1 : 0;
     const usesScratch = recipe.scratchRegister ? 1 : 0;
-    const pendingCollateral = recipe.clobbers.filter((c) => c !== reg && pending.has(c)).length;
-    const key = [usesScratch, -pendingCollateral, -recipe.stackBytes];
+    const key = [scratchIsPendingTarget, usesScratch, -recipe.stackBytes];
     if (keyGreater(key, bestKey)) { bestKey = key; best = { register: reg, recipe }; }
   }
   return best;
