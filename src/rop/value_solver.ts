@@ -9,9 +9,128 @@ export interface ValueRecipe {
   recipe: RecipeKind;
   scratchRegister?: string;
   stackBytes: number;
+  /** Registers this recipe overwrites: the target, any scratch, and every side-effect pop. */
+  clobbers: string[];
 }
 
 const SCRATCH_CANDIDATES = ["eax", "ecx", "edx", "ebx", "esi", "edi"];
+
+const SUBREGISTER_PARENT: Record<string, string> = {
+  ax: "eax", al: "eax", ah: "eax",
+  bx: "ebx", bl: "ebx", bh: "ebx",
+  cx: "ecx", cl: "ecx", ch: "ecx",
+  dx: "edx", dl: "edx", dh: "edx",
+  si: "esi", di: "edi", bp: "ebp", sp: "esp",
+};
+
+const X86_REGISTERS = new Set<string>([
+  "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+  ...Object.keys(SUBREGISTER_PARENT),
+]);
+
+// Mnemonics whose first operand is the written destination register.
+const WRITE_DEST_MNEMONICS = new Set<string>([
+  "mov", "movzx", "movsx", "lea", "xor", "or", "and", "add", "sub", "adc",
+  "sbb", "inc", "dec", "neg", "not", "imul", "shl", "shr", "sar", "sal",
+  "rol", "ror", "bswap", "xadd", "cmovz", "cmovnz", "cmove", "cmovne",
+]);
+
+// Instructions that read/write ESP in a way we cannot cleanly turn into filler.
+const STACK_UNSAFE_MNEMONICS = new Set<string>(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
+
+function normalizeRegister(operand: string | undefined): string | undefined {
+  const reg = operand?.trim().toLowerCase();
+  if (!reg || !X86_REGISTERS.has(reg)) return undefined;
+  return SUBREGISTER_PARENT[reg] ?? reg;
+}
+
+function parseImmediate(operand: string | undefined): number | undefined {
+  if (operand === undefined) return undefined;
+  const t = operand.trim().toLowerCase();
+  if (/^0x[0-9a-f]+$/.test(t)) return parseInt(t, 16);
+  if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+  if (/^[0-9a-f]+h$/.test(t)) return parseInt(t.slice(0, -1), 16);
+  return undefined;
+}
+
+interface GadgetEffects {
+  /** 32-bit registers written as a side effect (excludes the primary instruction's target). */
+  clobbers: string[];
+  /** Filler words for every extra stack slot the gadget consumes past its primary op, in stack order. */
+  fillers: ChainStep[];
+  /** False when the gadget shifts ESP in a way we cannot pad (push, sub esp, misaligned add esp, esp writes). */
+  safe: boolean;
+  reason?: string;
+}
+
+/**
+ * Full side-effect model for a gadget used in value construction. The first
+ * instruction is the primary operation (a value-consuming `pop reg` or an ALU
+ * op); every later instruction before the terminating `ret` is a side effect.
+ * We track which registers those side effects clobber and how many extra stack
+ * slots they consume, so the chain can be padded and the caller can preserve
+ * live registers. Gadgets whose ESP movement cannot be cleanly padded are
+ * marked unsafe and excluded from selection.
+ */
+function gadgetEffects(gadget: RopGadget): GadgetEffects {
+  const insns = gadget.instructions;
+  const clobbers = new Set<string>();
+  const fillers: ChainStep[] = [];
+  let safe = true;
+  let reason: string | undefined;
+  const markUnsafe = (why: string): void => {
+    if (safe) { safe = false; reason = why; }
+  };
+
+  for (let i = 1; i < insns.length; i++) {
+    const insn = insns[i];
+    const mnemonic = insn.mnemonic.trim().toLowerCase();
+    if (mnemonic === "ret" || mnemonic === "retn") break; // terminator; ret N handled via retImmPadding
+    const rawDst = insn.operands[0]?.trim().toLowerCase();
+    const dst = normalizeRegister(insn.operands[0]);
+
+    if (mnemonic === "pop") {
+      clobbers.add(dst ?? rawDst ?? "?");
+      fillers.push({ kind: "value", value: 0x41414141, comment: `junk (${rawDst ?? "?"} side effect)` });
+      continue;
+    }
+    if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+      const imm = parseImmediate(insn.operands[1]);
+      if (imm === undefined || imm % 4 !== 0) { markUnsafe(`${mnemonic} esp, ${insn.operands[1] ?? "?"} is not a paddable 4-byte multiple`); continue; }
+      if (mnemonic === "sub") { markUnsafe(`sub esp, 0x${imm.toString(16)} shifts ESP back into consumed stack`); continue; }
+      for (let k = 0; k < imm / 4; k++) {
+        fillers.push({ kind: "value", value: 0x41414141, comment: `junk (add esp, 0x${imm.toString(16)})` });
+      }
+      continue;
+    }
+    if (STACK_UNSAFE_MNEMONICS.has(mnemonic)) { markUnsafe(`${mnemonic} alters ESP/control unpredictably`); continue; }
+    if (dst === "esp") { markUnsafe(`${mnemonic} writes ESP directly`); continue; }
+    if (mnemonic === "xchg") {
+      const a = normalizeRegister(insn.operands[0]);
+      const b = normalizeRegister(insn.operands[1]);
+      if (a === "esp" || b === "esp") { markUnsafe("xchg with ESP"); continue; }
+      if (a) clobbers.add(a);
+      if (b) clobbers.add(b);
+      continue;
+    }
+    if (mnemonic === "cmp" || mnemonic === "test" || mnemonic === "nop") continue;
+    if (dst) {
+      // Known writer, or an unrecognized mnemonic with a register destination:
+      // assume it clobbers rather than risk a silent overwrite.
+      clobbers.add(dst);
+    }
+  }
+  return { clobbers: [...clobbers], fillers, safe, reason };
+}
+
+function collectClobbers(primaryReg: string, gadgets: RopGadget[], scratch?: string): string[] {
+  const set = new Set<string>([primaryReg]);
+  if (scratch) set.add(scratch);
+  for (const gadget of gadgets) {
+    for (const reg of gadgetEffects(gadget).clobbers) set.add(reg);
+  }
+  return [...set];
+}
 
 function isBadcharFree(value: number, badchars: Set<number>): boolean {
   if (badchars.size === 0) return true;
@@ -22,16 +141,28 @@ function isBadcharFree(value: number, badchars: Set<number>): boolean {
   return true;
 }
 
-function selectBest(candidates: RopGadget[]): GadgetSelection | undefined {
+function selectBest(candidates: RopGadget[], preserve?: Set<string>): GadgetSelection | undefined {
   const withAddr = candidates
-    .map((g) => ({ gadget: g, retImm: retImmBytes(g) }))
-    .filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== undefined);
+    .map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) }))
+    .filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== undefined)
+    // Drop gadgets whose ESP movement cannot be cleanly padded — they would
+    // desync the chain no matter how the values are laid out.
+    .filter((s) => s.effects.safe)
+    // Exclude gadgets whose side effects would clobber a register the caller
+    // asked to keep live (e.g. eax already loaded for a stdcall frame). This
+    // covers register writes of any kind, not just pops.
+    .filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
   if (withAddr.length === 0) return undefined;
   withAddr.sort((a, b) => {
     if (a.retImm !== b.retImm) return a.retImm - b.retImm;
+    // Prefer gadgets with the smallest side-effect footprint: a clean
+    // `pop reg ; ret` beats one that also pops, writes, or skips stack.
+    const aCost = a.effects.clobbers.length + a.effects.fillers.length;
+    const bCost = b.effects.clobbers.length + b.effects.fillers.length;
+    if (aCost !== bCost) return aCost - bCost;
     return b.gadget.score - a.gadget.score;
   });
-  return withAddr[0];
+  return { gadget: withAddr[0].gadget, retImm: withAddr[0].retImm };
 }
 
 function gadgetStep(sel: GadgetSelection, comment: string): ChainStep {
@@ -43,35 +174,14 @@ function valueStep(value: number, comment: string): ChainStep {
 }
 
 function extraPopSteps(gadget: RopGadget): ChainStep[] {
-  const steps: ChainStep[] = [];
-  const insns = gadget.instructions;
-  for (let i = 0; i < insns.length; i++) {
-    const insn = insns[i];
-    if (insn.mnemonic === "pop" && i > 0 && insns[i - 1].mnemonic !== "ret") {
-      // This is a side-effect pop that's not the primary operation
-    }
-  }
-  // Count pops after the first non-pop instruction (side-effect pops)
-  let foundPrimary = false;
-  for (const insn of insns) {
-    if (insn.mnemonic === "ret") break;
-    if (!foundPrimary && insn.mnemonic !== "pop") {
-      foundPrimary = true;
-      continue;
-    }
-    if (foundPrimary && insn.mnemonic === "pop") {
-      const reg = insn.operands[0]?.trim().toLowerCase() ?? "?";
-      steps.push({ kind: "value", value: 0x41414141, comment: `junk (${reg} side effect)` });
-    }
-  }
-  return steps;
+  return gadgetEffects(gadget).fillers;
 }
 
 function capKey(kind: string, register?: string, targetRegister?: string): string {
   return [kind, register ?? "", targetRegister ?? ""].join(":");
 }
 
-function findPopGadget(index: CapabilityIndex, reg: string): GadgetSelection | undefined {
+function findPopGadget(index: CapabilityIndex, reg: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey("LOAD_REGISTER", reg)) ?? [];
   const purePopRet = candidates.filter((g) => {
     if (g.instructions.length < 2) return false;
@@ -80,10 +190,10 @@ function findPopGadget(index: CapabilityIndex, reg: string): GadgetSelection | u
     return g.instructions[0].mnemonic === "pop" &&
       g.instructions[0].operands[0]?.trim().toLowerCase() === reg;
   });
-  return selectBest(purePopRet);
+  return selectBest(purePopRet, preserve);
 }
 
-function findZeroGadget(index: CapabilityIndex, reg: string): GadgetSelection | undefined {
+function findZeroGadget(index: CapabilityIndex, reg: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey("ZERO_REGISTER", reg)) ?? [];
   const pureXorRet = candidates.filter((g) => {
     if (g.instructions.length !== 2) return false;
@@ -93,25 +203,25 @@ function findZeroGadget(index: CapabilityIndex, reg: string): GadgetSelection | 
       xor.operands[1]?.trim().toLowerCase() === reg &&
       ret.mnemonic === "ret";
   });
-  return selectBest(pureXorRet);
+  return selectBest(pureXorRet, preserve);
 }
 
-function findUnaryGadget(index: CapabilityIndex, kind: string, reg: string): GadgetSelection | undefined {
+function findUnaryGadget(index: CapabilityIndex, kind: string, reg: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey(kind, reg)) ?? [];
   const valid = candidates.filter((g) => {
     const last = g.instructions[g.instructions.length - 1];
     return last?.mnemonic === "ret";
   });
-  return selectBest(valid);
+  return selectBest(valid, preserve);
 }
 
-function findBinaryGadget(index: CapabilityIndex, kind: string, dst: string, src: string): GadgetSelection | undefined {
+function findBinaryGadget(index: CapabilityIndex, kind: string, dst: string, src: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey(kind, dst, src)) ?? [];
   const valid = candidates.filter((g) => {
     const last = g.instructions[g.instructions.length - 1];
     return last?.mnemonic === "ret";
   });
-  return selectBest(valid);
+  return selectBest(valid, preserve);
 }
 
 function emitGadgetWithSideEffects(sel: GadgetSelection, comment: string): ChainStep[] {
@@ -150,66 +260,66 @@ function valueComment(reg: string, value: number): string {
 }
 
 function tryDirect(
-  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>,
+  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>, preserve: Set<string>,
 ): ValueRecipe | undefined {
   if (!isBadcharFree(value, badchars)) return undefined;
-  const pop = findPopGadget(index, reg);
+  const pop = findPopGadget(index, reg, preserve);
   if (!pop) return undefined;
   const steps: ChainStep[] = [
     ...emitGadgetWithSideEffects(pop, `pop ${reg}`),
   ];
   // Insert the value right after the gadget address (before any side-effect junk)
   steps.splice(1, 0, valueStep(value, valueComment(reg, value)));
-  return { steps, recipe: "direct", stackBytes: steps.length * 4 };
+  return { steps, recipe: "direct", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget]) };
 }
 
 function tryNegate(
-  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>,
+  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>, preserve: Set<string>,
 ): ValueRecipe | undefined {
   const negValue = ((-value) >>> 0);
   if (!isBadcharFree(negValue, badchars)) return undefined;
-  const pop = findPopGadget(index, reg);
-  const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg);
+  const pop = findPopGadget(index, reg, preserve);
+  const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
   if (!pop || !neg) return undefined;
   const steps: ChainStep[] = [
     ...emitGadgetWithSideEffects(pop, `pop ${reg}`),
   ];
   steps.splice(1, 0, valueStep(negValue, `${reg} = neg(${hex32(value >>> 0)}) = ${hex32(negValue)}`));
   steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
-  return { steps, recipe: "negate", stackBytes: steps.length * 4 };
+  return { steps, recipe: "negate", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, neg.gadget]) };
 }
 
 function tryComplement(
-  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>,
+  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>, preserve: Set<string>,
 ): ValueRecipe | undefined {
   const notValue = (~value) >>> 0;
   if (!isBadcharFree(notValue, badchars)) return undefined;
-  const pop = findPopGadget(index, reg);
-  const not = findUnaryGadget(index, "REGISTER_NOT", reg);
+  const pop = findPopGadget(index, reg, preserve);
+  const not = findUnaryGadget(index, "REGISTER_NOT", reg, preserve);
   if (!pop || !not) return undefined;
   const steps: ChainStep[] = [
     ...emitGadgetWithSideEffects(pop, `pop ${reg}`),
   ];
   steps.splice(1, 0, valueStep(notValue, `${reg} = not(${hex32(value >>> 0)}) = ${hex32(notValue)}`));
   steps.push(...emitGadgetWithSideEffects(not, `not ${reg} -> ${hex32(value >>> 0)}`));
-  return { steps, recipe: "complement", stackBytes: steps.length * 4 };
+  return { steps, recipe: "complement", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, not.gadget]) };
 }
 
 function tryTwoOp(
-  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>,
+  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>, preserve: Set<string>,
   mode: "add" | "sub",
 ): ValueRecipe | undefined {
   const decomp = findTwoValueDecomposition(value, badchars, mode);
   if (!decomp) return undefined;
   const capKind = mode === "add" ? "REGISTER_ADD" : "REGISTER_SUB";
-  const pop = findPopGadget(index, reg);
+  const pop = findPopGadget(index, reg, preserve);
   if (!pop) return undefined;
 
   for (const scratch of SCRATCH_CANDIDATES) {
-    if (scratch === reg) continue;
-    const binGadget = findBinaryGadget(index, capKind, reg, scratch);
+    if (scratch === reg || preserve.has(scratch)) continue;
+    const binGadget = findBinaryGadget(index, capKind, reg, scratch, preserve);
     if (!binGadget) continue;
-    const scratchPop = findPopGadget(index, scratch);
+    const scratchPop = findPopGadget(index, scratch, preserve);
     if (!scratchPop) continue;
 
     const steps: ChainStep[] = [];
@@ -225,23 +335,29 @@ function tryTwoOp(
     const op = mode === "add" ? "add" : "sub";
     steps.push(...emitGadgetWithSideEffects(binGadget, `${op} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
 
-    return { steps, recipe: mode === "add" ? "two-add" : "two-sub", scratchRegister: scratch, stackBytes: steps.length * 4 };
+    return {
+      steps,
+      recipe: mode === "add" ? "two-add" : "two-sub",
+      scratchRegister: scratch,
+      stackBytes: steps.length * 4,
+      clobbers: collectClobbers(reg, [pop.gadget, scratchPop.gadget, binGadget.gadget], scratch),
+    };
   }
   return undefined;
 }
 
 function tryZeroAdd(
-  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>,
+  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>, preserve: Set<string>,
 ): ValueRecipe | undefined {
   if (!isBadcharFree(value, badchars)) return undefined;
-  const zero = findZeroGadget(index, reg);
+  const zero = findZeroGadget(index, reg, preserve);
   if (!zero) return undefined;
 
   for (const scratch of SCRATCH_CANDIDATES) {
-    if (scratch === reg) continue;
-    const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch);
+    if (scratch === reg || preserve.has(scratch)) continue;
+    const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch, preserve);
     if (!addGadget) continue;
-    const scratchPop = findPopGadget(index, scratch);
+    const scratchPop = findPopGadget(index, scratch, preserve);
     if (!scratchPop) continue;
 
     const steps: ChainStep[] = [];
@@ -251,24 +367,30 @@ function tryZeroAdd(
     steps.push(...scratchSteps);
     steps.push(...emitGadgetWithSideEffects(addGadget, `add ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
 
-    return { steps, recipe: "zero-add", scratchRegister: scratch, stackBytes: steps.length * 4 };
+    return {
+      steps,
+      recipe: "zero-add",
+      scratchRegister: scratch,
+      stackBytes: steps.length * 4,
+      clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, addGadget.gadget], scratch),
+    };
   }
   return undefined;
 }
 
 function tryZeroSubNeg(
-  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>,
+  index: CapabilityIndex, reg: string, value: number, badchars: Set<number>, preserve: Set<string>,
 ): ValueRecipe | undefined {
   if (!isBadcharFree(value, badchars)) return undefined;
-  const zero = findZeroGadget(index, reg);
-  const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg);
+  const zero = findZeroGadget(index, reg, preserve);
+  const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
   if (!zero || !neg) return undefined;
 
   for (const scratch of SCRATCH_CANDIDATES) {
-    if (scratch === reg) continue;
-    const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch);
+    if (scratch === reg || preserve.has(scratch)) continue;
+    const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch, preserve);
     if (!subGadget) continue;
-    const scratchPop = findPopGadget(index, scratch);
+    const scratchPop = findPopGadget(index, scratch, preserve);
     if (!scratchPop) continue;
 
     const steps: ChainStep[] = [];
@@ -279,7 +401,13 @@ function tryZeroSubNeg(
     steps.push(...emitGadgetWithSideEffects(subGadget, `sub ${reg}, ${scratch} -> neg(${hex32(value >>> 0)})`));
     steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
 
-    return { steps, recipe: "zero-sub-neg", scratchRegister: scratch, stackBytes: steps.length * 4 };
+    return {
+      steps,
+      recipe: "zero-sub-neg",
+      scratchRegister: scratch,
+      stackBytes: steps.length * 4,
+      clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, subGadget.gadget, neg.gadget], scratch),
+    };
   }
   return undefined;
 }
@@ -289,16 +417,21 @@ export function solveValue(
   register: string,
   value: number,
   badchars: number[],
+  preserveRegisters: string[] = [],
 ): ValueRecipe | undefined {
   const reg = register.trim().toLowerCase();
   const v = value >>> 0;
   const bc = new Set(badchars.map((b) => b & 0xff));
+  // The target register is clobbered by definition; drop it from the preserve
+  // set so it can never exclude its own construction.
+  const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
+  preserve.delete(reg);
 
-  return tryDirect(index, reg, v, bc)
-    ?? tryNegate(index, reg, v, bc)
-    ?? tryComplement(index, reg, v, bc)
-    ?? tryTwoOp(index, reg, v, bc, "add")
-    ?? tryTwoOp(index, reg, v, bc, "sub")
-    ?? tryZeroAdd(index, reg, v, bc)
-    ?? tryZeroSubNeg(index, reg, v, bc);
+  return tryDirect(index, reg, v, bc, preserve)
+    ?? tryNegate(index, reg, v, bc, preserve)
+    ?? tryComplement(index, reg, v, bc, preserve)
+    ?? tryTwoOp(index, reg, v, bc, preserve, "add")
+    ?? tryTwoOp(index, reg, v, bc, preserve, "sub")
+    ?? tryZeroAdd(index, reg, v, bc, preserve)
+    ?? tryZeroSubNeg(index, reg, v, bc, preserve);
 }

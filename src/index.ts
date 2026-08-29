@@ -1297,21 +1297,23 @@ function bindApi(): OsedApi {
     const rawValue = args[1] !== undefined ? Number(args[1]) : NaN;
     const value = Number.isFinite(rawValue) ? rawValue >>> 0 : undefined;
     const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) as number[] : [];
+    const preserve = parseRegisterList(args[3]);
     if (!register || value === undefined) {
       const rows = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
       renderRows("Value Construction", rows);
       setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
       return toDxResult("Value Construction", rows);
     }
-    const recipe = solveValue(currentRopCorpus, register, value, badchars);
+    const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve);
     if (!recipe) {
-      const rows = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}` }];
+      const preserveNote = preserve.length > 0 ? ` while preserving ${preserve.join(", ")}` : "";
+      const rows = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}${preserveNote}` }];
       renderRows("Value Construction", rows);
-      setResult({ command: "rop.construct", args: { register, value, badchars }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}`] });
+      setResult({ command: "rop.construct", args: { register, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}${preserveNote}`] });
       return toDxResult("Value Construction", rows);
     }
     out.section(`Value Construction: ${register} = ${hex32(value)}`);
-    out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""}`);
+    out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
     const python = formatChainPython({ steps: recipe.steps });
     for (const line of python) {
       out.print(line);
@@ -1326,7 +1328,7 @@ function bindApi(): OsedApi {
       command: "rop.construct",
       args: { register, value, badchars },
       success: true,
-      findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes }],
+      findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes, clobbers: recipe.clobbers }],
       warnings: [],
       errors: [],
     });
@@ -1785,6 +1787,15 @@ function parseScanLivePositionalArgs(args: unknown[]): Record<string, unknown> {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRegisterList(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value.map((v) => String(v))
+    : typeof value === "string"
+      ? value.split(/[,\s]+/)
+      : [];
+  return raw.map((r) => r.trim().toLowerCase()).filter((r) => r.length > 0);
 }
 
 function parseHexByteList(value: unknown): number[] | unknown {

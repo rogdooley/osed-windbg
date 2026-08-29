@@ -30,6 +30,16 @@ function makePopGadget(reg: string, addr: number): RopGadget {
   );
 }
 
+// A gadget whose first pop is the primary load and whose later pops are
+// side effects, e.g. `pop ebx ; pop eax ; ret`.
+function makeMultiPopGadget(regs: string[], addr: number): RopGadget {
+  return makeGadget(
+    [...regs.map((r) => makeInsn("pop", [r])), makeInsn("ret", [])],
+    addr,
+    [{ kind: "LOAD_REGISTER", register: regs[0], evidence: `pop ${regs[0]}` }],
+  );
+}
+
 function makeXorGadget(reg: string, addr: number): RopGadget {
   return makeGadget(
     [makeInsn("xor", [reg, reg]), makeInsn("ret", [])],
@@ -245,6 +255,170 @@ describe("value_solver", () => {
       const result = solveValue(index, "eax", 0x41414141, [0x00]);
       expect(result).toBeDefined();
       expect(result!.stackBytes).toBe(result!.steps.length * 4);
+    });
+  });
+
+  describe("side-effect pops (pop reg ; pop other ; ret)", () => {
+    it("emits a filler slot for the extra pop so the chain stays aligned", () => {
+      // pop ebx ; pop eax ; ret — the pop eax would swallow the next gadget
+      // address without a filler word between the ebx value and it.
+      const index = buildMockIndex([makeMultiPopGadget(["ebx", "eax"], 0x10031659)]);
+      const result = solveValue(index, "ebx", 0x02020202, [0x00, 0x0a, 0x0d]);
+      expect(result).toBeDefined();
+      expect(result!.recipe).toBe("direct");
+      // gadget, ebx value, junk for the eax side-effect pop
+      expect(result!.steps).toHaveLength(3);
+      expect(result!.steps[1].value).toBe(0x02020202);
+      expect(result!.steps[2].value).toBe(0x41414141);
+      expect(result!.steps[2].comment).toContain("eax side effect");
+    });
+
+    it("reports the clobbered registers", () => {
+      const index = buildMockIndex([makeMultiPopGadget(["ebx", "eax"], 0x10031659)]);
+      const result = solveValue(index, "ebx", 0x02020202, []);
+      expect(result!.clobbers).toContain("ebx");
+      expect(result!.clobbers).toContain("eax");
+    });
+
+    it("prefers a clean pop over one with a side-effect pop", () => {
+      const index = buildMockIndex([
+        makeMultiPopGadget(["ebx", "eax"], 0x10031659),
+        makePopGadget("ebx", 0x10040404),
+      ]);
+      const result = solveValue(index, "ebx", 0x02020202, []);
+      expect(result!.steps).toHaveLength(2); // no filler slot
+      expect(result!.steps[0].address).toBe(0x10040404n);
+      expect(result!.clobbers).toEqual(["ebx"]); // eax untouched
+    });
+  });
+
+  describe("non-pop side effects", () => {
+    it("tracks a register clobbered by a mov (not a pop)", () => {
+      // pop ebx ; mov eax, esi ; ret — eax is clobbered without a pop.
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("mov", ["eax", "esi"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+      ]);
+      const result = solveValue(index, "ebx", 0x02020202, []);
+      expect(result).toBeDefined();
+      expect(result!.steps).toHaveLength(2); // mov consumes no stack -> no filler
+      expect(result!.clobbers).toContain("eax");
+    });
+
+    it("preserve excludes a gadget that clobbers via mov", () => {
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("mov", ["eax", "esi"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+      ]);
+      expect(solveValue(index, "ebx", 0x02020202, [], ["eax"])).toBeUndefined();
+    });
+
+    it("maps sub-register writes to their 32-bit parent", () => {
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("mov", ["al", "0x0"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+      ]);
+      const result = solveValue(index, "ebx", 0x02020202, []);
+      expect(result!.clobbers).toContain("eax"); // al -> eax
+    });
+
+    it("emits filler slots for an add esp stack skip", () => {
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("add", ["esp", "0x8"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+      ]);
+      const result = solveValue(index, "ebx", 0x02020202, []);
+      expect(result).toBeDefined();
+      // gadget, ebx value, 2 filler words for the 8-byte skip
+      expect(result!.steps).toHaveLength(4);
+      expect(result!.steps[2].comment).toContain("add esp");
+      expect(result!.steps[3].comment).toContain("add esp");
+    });
+
+    it("excludes gadgets whose ESP shift cannot be padded (sub esp)", () => {
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("sub", ["esp", "0x4"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+      ]);
+      expect(solveValue(index, "ebx", 0x02020202, [])).toBeUndefined();
+    });
+
+    it("excludes gadgets that push (moving ESP backward)", () => {
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("push", ["eax"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+      ]);
+      expect(solveValue(index, "ebx", 0x02020202, [])).toBeUndefined();
+    });
+
+    it("prefers a clean pop over one that clobbers via a non-pop write", () => {
+      const index = buildMockIndex([
+        makeGadget(
+          [makeInsn("pop", ["ebx"]), makeInsn("mov", ["eax", "esi"]), makeInsn("ret", [])],
+          0x10031659,
+          [{ kind: "LOAD_REGISTER", register: "ebx", evidence: "pop ebx" }],
+        ),
+        makePopGadget("ebx", 0x10040404),
+      ]);
+      const result = solveValue(index, "ebx", 0x02020202, []);
+      expect(result!.steps[0].address).toBe(0x10040404n);
+      expect(result!.clobbers).toEqual(["ebx"]);
+    });
+  });
+
+  describe("preserve", () => {
+    it("excludes gadgets that clobber a preserved register", () => {
+      // Only an eax-clobbering pop exists; preserving eax leaves no path.
+      const index = buildMockIndex([makeMultiPopGadget(["ebx", "eax"], 0x10031659)]);
+      const result = solveValue(index, "ebx", 0x02020202, [], ["eax"]);
+      expect(result).toBeUndefined();
+    });
+
+    it("falls back to a clean gadget when the preferred one clobbers a preserved register", () => {
+      const index = buildMockIndex([
+        makeMultiPopGadget(["ebx", "eax"], 0x10031659),
+        makePopGadget("ebx", 0x10040404),
+      ]);
+      const result = solveValue(index, "ebx", 0x02020202, [], ["eax"]);
+      expect(result).toBeDefined();
+      expect(result!.steps[0].address).toBe(0x10040404n);
+      expect(result!.clobbers).not.toContain("eax");
+    });
+
+    it("never lets the target register exclude its own construction", () => {
+      const index = buildMockIndex([makePopGadget("ebx", 0x10040404)]);
+      const result = solveValue(index, "ebx", 0x02020202, [], ["ebx"]);
+      expect(result).toBeDefined();
+      expect(result!.recipe).toBe("direct");
+    });
+
+    it("avoids a preserved register as arithmetic scratch", () => {
+      // Two-add needs a scratch; ebx is the only scratch pop, but it's preserved.
+      const index = buildMockIndex([
+        makePopGadget("edx", 0x10010101),
+        makePopGadget("ebx", 0x10030303),
+        makeAddGadget("edx", "ebx", 0x10040404),
+      ]);
+      const result = solveValue(index, "edx", 0x00001000, [0x00], ["ebx"]);
+      expect(result).toBeUndefined();
     });
   });
 

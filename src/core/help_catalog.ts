@@ -127,6 +127,16 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "rop.construct",
+    description: "Builds a badchar-safe ROP recipe that loads a value into a register using pop/arithmetic gadgets. Models each gadget's full side effects: emits filler slots for extra pops and `add esp` skips so the chain stays aligned, reports every register the recipe clobbers (including non-pop writes like `mov eax, ...`), and excludes gadgets whose ESP shift cannot be padded (push, sub esp). Pass a preserve list to exclude gadgets that would overwrite registers you need to keep live (e.g. eax already staged for a stdcall frame).",
+    usage: "dx @$osed().rop.construct(register, value, badchars?, preserve?)",
+    examples: [
+      'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D")',
+      'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D", "eax")',
+      'dx @$osed().rop.construct("edx", 0x1000, "00 0A 0D", "eax ecx")',
+    ],
+  },
+  {
     name: "rop.export",
     description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
     usage: "dx @$osed().rop.export(planId, path?)",

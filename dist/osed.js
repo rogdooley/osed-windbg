@@ -4061,6 +4061,123 @@ var osed_bundle = (() => {
 
   // src/rop/value_solver.ts
   var SCRATCH_CANDIDATES = ["eax", "ecx", "edx", "ebx", "esi", "edi"];
+  var SUBREGISTER_PARENT = {
+    ax: "eax",
+    al: "eax",
+    ah: "eax",
+    bx: "ebx",
+    bl: "ebx",
+    bh: "ebx",
+    cx: "ecx",
+    cl: "ecx",
+    ch: "ecx",
+    dx: "edx",
+    dl: "edx",
+    dh: "edx",
+    si: "esi",
+    di: "edi",
+    bp: "ebp",
+    sp: "esp"
+  };
+  var X86_REGISTERS = /* @__PURE__ */ new Set([
+    "eax",
+    "ebx",
+    "ecx",
+    "edx",
+    "esi",
+    "edi",
+    "ebp",
+    "esp",
+    ...Object.keys(SUBREGISTER_PARENT)
+  ]);
+  var STACK_UNSAFE_MNEMONICS = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
+  function normalizeRegister(operand) {
+    var _a;
+    const reg = operand == null ? void 0 : operand.trim().toLowerCase();
+    if (!reg || !X86_REGISTERS.has(reg)) return void 0;
+    return (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+  }
+  function parseImmediate(operand) {
+    if (operand === void 0) return void 0;
+    const t = operand.trim().toLowerCase();
+    if (/^0x[0-9a-f]+$/.test(t)) return parseInt(t, 16);
+    if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+    if (/^[0-9a-f]+h$/.test(t)) return parseInt(t.slice(0, -1), 16);
+    return void 0;
+  }
+  function gadgetEffects(gadget) {
+    var _a, _b, _c;
+    const insns = gadget.instructions;
+    const clobbers = /* @__PURE__ */ new Set();
+    const fillers = [];
+    let safe = true;
+    let reason;
+    const markUnsafe = (why) => {
+      if (safe) {
+        safe = false;
+        reason = why;
+      }
+    };
+    for (let i = 1; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn") break;
+      const rawDst = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase();
+      const dst = normalizeRegister(insn.operands[0]);
+      if (mnemonic === "pop") {
+        clobbers.add((_b = dst != null ? dst : rawDst) != null ? _b : "?");
+        fillers.push({ kind: "value", value: 1094795585, comment: `junk (${rawDst != null ? rawDst : "?"} side effect)` });
+        continue;
+      }
+      if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+        const imm = parseImmediate(insn.operands[1]);
+        if (imm === void 0 || imm % 4 !== 0) {
+          markUnsafe(`${mnemonic} esp, ${(_c = insn.operands[1]) != null ? _c : "?"} is not a paddable 4-byte multiple`);
+          continue;
+        }
+        if (mnemonic === "sub") {
+          markUnsafe(`sub esp, 0x${imm.toString(16)} shifts ESP back into consumed stack`);
+          continue;
+        }
+        for (let k = 0; k < imm / 4; k++) {
+          fillers.push({ kind: "value", value: 1094795585, comment: `junk (add esp, 0x${imm.toString(16)})` });
+        }
+        continue;
+      }
+      if (STACK_UNSAFE_MNEMONICS.has(mnemonic)) {
+        markUnsafe(`${mnemonic} alters ESP/control unpredictably`);
+        continue;
+      }
+      if (dst === "esp") {
+        markUnsafe(`${mnemonic} writes ESP directly`);
+        continue;
+      }
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister(insn.operands[0]);
+        const b = normalizeRegister(insn.operands[1]);
+        if (a === "esp" || b === "esp") {
+          markUnsafe("xchg with ESP");
+          continue;
+        }
+        if (a) clobbers.add(a);
+        if (b) clobbers.add(b);
+        continue;
+      }
+      if (mnemonic === "cmp" || mnemonic === "test" || mnemonic === "nop") continue;
+      if (dst) {
+        clobbers.add(dst);
+      }
+    }
+    return { clobbers: [...clobbers], fillers, safe, reason };
+  }
+  function collectClobbers(primaryReg, gadgets, scratch) {
+    const set = /* @__PURE__ */ new Set([primaryReg]);
+    if (scratch) set.add(scratch);
+    for (const gadget of gadgets) {
+      for (const reg of gadgetEffects(gadget).clobbers) set.add(reg);
+    }
+    return [...set];
+  }
   function isBadcharFree(value, badchars) {
     if (badchars.size === 0) return true;
     const w = value >>> 0;
@@ -4069,14 +4186,17 @@ var osed_bundle = (() => {
     }
     return true;
   }
-  function selectBest(candidates2) {
-    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g) })).filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== void 0);
+  function selectBest(candidates2, preserve) {
+    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
     if (withAddr.length === 0) return void 0;
     withAddr.sort((a, b) => {
       if (a.retImm !== b.retImm) return a.retImm - b.retImm;
+      const aCost = a.effects.clobbers.length + a.effects.fillers.length;
+      const bCost = b.effects.clobbers.length + b.effects.fillers.length;
+      if (aCost !== bCost) return aCost - bCost;
       return b.gadget.score - a.gadget.score;
     });
-    return withAddr[0];
+    return { gadget: withAddr[0].gadget, retImm: withAddr[0].retImm };
   }
   function gadgetStep(sel, comment) {
     return { kind: "gadget", address: firstKnownAddress(sel.gadget), comment };
@@ -4085,32 +4205,12 @@ var osed_bundle = (() => {
     return { kind: "value", value: value >>> 0, comment };
   }
   function extraPopSteps(gadget) {
-    var _a, _b;
-    const steps = [];
-    const insns = gadget.instructions;
-    for (let i = 0; i < insns.length; i++) {
-      const insn = insns[i];
-      if (insn.mnemonic === "pop" && i > 0 && insns[i - 1].mnemonic !== "ret") {
-      }
-    }
-    let foundPrimary = false;
-    for (const insn of insns) {
-      if (insn.mnemonic === "ret") break;
-      if (!foundPrimary && insn.mnemonic !== "pop") {
-        foundPrimary = true;
-        continue;
-      }
-      if (foundPrimary && insn.mnemonic === "pop") {
-        const reg = (_b = (_a = insn.operands[0]) == null ? void 0 : _a.trim().toLowerCase()) != null ? _b : "?";
-        steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg} side effect)` });
-      }
-    }
-    return steps;
+    return gadgetEffects(gadget).fillers;
   }
   function capKey(kind, register, targetRegister) {
     return [kind, register != null ? register : "", targetRegister != null ? targetRegister : ""].join(":");
   }
-  function findPopGadget(index, reg) {
+  function findPopGadget(index, reg, preserve) {
     var _a;
     const candidates2 = (_a = index.capabilityMap.get(capKey("LOAD_REGISTER", reg))) != null ? _a : [];
     const purePopRet = candidates2.filter((g) => {
@@ -4120,9 +4220,9 @@ var osed_bundle = (() => {
       if (last.mnemonic !== "ret") return false;
       return g.instructions[0].mnemonic === "pop" && ((_a2 = g.instructions[0].operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg;
     });
-    return selectBest(purePopRet);
+    return selectBest(purePopRet, preserve);
   }
-  function findZeroGadget(index, reg) {
+  function findZeroGadget(index, reg, preserve) {
     var _a;
     const candidates2 = (_a = index.capabilityMap.get(capKey("ZERO_REGISTER", reg))) != null ? _a : [];
     const pureXorRet = candidates2.filter((g) => {
@@ -4131,25 +4231,25 @@ var osed_bundle = (() => {
       const [xor, ret] = g.instructions;
       return xor.mnemonic === "xor" && ((_a2 = xor.operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && ((_b = xor.operands[1]) == null ? void 0 : _b.trim().toLowerCase()) === reg && ret.mnemonic === "ret";
     });
-    return selectBest(pureXorRet);
+    return selectBest(pureXorRet, preserve);
   }
-  function findUnaryGadget(index, kind, reg) {
+  function findUnaryGadget(index, kind, reg, preserve) {
     var _a;
     const candidates2 = (_a = index.capabilityMap.get(capKey(kind, reg))) != null ? _a : [];
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       return (last == null ? void 0 : last.mnemonic) === "ret";
     });
-    return selectBest(valid);
+    return selectBest(valid, preserve);
   }
-  function findBinaryGadget(index, kind, dst, src) {
+  function findBinaryGadget(index, kind, dst, src, preserve) {
     var _a;
     const candidates2 = (_a = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a : [];
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
       return (last == null ? void 0 : last.mnemonic) === "ret";
     });
-    return selectBest(valid);
+    return selectBest(valid, preserve);
   }
   function emitGadgetWithSideEffects(sel, comment) {
     const steps = [gadgetStep(sel, comment)];
@@ -4202,53 +4302,53 @@ var osed_bundle = (() => {
   function valueComment2(reg, value) {
     return `${reg} = ${hex32(value >>> 0)}`;
   }
-  function tryDirect(index, reg, value, badchars) {
+  function tryDirect(index, reg, value, badchars, preserve) {
     if (!isBadcharFree(value, badchars)) return void 0;
-    const pop = findPopGadget(index, reg);
+    const pop = findPopGadget(index, reg, preserve);
     if (!pop) return void 0;
     const steps = [
       ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
     ];
     steps.splice(1, 0, valueStep(value, valueComment2(reg, value)));
-    return { steps, recipe: "direct", stackBytes: steps.length * 4 };
+    return { steps, recipe: "direct", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget]) };
   }
-  function tryNegate(index, reg, value, badchars) {
+  function tryNegate(index, reg, value, badchars, preserve) {
     const negValue = -value >>> 0;
     if (!isBadcharFree(negValue, badchars)) return void 0;
-    const pop = findPopGadget(index, reg);
-    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg);
+    const pop = findPopGadget(index, reg, preserve);
+    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
     if (!pop || !neg) return void 0;
     const steps = [
       ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
     ];
     steps.splice(1, 0, valueStep(negValue, `${reg} = neg(${hex32(value >>> 0)}) = ${hex32(negValue)}`));
     steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
-    return { steps, recipe: "negate", stackBytes: steps.length * 4 };
+    return { steps, recipe: "negate", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, neg.gadget]) };
   }
-  function tryComplement(index, reg, value, badchars) {
+  function tryComplement(index, reg, value, badchars, preserve) {
     const notValue = ~value >>> 0;
     if (!isBadcharFree(notValue, badchars)) return void 0;
-    const pop = findPopGadget(index, reg);
-    const not = findUnaryGadget(index, "REGISTER_NOT", reg);
+    const pop = findPopGadget(index, reg, preserve);
+    const not = findUnaryGadget(index, "REGISTER_NOT", reg, preserve);
     if (!pop || !not) return void 0;
     const steps = [
       ...emitGadgetWithSideEffects(pop, `pop ${reg}`)
     ];
     steps.splice(1, 0, valueStep(notValue, `${reg} = not(${hex32(value >>> 0)}) = ${hex32(notValue)}`));
     steps.push(...emitGadgetWithSideEffects(not, `not ${reg} -> ${hex32(value >>> 0)}`));
-    return { steps, recipe: "complement", stackBytes: steps.length * 4 };
+    return { steps, recipe: "complement", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, not.gadget]) };
   }
-  function tryTwoOp(index, reg, value, badchars, mode) {
+  function tryTwoOp(index, reg, value, badchars, preserve, mode) {
     const decomp = findTwoValueDecomposition(value, badchars, mode);
     if (!decomp) return void 0;
     const capKind = mode === "add" ? "REGISTER_ADD" : "REGISTER_SUB";
-    const pop = findPopGadget(index, reg);
+    const pop = findPopGadget(index, reg, preserve);
     if (!pop) return void 0;
     for (const scratch of SCRATCH_CANDIDATES) {
-      if (scratch === reg) continue;
-      const binGadget = findBinaryGadget(index, capKind, reg, scratch);
+      if (scratch === reg || preserve.has(scratch)) continue;
+      const binGadget = findBinaryGadget(index, capKind, reg, scratch, preserve);
       if (!binGadget) continue;
-      const scratchPop = findPopGadget(index, scratch);
+      const scratchPop = findPopGadget(index, scratch, preserve);
       if (!scratchPop) continue;
       const steps = [];
       const popSteps = emitGadgetWithSideEffects(pop, `pop ${reg}`);
@@ -4259,19 +4359,25 @@ var osed_bundle = (() => {
       steps.push(...scratchSteps);
       const op = mode === "add" ? "add" : "sub";
       steps.push(...emitGadgetWithSideEffects(binGadget, `${op} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
-      return { steps, recipe: mode === "add" ? "two-add" : "two-sub", scratchRegister: scratch, stackBytes: steps.length * 4 };
+      return {
+        steps,
+        recipe: mode === "add" ? "two-add" : "two-sub",
+        scratchRegister: scratch,
+        stackBytes: steps.length * 4,
+        clobbers: collectClobbers(reg, [pop.gadget, scratchPop.gadget, binGadget.gadget], scratch)
+      };
     }
     return void 0;
   }
-  function tryZeroAdd(index, reg, value, badchars) {
+  function tryZeroAdd(index, reg, value, badchars, preserve) {
     if (!isBadcharFree(value, badchars)) return void 0;
-    const zero = findZeroGadget(index, reg);
+    const zero = findZeroGadget(index, reg, preserve);
     if (!zero) return void 0;
     for (const scratch of SCRATCH_CANDIDATES) {
-      if (scratch === reg) continue;
-      const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch);
+      if (scratch === reg || preserve.has(scratch)) continue;
+      const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch, preserve);
       if (!addGadget) continue;
-      const scratchPop = findPopGadget(index, scratch);
+      const scratchPop = findPopGadget(index, scratch, preserve);
       if (!scratchPop) continue;
       const steps = [];
       steps.push(...emitGadgetWithSideEffects(zero, `xor ${reg}, ${reg}`));
@@ -4279,20 +4385,26 @@ var osed_bundle = (() => {
       scratchSteps.splice(1, 0, valueStep(value, `${scratch} = ${hex32(value >>> 0)}`));
       steps.push(...scratchSteps);
       steps.push(...emitGadgetWithSideEffects(addGadget, `add ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
-      return { steps, recipe: "zero-add", scratchRegister: scratch, stackBytes: steps.length * 4 };
+      return {
+        steps,
+        recipe: "zero-add",
+        scratchRegister: scratch,
+        stackBytes: steps.length * 4,
+        clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, addGadget.gadget], scratch)
+      };
     }
     return void 0;
   }
-  function tryZeroSubNeg(index, reg, value, badchars) {
+  function tryZeroSubNeg(index, reg, value, badchars, preserve) {
     if (!isBadcharFree(value, badchars)) return void 0;
-    const zero = findZeroGadget(index, reg);
-    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg);
+    const zero = findZeroGadget(index, reg, preserve);
+    const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
     if (!zero || !neg) return void 0;
     for (const scratch of SCRATCH_CANDIDATES) {
-      if (scratch === reg) continue;
-      const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch);
+      if (scratch === reg || preserve.has(scratch)) continue;
+      const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch, preserve);
       if (!subGadget) continue;
-      const scratchPop = findPopGadget(index, scratch);
+      const scratchPop = findPopGadget(index, scratch, preserve);
       if (!scratchPop) continue;
       const steps = [];
       steps.push(...emitGadgetWithSideEffects(zero, `xor ${reg}, ${reg}`));
@@ -4301,16 +4413,24 @@ var osed_bundle = (() => {
       steps.push(...scratchSteps);
       steps.push(...emitGadgetWithSideEffects(subGadget, `sub ${reg}, ${scratch} -> neg(${hex32(value >>> 0)})`));
       steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
-      return { steps, recipe: "zero-sub-neg", scratchRegister: scratch, stackBytes: steps.length * 4 };
+      return {
+        steps,
+        recipe: "zero-sub-neg",
+        scratchRegister: scratch,
+        stackBytes: steps.length * 4,
+        clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, subGadget.gadget, neg.gadget], scratch)
+      };
     }
     return void 0;
   }
-  function solveValue(index, register, value, badchars) {
+  function solveValue(index, register, value, badchars, preserveRegisters = []) {
     var _a, _b, _c, _d, _e, _f;
     const reg = register.trim().toLowerCase();
     const v = value >>> 0;
     const bc = new Set(badchars.map((b) => b & 255));
-    return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc)) != null ? _a : tryNegate(index, reg, v, bc)) != null ? _b : tryComplement(index, reg, v, bc)) != null ? _c : tryTwoOp(index, reg, v, bc, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc)) != null ? _f : tryZeroSubNeg(index, reg, v, bc);
+    const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
+    preserve.delete(reg);
+    return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
   }
 
   // src/rop/planner.ts
@@ -7024,6 +7144,16 @@ var osed_bundle = (() => {
         "dx @$osed().rop.synthesize(1)",
         "dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 128})",
         'dx @$osed().rop.synthesize(1, {badchars: "00 0A 0D"})'
+      ]
+    },
+    {
+      name: "rop.construct",
+      description: "Builds a badchar-safe ROP recipe that loads a value into a register using pop/arithmetic gadgets. Models each gadget's full side effects: emits filler slots for extra pops and `add esp` skips so the chain stays aligned, reports every register the recipe clobbers (including non-pop writes like `mov eax, ...`), and excludes gadgets whose ESP shift cannot be padded (push, sub esp). Pass a preserve list to exclude gadgets that would overwrite registers you need to keep live (e.g. eax already staged for a stdcall frame).",
+      usage: "dx @$osed().rop.construct(register, value, badchars?, preserve?)",
+      examples: [
+        'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D")',
+        'dx @$osed().rop.construct("ebx", 0x201, "00 0A 0D", "eax")',
+        'dx @$osed().rop.construct("edx", 0x1000, "00 0A 0D", "eax ecx")'
       ]
     },
     {
@@ -11134,10 +11264,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T17:28:52.633Z" : globalThis[key2];
+        value = true ? "2026-08-29T18:35:42.850Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "a0fac4591c8f" : globalThis[key2];
+        value = true ? "26195de978c2" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13277,21 +13407,23 @@ var osed_bundle = (() => {
       const rawValue = args[1] !== void 0 ? Number(args[1]) : NaN;
       const value = Number.isFinite(rawValue) ? rawValue >>> 0 : void 0;
       const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
+      const preserve = parseRegisterList(args[3]);
       if (!register || value === void 0) {
         const rows2 = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
         renderRows("Value Construction", rows2);
         setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
         return toDxResult("Value Construction", rows2);
       }
-      const recipe = solveValue(currentRopCorpus, register, value, badchars);
+      const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve);
       if (!recipe) {
-        const rows2 = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}` }];
+        const preserveNote = preserve.length > 0 ? ` while preserving ${preserve.join(", ")}` : "";
+        const rows2 = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}${preserveNote}` }];
         renderRows("Value Construction", rows2);
-        setResult({ command: "rop.construct", args: { register, value, badchars }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}`] });
+        setResult({ command: "rop.construct", args: { register, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}${preserveNote}`] });
         return toDxResult("Value Construction", rows2);
       }
       section(`Value Construction: ${register} = ${hex32(value)}`);
-      info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""}`);
+      info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
       const python = formatChainPython({ steps: recipe.steps });
       for (const line of python) {
         print(line);
@@ -13309,7 +13441,7 @@ var osed_bundle = (() => {
         command: "rop.construct",
         args: { register, value, badchars },
         success: true,
-        findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes }],
+        findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes, clobbers: recipe.clobbers }],
         warnings: [],
         errors: []
       });
@@ -13723,6 +13855,10 @@ var osed_bundle = (() => {
   }
   function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function parseRegisterList(value) {
+    const raw = Array.isArray(value) ? value.map((v) => String(v)) : typeof value === "string" ? value.split(/[,\s]+/) : [];
+    return raw.map((r) => r.trim().toLowerCase()).filter((r) => r.length > 0);
   }
   function parseHexByteList(value) {
     if (Array.isArray(value)) {
