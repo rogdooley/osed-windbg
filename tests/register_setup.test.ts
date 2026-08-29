@@ -7,8 +7,22 @@ function insn(mnemonic: string, operands: string[]) {
   return { mnemonic, operands };
 }
 
+function inferCapabilities(instructions: Array<{ mnemonic: string; operands: string[] }>) {
+  const caps: Array<Record<string, string>> = [];
+  for (const insn of instructions) {
+    const m = insn.mnemonic.toLowerCase();
+    const dst = insn.operands[0]?.trim().toLowerCase();
+    if (!dst) continue;
+    if (m === "pop") caps.push({ kind: "LOAD_REGISTER", register: dst, evidence: "mock" });
+    else if (m === "neg") caps.push({ kind: "REGISTER_NEGATE", register: dst, evidence: "mock" });
+    else if (m === "not") caps.push({ kind: "REGISTER_NOT", register: dst, evidence: "mock" });
+    else if (m === "add") caps.push({ kind: "REGISTER_ADD", register: dst, targetRegister: insn.operands[1]?.trim().toLowerCase() ?? "", evidence: "mock" });
+    else if (m === "sub") caps.push({ kind: "REGISTER_SUB", register: dst, targetRegister: insn.operands[1]?.trim().toLowerCase() ?? "", evidence: "mock" });
+  }
+  return caps.length > 0 ? caps : [{ kind: "LOAD_REGISTER", register: "eax", evidence: "mock" }];
+}
+
 function makeGadget(instructions: Array<{ mnemonic: string; operands: string[] }>, address: number, score = 50): RopGadget {
-  const first = instructions[0];
   return {
     schemaVersion: "v1",
     canonicalId: `mock_${address}`,
@@ -19,7 +33,7 @@ function makeGadget(instructions: Array<{ mnemonic: string; operands: string[] }
     score,
     scoreReasons: [],
     classificationReasons: [],
-    capabilities: [{ kind: "LOAD_REGISTER", register: first.operands[0] ?? "eax", evidence: "mock" }],
+    capabilities: inferCapabilities(instructions),
   } as unknown as RopGadget;
 }
 
@@ -98,17 +112,31 @@ describe("register setup packing", () => {
     const plan = planRegisterSetupPacking(index, { esi: 0x11111111, ebx: 0x22222222 }, []);
     expect(plan.success).toBe(false);
     expect(plan.unresolved).toHaveLength(1);
-    expect(plan.unresolved[0].reason).toMatch(/already-finalized/);
+    expect(plan.unresolved[0].reason).toMatch(/finalized/);
   });
 
-  it("flags a badchar-tainted value and points at rop.construct", () => {
+  it("builds a badchar-tainted value via arithmetic construction", () => {
+    // 0x40 = 0x00000040 has null bytes; negate = 0xFFFFFFC0 is clean.
+    const index = buildMockIndex([
+      makeGadget([insn("pop", ["ecx"]), insn("ret", [])], 0x11223344),
+      makeGadget([insn("neg", ["ecx"]), insn("ret", [])], 0x22334455),
+    ]);
+    const plan = planRegisterSetupPacking(index, { ecx: 0x00000040 }, [0x00]);
+    expect(plan.success).toBe(true);
+    expect(plan.ordered).toContain("ecx");
+    // the popped intermediate is the badchar-free negation
+    expect(plan.steps.some((s) => s.value === 0xffffffc0)).toBe(true);
+  });
+
+  it("reports an unbuildable tainted value honestly", () => {
+    // Only a direct pop; 0x41 is null-heavy and there is no neg/add gadget.
     const index = buildMockIndex([
       makeGadget([insn("pop", ["ebx"]), insn("ret", [])], 0x11223344),
     ]);
     const plan = planRegisterSetupPacking(index, { ebx: 0x00000041 }, [0x00]);
     expect(plan.success).toBe(false);
     expect(plan.unresolved[0].register).toBe("ebx");
-    expect(plan.unresolved[0].reason).toMatch(/rop\.construct/);
+    expect(plan.unresolved[0].reason).toMatch(/no pop\/arithmetic construction/);
   });
 
   it("excludes gadgets whose address contains a badchar", () => {

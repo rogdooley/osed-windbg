@@ -1,6 +1,7 @@
-import { CapabilityIndex } from "./capabilities";
+import { buildCapabilities, CapabilityIndex } from "./capabilities";
 import { ChainStep, firstKnownAddress, hex32, retImmBytes, retImmPadding } from "./chain";
 import { RopGadget } from "./types";
+import { solveValue } from "./value_solver";
 
 // Register-packing setup planner. Unlike solveValue (one register at a time),
 // this loads a whole set of target registers at once — the case you hit when
@@ -168,7 +169,17 @@ export function planRegisterSetupPacking(
     targetValues.set(parent(reg.trim().toLowerCase()), value >>> 0);
   }
 
-  const candidates: Candidate[] = index.gadgets
+  // Both the packing path and the arithmetic path (solveValue) must see the same
+  // badchar-clean corpus, so a gadget whose address contains a badchar is never
+  // selected by either. Rebuild a filtered index once and use it throughout.
+  const workingIndex = bc.size === 0
+    ? index
+    : buildCapabilities(index.gadgets.filter((g) => {
+        const addr = firstKnownAddress(g);
+        return addr === undefined || addressBadcharFree(addr, bc);
+      }));
+
+  const candidates: Candidate[] = workingIndex.gadgets
     .map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) }))
     .filter((c): c is Candidate & { address: bigint } =>
       c.address !== undefined && c.retImm >= 0 && c.shape.safe && c.shape.popRegs.length > 0)
@@ -227,37 +238,88 @@ export function planRegisterSetupPacking(
       if (keyGreater(key, bestKey)) { bestKey = key; best = { candidate, cover }; }
     }
 
-    if (!best) break;
+    if (best) {
+      // Direct multi-pop packing for badchar-free values.
+      const { candidate, cover } = best;
+      steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
+      // Assign each target its value at the LAST slot that pops it; junk elsewhere.
+      const lastIndexOf = new Map<string, number>();
+      candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
+      candidate.shape.popRegs.forEach((reg, idx) => {
+        if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
+          steps.push({ kind: "value", value: targetValues.get(reg)! >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg)!)}` });
+        } else {
+          steps.push({ kind: "value", value: 0x41414141, comment: `junk (${reg})` });
+        }
+      });
+      steps.push(...candidate.shape.espFillers);
+      steps.push(...retImmPadding(candidate.retImm));
+      for (const reg of cover) { pending.delete(reg); done.add(reg); ordered.push(reg); }
+      continue;
+    }
 
-    const { candidate, cover } = best;
-    steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
-    // Assign each target its value at the LAST slot that pops it; junk elsewhere.
-    const lastIndexOf = new Map<string, number>();
-    candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
-    candidate.shape.popRegs.forEach((reg, idx) => {
-      if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
-        steps.push({ kind: "value", value: targetValues.get(reg)! >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg)!)}` });
-      } else {
-        steps.push({ kind: "value", value: 0x41414141, comment: `junk (${reg})` });
-      }
-    });
-    steps.push(...candidate.shape.espFillers);
-    steps.push(...retImmPadding(candidate.retImm));
-
-    for (const reg of cover) { pending.delete(reg); done.add(reg); ordered.push(reg); }
+    // No direct pop covers a pending target (typical for frame values, which are
+    // null-heavy). Fall back to arithmetic construction for one register, built
+    // so it preserves every already-finalized register. Registers that NEED a
+    // scratch are built first, while pending registers are still free to borrow.
+    const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater);
+    if (!arith) break;
+    steps.push(...arith.recipe.steps);
+    pending.delete(arith.register);
+    done.add(arith.register);
+    ordered.push(arith.register);
   }
 
-  const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, candidates, done, targetValues, bc) }));
+  const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates, done, targetValues, badchars, bc) }));
   return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
+}
+
+function pickArithmeticBuild(
+  index: CapabilityIndex,
+  pending: Set<string>,
+  targetValues: Map<string, number>,
+  badchars: number[],
+  done: Set<string>,
+  keyGreater: (a: number[], b: number[] | undefined) => boolean,
+): { register: string; recipe: NonNullable<ReturnType<typeof solveValue>> } | undefined {
+  const preserve = [...done];
+  let best: { register: string; recipe: NonNullable<ReturnType<typeof solveValue>> } | undefined;
+  let bestKey: number[] | undefined;
+  for (const reg of pending) {
+    const recipe = solveValue(index, reg, targetValues.get(reg)!, badchars, preserve);
+    if (!recipe) continue;
+    // solveValue already prefers scratch-free recipes (direct/negate/complement)
+    // over two-op, so a defined scratchRegister means this register genuinely
+    // needs one. Build scratch-needing registers first, while other pending
+    // registers are still available to borrow; then fewest pending clobbers;
+    // then the smallest recipe.
+    const usesScratch = recipe.scratchRegister ? 1 : 0;
+    const pendingCollateral = recipe.clobbers.filter((c) => c !== reg && pending.has(c)).length;
+    const key = [usesScratch, -pendingCollateral, -recipe.stackBytes];
+    if (keyGreater(key, bestKey)) { bestKey = key; best = { register: reg, recipe }; }
+  }
+  return best;
 }
 
 function reasonFor(
   reg: string,
+  index: CapabilityIndex,
   candidates: Candidate[],
   done: Set<string>,
   targetValues: Map<string, number>,
+  badcharList: number[],
   badchars: Set<number>,
 ): string {
+  // A register only reaches "unresolved" after both direct packing and
+  // arithmetic construction failed. Distinguish the two failure modes.
+  const buildableSomehow = solveValue(index, reg, targetValues.get(reg)!, badcharList) !== undefined;
+  const buildablePreserving = solveValue(index, reg, targetValues.get(reg)!, badcharList, [...done]) !== undefined;
+  if (buildableSomehow && !buildablePreserving) {
+    return `can only be built using a register already finalized (${[...done].join(", ")}) as scratch; too many registers were set before it — free a scratch register or build ${reg} earlier`;
+  }
+  if (!buildableSomehow) {
+    return `no pop/arithmetic construction found for ${hex32(targetValues.get(reg)!)} under these badchars and gadgets`;
+  }
   const setters = candidates.filter((c) => c.shape.cleanPops.has(reg));
   if (setters.length === 0) return `no safe gadget cleanly pops ${reg}`;
   if (!isBadcharFree(targetValues.get(reg)!, badchars)) {

@@ -4090,6 +4090,36 @@ var osed_bundle = (() => {
     "esp",
     ...Object.keys(SUBREGISTER_PARENT)
   ]);
+  var WRITE_DEST_MNEMONICS = /* @__PURE__ */ new Set([
+    "mov",
+    "movzx",
+    "movsx",
+    "lea",
+    "xor",
+    "or",
+    "and",
+    "add",
+    "sub",
+    "adc",
+    "sbb",
+    "inc",
+    "dec",
+    "neg",
+    "not",
+    "imul",
+    "shl",
+    "shr",
+    "sar",
+    "sal",
+    "rol",
+    "ror",
+    "bswap",
+    "xadd",
+    "cmovz",
+    "cmovnz",
+    "cmove",
+    "cmovne"
+  ]);
   var STACK_UNSAFE_MNEMONICS = /* @__PURE__ */ new Set(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
   function normalizeRegister(operand) {
     var _a;
@@ -4170,6 +4200,56 @@ var osed_bundle = (() => {
     }
     return { clobbers: [...clobbers], fillers, safe, reason };
   }
+  function poppedRegisterSurvives(gadget, reg) {
+    var _a;
+    const insns = gadget.instructions;
+    const target = (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    for (let i = 1; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn") break;
+      const dst = normalizeRegister(insn.operands[0]);
+      if (mnemonic === "pop" && dst === target) return false;
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister(insn.operands[0]);
+        const b = normalizeRegister(insn.operands[1]);
+        if (a === target || b === target) return false;
+        continue;
+      }
+      if (WRITE_DEST_MNEMONICS.has(mnemonic) && dst === target) return false;
+    }
+    return true;
+  }
+  function registerFinalWriteMnemonic(gadget, reg) {
+    var _a;
+    const target = (_a = SUBREGISTER_PARENT[reg]) != null ? _a : reg;
+    let last;
+    const insns = gadget.instructions;
+    for (let i = 0; i < insns.length; i++) {
+      const insn = insns[i];
+      const mnemonic = insn.mnemonic.trim().toLowerCase();
+      if (mnemonic === "ret" || mnemonic === "retn") break;
+      const dst = normalizeRegister(insn.operands[0]);
+      if (mnemonic === "pop" && dst === target) {
+        last = "pop";
+        continue;
+      }
+      if (mnemonic === "xchg") {
+        const a = normalizeRegister(insn.operands[0]);
+        const b = normalizeRegister(insn.operands[1]);
+        if (a === target || b === target) last = "xchg";
+        continue;
+      }
+      if (WRITE_DEST_MNEMONICS.has(mnemonic) && dst === target) last = mnemonic;
+    }
+    return last;
+  }
+  var OPERATION_MNEMONIC = {
+    REGISTER_NEGATE: "neg",
+    REGISTER_NOT: "not",
+    REGISTER_ADD: "add",
+    REGISTER_SUB: "sub"
+  };
   function collectClobbers(primaryReg, gadgets, scratch) {
     const set = /* @__PURE__ */ new Set([primaryReg]);
     if (scratch) set.add(scratch);
@@ -4218,7 +4298,7 @@ var osed_bundle = (() => {
       if (g.instructions.length < 2) return false;
       const last = g.instructions[g.instructions.length - 1];
       if (last.mnemonic !== "ret") return false;
-      return g.instructions[0].mnemonic === "pop" && ((_a2 = g.instructions[0].operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg;
+      return g.instructions[0].mnemonic === "pop" && ((_a2 = g.instructions[0].operands[0]) == null ? void 0 : _a2.trim().toLowerCase()) === reg && poppedRegisterSurvives(g, reg);
     });
     return selectBest(purePopRet, preserve);
   }
@@ -4236,18 +4316,22 @@ var osed_bundle = (() => {
   function findUnaryGadget(index, kind, reg, preserve) {
     var _a;
     const candidates2 = (_a = index.capabilityMap.get(capKey(kind, reg))) != null ? _a : [];
+    const expected = OPERATION_MNEMONIC[kind];
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
-      return (last == null ? void 0 : last.mnemonic) === "ret";
+      if ((last == null ? void 0 : last.mnemonic) !== "ret") return false;
+      return expected === void 0 || registerFinalWriteMnemonic(g, reg) === expected;
     });
     return selectBest(valid, preserve);
   }
   function findBinaryGadget(index, kind, dst, src, preserve) {
     var _a;
     const candidates2 = (_a = index.capabilityMap.get(capKey(kind, dst, src))) != null ? _a : [];
+    const expected = OPERATION_MNEMONIC[kind];
     const valid = candidates2.filter((g) => {
       const last = g.instructions[g.instructions.length - 1];
-      return (last == null ? void 0 : last.mnemonic) === "ret";
+      if ((last == null ? void 0 : last.mnemonic) !== "ret") return false;
+      return expected === void 0 || registerFinalWriteMnemonic(g, dst) === expected;
     });
     return selectBest(valid, preserve);
   }
@@ -4571,7 +4655,11 @@ var osed_bundle = (() => {
     for (const [reg, value] of Object.entries(targets)) {
       targetValues.set(parent(reg.trim().toLowerCase()), value >>> 0);
     }
-    const candidates2 = index.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
+    const workingIndex = bc.size === 0 ? index : buildCapabilities(index.gadgets.filter((g) => {
+      const addr = firstKnownAddress(g);
+      return addr === void 0 || addressBadcharFree(addr, bc);
+    }));
+    const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
     const clobberFrequency = /* @__PURE__ */ new Map();
     for (const c of candidates2) {
       for (const reg of c.shape.writes) clobberFrequency.set(reg, ((_a = clobberFrequency.get(reg)) != null ? _a : 0) + 1);
@@ -4590,56 +4678,89 @@ var osed_bundle = (() => {
     while (pending.size > 0) {
       let best;
       let bestKey;
-      for (const candidate2 of candidates2) {
-        if (!addressBadcharFree(candidate2.address, bc)) continue;
+      for (const candidate of candidates2) {
+        if (!addressBadcharFree(candidate.address, bc)) continue;
         let corrupts = false;
-        for (const reg of candidate2.shape.writes) {
+        for (const reg of candidate.shape.writes) {
           if (done.has(reg)) {
             corrupts = true;
             break;
           }
         }
         if (corrupts) continue;
-        const cover2 = /* @__PURE__ */ new Set();
-        for (const reg of candidate2.shape.cleanPops) {
+        const cover = /* @__PURE__ */ new Set();
+        for (const reg of candidate.shape.cleanPops) {
           if (!pending.has(reg)) continue;
           if (!isBadcharFree2(targetValues.get(reg), bc)) continue;
-          cover2.add(reg);
+          cover.add(reg);
         }
-        if (cover2.size === 0) continue;
-        const waste = candidate2.shape.writes.size - cover2.size + candidate2.shape.espFillers.length;
+        if (cover.size === 0) continue;
+        const waste = candidate.shape.writes.size - cover.size + candidate.shape.espFillers.length;
         let deferSum = 0;
-        for (const reg of cover2) deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
-        const key2 = [cover2.size, -deferSum, -waste, candidate2.score, -candidate2.retImm];
+        for (const reg of cover) deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
+        const key2 = [cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
         if (keyGreater(key2, bestKey)) {
           bestKey = key2;
-          best = { candidate: candidate2, cover: cover2 };
+          best = { candidate, cover };
         }
       }
-      if (!best) break;
-      const { candidate, cover } = best;
-      steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
-      const lastIndexOf = /* @__PURE__ */ new Map();
-      candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
-      candidate.shape.popRegs.forEach((reg, idx) => {
-        if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
-          steps.push({ kind: "value", value: targetValues.get(reg) >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg))}` });
-        } else {
-          steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg})` });
+      if (best) {
+        const { candidate, cover } = best;
+        steps.push({ kind: "gadget", address: candidate.address, comment: describeGadget(candidate.gadget) });
+        const lastIndexOf = /* @__PURE__ */ new Map();
+        candidate.shape.popRegs.forEach((reg, idx) => lastIndexOf.set(reg, idx));
+        candidate.shape.popRegs.forEach((reg, idx) => {
+          if (cover.has(reg) && lastIndexOf.get(reg) === idx) {
+            steps.push({ kind: "value", value: targetValues.get(reg) >>> 0, comment: `${reg} = ${hex32(targetValues.get(reg))}` });
+          } else {
+            steps.push({ kind: "value", value: 1094795585, comment: `junk (${reg})` });
+          }
+        });
+        steps.push(...candidate.shape.espFillers);
+        steps.push(...retImmPadding(candidate.retImm));
+        for (const reg of cover) {
+          pending.delete(reg);
+          done.add(reg);
+          ordered.push(reg);
         }
-      });
-      steps.push(...candidate.shape.espFillers);
-      steps.push(...retImmPadding(candidate.retImm));
-      for (const reg of cover) {
-        pending.delete(reg);
-        done.add(reg);
-        ordered.push(reg);
+        continue;
       }
+      const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater);
+      if (!arith) break;
+      steps.push(...arith.recipe.steps);
+      pending.delete(arith.register);
+      done.add(arith.register);
+      ordered.push(arith.register);
     }
-    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, candidates2, done, targetValues, bc) }));
+    const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
     return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
   }
-  function reasonFor(reg, candidates2, done, targetValues, badchars) {
+  function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater) {
+    const preserve = [...done];
+    let best;
+    let bestKey;
+    for (const reg of pending) {
+      const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve);
+      if (!recipe) continue;
+      const usesScratch = recipe.scratchRegister ? 1 : 0;
+      const pendingCollateral = recipe.clobbers.filter((c) => c !== reg && pending.has(c)).length;
+      const key2 = [usesScratch, -pendingCollateral, -recipe.stackBytes];
+      if (keyGreater(key2, bestKey)) {
+        bestKey = key2;
+        best = { register: reg, recipe };
+      }
+    }
+    return best;
+  }
+  function reasonFor(reg, index, candidates2, done, targetValues, badcharList, badchars) {
+    const buildableSomehow = solveValue(index, reg, targetValues.get(reg), badcharList) !== void 0;
+    const buildablePreserving = solveValue(index, reg, targetValues.get(reg), badcharList, [...done]) !== void 0;
+    if (buildableSomehow && !buildablePreserving) {
+      return `can only be built using a register already finalized (${[...done].join(", ")}) as scratch; too many registers were set before it \u2014 free a scratch register or build ${reg} earlier`;
+    }
+    if (!buildableSomehow) {
+      return `no pop/arithmetic construction found for ${hex32(targetValues.get(reg))} under these badchars and gadgets`;
+    }
     const setters = candidates2.filter((c) => c.shape.cleanPops.has(reg));
     if (setters.length === 0) return `no safe gadget cleanly pops ${reg}`;
     if (!isBadcharFree2(targetValues.get(reg), badchars)) {
@@ -11497,10 +11618,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T20:57:00.117Z" : globalThis[key2];
+        value = true ? "2026-08-29T21:09:42.746Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "f81711fb71c0" : globalThis[key2];
+        value = true ? "cd9312f4fd01" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

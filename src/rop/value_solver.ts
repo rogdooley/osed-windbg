@@ -123,6 +123,61 @@ function gadgetEffects(gadget: RopGadget): GadgetEffects {
   return { clobbers: [...clobbers], fillers, safe, reason };
 }
 
+// True if the register is written again after its initial pop (by a later pop,
+// an ALU write, or an xchg), so the popped value does NOT survive to the ret.
+// Such a gadget cannot be used to load that register to a chosen value.
+function poppedRegisterSurvives(gadget: RopGadget, reg: string): boolean {
+  const insns = gadget.instructions;
+  const target = SUBREGISTER_PARENT[reg] ?? reg;
+  for (let i = 1; i < insns.length; i++) {
+    const insn = insns[i];
+    const mnemonic = insn.mnemonic.trim().toLowerCase();
+    if (mnemonic === "ret" || mnemonic === "retn") break;
+    const dst = normalizeRegister(insn.operands[0]);
+    if (mnemonic === "pop" && dst === target) return false;
+    if (mnemonic === "xchg") {
+      const a = normalizeRegister(insn.operands[0]);
+      const b = normalizeRegister(insn.operands[1]);
+      if (a === target || b === target) return false;
+      continue;
+    }
+    if (WRITE_DEST_MNEMONICS.has(mnemonic) && dst === target) return false;
+  }
+  return true;
+}
+
+// Mnemonic of the last instruction (before the ret) that writes `reg`, or
+// undefined if none does. Used to confirm the intended operation is the final
+// thing that touches the register — e.g. `neg ecx ; sbb ecx, ecx ; ret` writes
+// ecx last with sbb, so it is NOT a usable negate gadget for ecx.
+function registerFinalWriteMnemonic(gadget: RopGadget, reg: string): string | undefined {
+  const target = SUBREGISTER_PARENT[reg] ?? reg;
+  let last: string | undefined;
+  const insns = gadget.instructions;
+  for (let i = 0; i < insns.length; i++) {
+    const insn = insns[i];
+    const mnemonic = insn.mnemonic.trim().toLowerCase();
+    if (mnemonic === "ret" || mnemonic === "retn") break;
+    const dst = normalizeRegister(insn.operands[0]);
+    if (mnemonic === "pop" && dst === target) { last = "pop"; continue; }
+    if (mnemonic === "xchg") {
+      const a = normalizeRegister(insn.operands[0]);
+      const b = normalizeRegister(insn.operands[1]);
+      if (a === target || b === target) last = "xchg";
+      continue;
+    }
+    if (WRITE_DEST_MNEMONICS.has(mnemonic) && dst === target) last = mnemonic;
+  }
+  return last;
+}
+
+const OPERATION_MNEMONIC: Record<string, string> = {
+  REGISTER_NEGATE: "neg",
+  REGISTER_NOT: "not",
+  REGISTER_ADD: "add",
+  REGISTER_SUB: "sub",
+};
+
 function collectClobbers(primaryReg: string, gadgets: RopGadget[], scratch?: string): string[] {
   const set = new Set<string>([primaryReg]);
   if (scratch) set.add(scratch);
@@ -188,7 +243,8 @@ function findPopGadget(index: CapabilityIndex, reg: string, preserve?: Set<strin
     const last = g.instructions[g.instructions.length - 1];
     if (last.mnemonic !== "ret") return false;
     return g.instructions[0].mnemonic === "pop" &&
-      g.instructions[0].operands[0]?.trim().toLowerCase() === reg;
+      g.instructions[0].operands[0]?.trim().toLowerCase() === reg &&
+      poppedRegisterSurvives(g, reg);
   });
   return selectBest(purePopRet, preserve);
 }
@@ -208,18 +264,23 @@ function findZeroGadget(index: CapabilityIndex, reg: string, preserve?: Set<stri
 
 function findUnaryGadget(index: CapabilityIndex, kind: string, reg: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey(kind, reg)) ?? [];
+  const expected = OPERATION_MNEMONIC[kind];
   const valid = candidates.filter((g) => {
     const last = g.instructions[g.instructions.length - 1];
-    return last?.mnemonic === "ret";
+    if (last?.mnemonic !== "ret") return false;
+    // The operation must be the final write to reg, so its result survives the ret.
+    return expected === undefined || registerFinalWriteMnemonic(g, reg) === expected;
   });
   return selectBest(valid, preserve);
 }
 
 function findBinaryGadget(index: CapabilityIndex, kind: string, dst: string, src: string, preserve?: Set<string>): GadgetSelection | undefined {
   const candidates = index.capabilityMap.get(capKey(kind, dst, src)) ?? [];
+  const expected = OPERATION_MNEMONIC[kind];
   const valid = candidates.filter((g) => {
     const last = g.instructions[g.instructions.length - 1];
-    return last?.mnemonic === "ret";
+    if (last?.mnemonic !== "ret") return false;
+    return expected === undefined || registerFinalWriteMnemonic(g, dst) === expected;
   });
   return selectBest(valid, preserve);
 }
