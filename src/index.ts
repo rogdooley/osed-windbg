@@ -63,6 +63,7 @@ import { getVersionInfo } from "./core/version";
 import { createStringCommands } from "./commands/strings";
 import { createFindStackBytesCommand } from "./commands/find_stack_bytes";
 import { createFindMemBytesCommand } from "./commands/find_mem_bytes";
+import { createStackmapCommand } from "./commands/stackmap";
 import type { SerializedLandingEvidence } from "./analysis/landing";
 
 declare const self: Record<string, unknown> | undefined;
@@ -274,6 +275,7 @@ function registerAll(): void {
     createFindMemBytesCommand(),
     createFindStackBytesCommand(),
     createLandingCommand(),
+    createStackmapCommand(),
     createMathCommand(),
     createVersionCommand(),
     ...createStringCommands(),
@@ -1940,6 +1942,11 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
         maxResults: args[2],
         executableOnly: args[3],
         mode: args[4],
+      };
+    case "stackmap":
+      return {
+        depth: args[0],
+        patternLength: args[1],
       };
     case "triage":
       return {

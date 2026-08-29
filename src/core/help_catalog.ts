@@ -312,6 +312,16 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: ["dx @$osed().sc.page_summary(\"kernel32\")"],
   },
   {
+    name: "stackmap",
+    description: "Maps the call stack at crash time, classifying each slot as pattern bytes (PATTERN), verified return address (RET), saved frame pointer (SAVED_EBP), stale module pointer (STALE_PTR), null (NULL), or data (DATA). Reports controlled slot count, ROP room, and chain entry point.",
+    usage: "dx @$osed().stackmap(depth?, patternLength?)",
+    examples: [
+      "dx @$osed().stackmap()",
+      "dx @$osed().stackmap(128)",
+      "dx @$osed().stackmap(64, 20000)",
+    ],
+  },
+  {
     name: "exploit.state",
     description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
     usage: "dx @$osed().exploit.state(overrides?)",

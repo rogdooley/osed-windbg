@@ -1688,6 +1688,14 @@ var osed_bundle = (() => {
     if (module.safeseh === "disabled") score += 30;
     return score;
   }
+  var TRIAGE_ASLR_TAIL_LIMIT = 6;
+  function selectTriageModules(scored) {
+    const ranked = [...scored].sort((a, b) => b.score - a.score);
+    return [
+      ...ranked.filter((item) => item.aslr === "disabled"),
+      ...ranked.filter((item) => item.aslr !== "disabled").slice(0, TRIAGE_ASLR_TAIL_LIMIT)
+    ];
+  }
   function scanGadgets(pointerSize, moduleFilter) {
     const fmt = (address) => {
       const mod = findModuleByAddress(address);
@@ -1779,7 +1787,7 @@ var osed_bundle = (() => {
   function createTriageCommand() {
     return {
       name: "triage",
-      description: "Fast crash triage for exploit-development workflows.",
+      description: "Fast crash triage for exploit-development workflows. The MODULE SCORE table lists every attacker-controlled (ASLR-disabled) module, since those tie at the top score and are all equally worth using; only the ASLR-enabled tail is capped so hardened targets stay bounded.",
       usage: "dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)",
       examples: ["dx @$osed().triage()", 'dx @$osed().triage(10000, "00 0A 0D", "vulnserver")'],
       schema: {
@@ -1802,14 +1810,16 @@ var osed_bundle = (() => {
         const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : void 0;
         const shellcode = landingCandidateAddresses(landingEvidence);
         const badcharStats = quickBadcharScan(stackBytes, badchars);
-        const modules = listModulesWithMitigations(moduleFilter).map((module) => ({
-          module: module.name,
-          score: scoreModule(module),
-          aslr: module.aslr,
-          nxcompat: module.nxcompat,
-          safeseh: module.safeseh,
-          system: module.system
-        })).sort((a, b) => b.score - a.score).slice(0, 6);
+        const modules = selectTriageModules(
+          listModulesWithMitigations(moduleFilter).map((module) => ({
+            module: module.name,
+            score: scoreModule(module),
+            aslr: module.aslr,
+            nxcompat: module.nxcompat,
+            safeseh: module.safeseh,
+            system: module.system
+          }))
+        );
         const gadgets = scanGadgets(pointerSize, moduleFilter);
         const ipBackedByModule = regs.ip !== void 0 ? findModuleByAddress(regs.ip) !== void 0 : void 0;
         const eipControlled = isInstructionPointerControlled({
@@ -7164,6 +7174,16 @@ var osed_bundle = (() => {
       examples: ['dx @$osed().sc.page_summary("kernel32")']
     },
     {
+      name: "stackmap",
+      description: "Maps the call stack at crash time, classifying each slot as pattern bytes (PATTERN), verified return address (RET), saved frame pointer (SAVED_EBP), stale module pointer (STALE_PTR), null (NULL), or data (DATA). Reports controlled slot count, ROP room, and chain entry point.",
+      usage: "dx @$osed().stackmap(depth?, patternLength?)",
+      examples: [
+        "dx @$osed().stackmap()",
+        "dx @$osed().stackmap(128)",
+        "dx @$osed().stackmap(64, 20000)"
+      ]
+    },
+    {
       name: "exploit.state",
       description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
       usage: "dx @$osed().exploit.state(overrides?)",
@@ -11076,10 +11096,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-27T01:01:48.208Z" : globalThis[key2];
+        value = true ? "2026-08-29T17:02:09.140Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "848c707b1a1e" : globalThis[key2];
+        value = true ? "be4c680ed172" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11804,6 +11824,321 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/analysis/stackmap.ts
+  var CALL_NEAR_REL32 = 232;
+  var CALL_INDIRECT_FF = 255;
+  function isCallInstruction(bytes) {
+    if (bytes.length === 0) return false;
+    if (bytes[0] === CALL_NEAR_REL32 && bytes.length >= 5) return true;
+    if (bytes[0] === CALL_INDIRECT_FF && bytes.length >= 2) {
+      const modrm = bytes[1];
+      const reg = modrm >> 3 & 7;
+      return reg === 2 || reg === 3;
+    }
+    return false;
+  }
+  function verifyCallSite(returnAddress, pointerSize) {
+    const candidates2 = pointerSize === 8 ? [7, 6, 5, 3, 2] : [5, 6, 3, 2];
+    for (const len of candidates2) {
+      const callAddr = returnAddress - BigInt(len);
+      const bytes = tryReadMemory(callAddr, len);
+      if (bytes && isCallInstruction(bytes)) return true;
+    }
+    return false;
+  }
+  function matchPattern(value, haystacks) {
+    const low = Number(value & BigInt(4294967295));
+    const needle = decodeOffsetNeedle(low);
+    const msfIdx = haystacks.msf.indexOf(needle);
+    if (msfIdx >= 0) return { kind: "msf", offset: msfIdx };
+    const cyclicIdx = haystacks.cyclic.indexOf(needle);
+    if (cyclicIdx >= 0) return { kind: "cyclic", offset: cyclicIdx };
+    return void 0;
+  }
+  function classifySlot(offset, address, value, pointerSize, sp, stackEnd, haystacks) {
+    const slot = {
+      offset,
+      address,
+      value,
+      classification: "DATA",
+      detail: "local / arg"
+    };
+    if (value === BigInt(0)) {
+      slot.classification = "NULL";
+      slot.detail = "frame boundary";
+      return slot;
+    }
+    const pattern = matchPattern(value, haystacks);
+    if (pattern) {
+      slot.classification = "PATTERN";
+      slot.patternKind = pattern.kind;
+      slot.patternOffset = pattern.offset;
+      slot.detail = `${pattern.kind} offset ${pattern.offset}`;
+      return slot;
+    }
+    if (value >= sp && value < stackEnd) {
+      slot.classification = "SAVED_EBP";
+      slot.detail = "points into stack";
+      return slot;
+    }
+    const mod = findModuleByAddress(value);
+    if (mod) {
+      slot.module = mod.name;
+      slot.moduleOffset = value - mod.base;
+      const isCall = verifyCallSite(value, pointerSize);
+      if (isCall) {
+        slot.classification = "RET";
+        slot.callSiteVerified = true;
+        slot.detail = `${mod.name}+0x${slot.moduleOffset.toString(16).toUpperCase()} \u2190 CALL verified`;
+      } else {
+        slot.classification = "STALE_PTR";
+        slot.callSiteVerified = false;
+        slot.detail = `${mod.name}+0x${slot.moduleOffset.toString(16).toUpperCase()} (no CALL site)`;
+      }
+      return slot;
+    }
+    return slot;
+  }
+  function mapStack(sp, spName, ip, ipName, depth, patternLength) {
+    const pointerSize = getPointerSize();
+    const slotSize = pointerSize;
+    const byteCount = depth * slotSize;
+    const haystacks = {
+      msf: generateMsfPattern(Math.min(patternLength, 20280)),
+      cyclic: generateCyclicPattern(Math.max(patternLength, 2e4))
+    };
+    const stackEnd = sp + BigInt(byteCount) + BigInt(4096);
+    const slots = [];
+    for (let i = 0; i < depth; i++) {
+      const slotAddr = sp + BigInt(i * slotSize);
+      let value;
+      try {
+        value = readPointer(slotAddr, pointerSize);
+      } catch (e) {
+        break;
+      }
+      slots.push(classifySlot(i * slotSize, slotAddr, value, pointerSize, sp, stackEnd, haystacks));
+    }
+    const controlledCount = slots.filter(
+      (s) => s.classification === "PATTERN"
+    ).length;
+    const liveFrames = slots.filter(
+      (s) => s.classification === "RET" && s.callSiteVerified
+    );
+    const liveFrameCount = liveFrames.length;
+    const firstLiveRet = slots.find(
+      (s) => s.classification === "RET" && s.callSiteVerified
+    );
+    const firstLiveRetOffset = firstLiveRet == null ? void 0 : firstLiveRet.offset;
+    const ropRoom = firstLiveRetOffset != null ? firstLiveRetOffset : byteCount;
+    const overwrittenFrames = [];
+    let seenPattern = false;
+    for (const slot of slots) {
+      if (slot.classification === "PATTERN") {
+        seenPattern = true;
+        continue;
+      }
+      if (seenPattern && slot.classification === "RET" && slot.callSiteVerified) {
+        break;
+      }
+      if (seenPattern && slot.classification === "STALE_PTR" && slot.module) {
+        if (!overwrittenFrames.includes(slot.module)) {
+          overwrittenFrames.push(slot.module);
+        }
+      }
+    }
+    return {
+      sp,
+      spName,
+      ip,
+      ipName,
+      pointerSize,
+      slots,
+      controlledCount,
+      liveFrameCount,
+      firstLiveRetOffset,
+      ropRoom,
+      overwrittenFrames
+    };
+  }
+
+  // src/commands/stackmap.ts
+  function createStackmapCommand() {
+    return {
+      name: "stackmap",
+      description: "Maps the call stack at crash time, classifying each slot as pattern bytes, live return address, saved frame pointer, or data.",
+      usage: "dx @$osed().stackmap(depth?, patternLength?)",
+      examples: [
+        "dx @$osed().stackmap()",
+        "dx @$osed().stackmap(128)",
+        "dx @$osed().stackmap(64, 20000)"
+      ],
+      schema: {
+        depth: { type: "number", min: 8, max: 512, default: 64 },
+        patternLength: { type: "number", min: 256, max: 1e5, default: 1e4 }
+      },
+      execute(options) {
+        var _a, _b;
+        const pointerSize = getPointerSize();
+        const regs = readRegisters(pointerSize);
+        const depth = options.depth;
+        const patternLength = options.patternLength;
+        if (regs.sp === void 0) {
+          error("Stack pointer is unavailable.");
+          return {
+            command: "stackmap",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: ["Stack pointer is unavailable."]
+          };
+        }
+        const result3 = mapStack(
+          regs.sp,
+          (_a = regs.spName) != null ? _a : pointerSize === 8 ? "RSP" : "ESP",
+          regs.ip,
+          (_b = regs.ipName) != null ? _b : pointerSize === 8 ? "RIP" : "EIP",
+          depth,
+          patternLength
+        );
+        renderStackMap(result3);
+        return {
+          command: "stackmap",
+          args: options,
+          success: true,
+          findings: [serializeResult(result3)],
+          warnings: [],
+          errors: []
+        };
+      }
+    };
+  }
+  function renderStackMap(result3) {
+    var _a, _b, _c, _d;
+    const { pointerSize, slots, spName } = result3;
+    const ipLabel = (_a = result3.ipName) != null ? _a : pointerSize === 8 ? "RIP" : "EIP";
+    const spLabel = spName.toUpperCase();
+    section("CALL STACK MAP");
+    info(
+      `${ipLabel}: ${result3.ip !== void 0 ? formatAddress(result3.ip, pointerSize) : "n/a"} \xB7 ${spLabel}: ${formatAddress(result3.sp, pointerSize)} \xB7 ${slots.length} slots mapped`
+    );
+    const collapseThreshold = 4;
+    let i = 0;
+    const rows = [];
+    while (i < slots.length) {
+      const slot = slots[i];
+      if (slot.classification === "PATTERN") {
+        let runEnd = i + 1;
+        while (runEnd < slots.length && slots[runEnd].classification === "PATTERN") {
+          runEnd++;
+        }
+        const runLength = runEnd - i;
+        if (runLength <= collapseThreshold) {
+          for (let j = i; j < runEnd; j++) {
+            rows.push(formatSlotRow(slots[j], spLabel, pointerSize));
+          }
+        } else {
+          rows.push(formatSlotRow(slots[i], spLabel, pointerSize));
+          rows.push(formatSlotRow(slots[i + 1], spLabel, pointerSize));
+          const firstOffset = (_b = slots[i].patternOffset) != null ? _b : 0;
+          const lastOffset = (_c = slots[runEnd - 1].patternOffset) != null ? _c : 0;
+          const kind = (_d = slots[i].patternKind) != null ? _d : "pattern";
+          rows.push({
+            Offset: "\xB7\xB7\xB7",
+            Address: "",
+            Value: "",
+            Class: `PATTERN \xD7${runLength - 3}`,
+            Detail: `contiguous, ${kind} ${firstOffset}\u2013${lastOffset}`
+          });
+          rows.push(formatSlotRow(slots[runEnd - 1], spLabel, pointerSize));
+        }
+        i = runEnd;
+      } else {
+        rows.push(formatSlotRow(slot, spLabel, pointerSize));
+        i++;
+      }
+    }
+    table(
+      [
+        { key: "Offset", header: "Offset", width: 12 },
+        { key: "Address", header: "Address", width: pointerSize === 8 ? 18 : 10 },
+        { key: "Value", header: "Value", width: pointerSize === 8 ? 18 : 10 },
+        { key: "Class", header: "Class", width: 12 },
+        { key: "Detail", header: "Detail" }
+      ],
+      rows
+    );
+    section("SUMMARY");
+    info(`Controlled slots: ${result3.controlledCount}`);
+    info(`Live frames (CALL verified): ${result3.liveFrameCount}`);
+    info(
+      `ROP room: ${result3.ropRoom} bytes${result3.firstLiveRetOffset !== void 0 ? ` (before first live RET at ${spLabel}+0x${result3.firstLiveRetOffset.toString(16).toUpperCase()})` : " (no live RET found in scan range)"}`
+    );
+    if (result3.overwrittenFrames.length > 0) {
+      info(`Overwritten frames: ${result3.overwrittenFrames.join(" \u2192 ")}`);
+    }
+    section("CHAIN ENTRY");
+    const firstControlled = slots.find((s) => s.classification === "PATTERN");
+    const firstLiveRet = slots.find(
+      (s) => s.classification === "RET" && s.callSiteVerified
+    );
+    if (firstControlled) {
+      info(
+        `First controlled: ${spLabel}+0x${firstControlled.offset.toString(16).toUpperCase()} (${firstControlled.patternKind} offset ${firstControlled.patternOffset})`
+      );
+    } else {
+      info("No pattern bytes found on the stack.");
+    }
+    if (firstLiveRet) {
+      info(
+        `First intact frame: ${spLabel}+0x${firstLiveRet.offset.toString(16).toUpperCase()} (${firstLiveRet.module}+0x${firstLiveRet.moduleOffset.toString(16).toUpperCase()})`
+      );
+    }
+    if (firstControlled && result3.ropRoom > 0) {
+      info(
+        `Recommendation: ${result3.ropRoom} bytes available at ${spLabel} for inline chain or stage-one pivot`
+      );
+    }
+  }
+  function formatSlotRow(slot, spLabel, pointerSize) {
+    return {
+      Offset: `${spLabel}+0x${slot.offset.toString(16).toUpperCase().padStart(2, "0")}`,
+      Address: formatAddress(slot.address, pointerSize),
+      Value: formatAddress(slot.value, pointerSize),
+      Class: slot.classification + (slot.callSiteVerified ? " \u2713" : ""),
+      Detail: slot.detail
+    };
+  }
+  function serializeResult(result3) {
+    const ps = result3.pointerSize;
+    return {
+      sp: formatAddress(result3.sp, ps),
+      spName: result3.spName,
+      ip: result3.ip !== void 0 ? formatAddress(result3.ip, ps) : void 0,
+      ipName: result3.ipName,
+      pointerSize: ps,
+      slotCount: result3.slots.length,
+      controlledCount: result3.controlledCount,
+      liveFrameCount: result3.liveFrameCount,
+      firstLiveRetOffset: result3.firstLiveRetOffset,
+      ropRoom: result3.ropRoom,
+      overwrittenFrames: result3.overwrittenFrames,
+      slots: result3.slots.map((slot) => ({
+        offset: slot.offset,
+        address: formatAddress(slot.address, ps),
+        value: formatAddress(slot.value, ps),
+        classification: slot.classification,
+        detail: slot.detail,
+        patternKind: slot.patternKind,
+        patternOffset: slot.patternOffset,
+        module: slot.module,
+        moduleOffset: slot.moduleOffset !== void 0 ? `0x${slot.moduleOffset.toString(16).toUpperCase()}` : void 0,
+        callSiteVerified: slot.callSiteVerified
+      }))
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -11974,6 +12309,7 @@ var osed_bundle = (() => {
       createFindMemBytesCommand(),
       createFindStackBytesCommand(),
       createLandingCommand(),
+      createStackmapCommand(),
       createMathCommand(),
       createVersionCommand(),
       ...createStringCommands(),
@@ -13496,6 +13832,11 @@ var osed_bundle = (() => {
           maxResults: args[2],
           executableOnly: args[3],
           mode: args[4]
+        };
+      case "stackmap":
+        return {
+          depth: args[0],
+          patternLength: args[1]
         };
       case "triage":
         return {

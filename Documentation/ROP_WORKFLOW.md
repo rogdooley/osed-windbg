@@ -34,10 +34,15 @@ dx @$osed().modules()
 ```
 
 Look for modules where:
-- **ASLR = false** — addresses won't change between runs
-- **Rebase = false** — preferred base address is used
-- **SafeSEH = false** — required if exploiting via SEH
+- **ASLR = disabled** — the module loads at its preferred base, so addresses
+  won't change between runs (this is also the rebase signal: ASLR disabled means
+  `DYNAMIC_BASE` is not set, so the loader uses the preferred base)
+- **NX_COMPAT = disabled** — the module opts out of DEP
+- **SafeSEH = disabled** — required if exploiting via SEH
 
+Columns report `enabled`/`disabled`/`unknown`, not true/false. The
+`triage()` MODULE SCORE table already ranks these for you and lists every
+ASLR-disabled (attacker-controlled) module; `modules()` shows the full set.
 These modules provide stable gadget addresses for your chain.
 
 ## Step 3: Scan for gadgets

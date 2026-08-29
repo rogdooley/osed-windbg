@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { isInstructionPointerControlled, landingCandidateAddresses } from "../src/commands/triage";
+import { isInstructionPointerControlled, landingCandidateAddresses, selectTriageModules, ScoredModule } from "../src/commands/triage";
 import { normalizeMemoryRegion } from "../src/analysis/memory";
 
 describe("triage control detection", () => {
@@ -51,6 +51,56 @@ describe("triage control detection", () => {
         ipBackedByModule: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("triage module selection", () => {
+  const mod = (name: string, aslr: ScoredModule["aslr"], score: number): ScoredModule => ({
+    module: name,
+    score,
+    aslr,
+    nxcompat: "disabled",
+    safeseh: "disabled",
+    system: aslr === "enabled",
+  });
+
+  test("keeps every attacker-controlled module even when more than the tail limit are tied", () => {
+    // Ten ASLR-disabled modules all tied at the top score, mirroring the
+    // Mini-stream target where a fixed slice(0, 6) dropped four valuable modules.
+    const controlled = Array.from({ length: 10 }, (_, i) => mod(`ctrl${i}.dll`, "disabled", 100));
+    const selected = selectTriageModules(controlled);
+    expect(selected.map((m) => m.module)).toEqual(controlled.map((m) => m.module));
+    expect(selected).toHaveLength(10);
+  });
+
+  test("caps only the ASLR-enabled tail so hardened targets stay bounded", () => {
+    const hardened = Array.from({ length: 12 }, (_, i) => mod(`sys${i}.dll`, "enabled", 45));
+    const selected = selectTriageModules(hardened);
+    expect(selected).toHaveLength(6);
+    expect(selected.every((m) => m.aslr === "enabled")).toBe(true);
+  });
+
+  test("lists all controlled modules ahead of a bounded enabled tail", () => {
+    const modules = [
+      ...Array.from({ length: 8 }, (_, i) => mod(`ctrl${i}.dll`, "disabled", 100)),
+      ...Array.from({ length: 9 }, (_, i) => mod(`sys${i}.dll`, "enabled", 45)),
+    ];
+    const selected = selectTriageModules(modules);
+    const controlledCount = selected.filter((m) => m.aslr === "disabled").length;
+    const enabledCount = selected.filter((m) => m.aslr === "enabled").length;
+    expect(controlledCount).toBe(8);
+    expect(enabledCount).toBe(6);
+    // Controlled modules sort ahead of the enabled tail.
+    expect(selected.slice(0, 8).every((m) => m.aslr === "disabled")).toBe(true);
+  });
+
+  test("orders by score descending", () => {
+    const selected = selectTriageModules([
+      mod("low.dll", "enabled", 10),
+      mod("high.dll", "enabled", 70),
+      mod("mid.dll", "enabled", 45),
+    ]);
+    expect(selected.map((m) => m.module)).toEqual(["high.dll", "mid.dll", "low.dll"]);
   });
 });
 

@@ -212,6 +212,32 @@ function scoreModule(module: ModuleMitigation): number {
   return score;
 }
 
+export type ScoredModule = {
+  module: string;
+  score: number;
+  aslr: ModuleMitigation["aslr"];
+  nxcompat: ModuleMitigation["nxcompat"];
+  safeseh: ModuleMitigation["safeseh"];
+  system: boolean;
+};
+
+const TRIAGE_ASLR_TAIL_LIMIT = 6;
+
+/**
+ * Choose which scored modules the MODULE SCORE table shows. Attacker-controlled
+ * (ASLR-disabled) modules are all equally worth listing — they tie at the top of
+ * the score and a fixed cap would drop some of them arbitrarily — so every one is
+ * kept. Only the ASLR-enabled tail is capped, keeping output bounded on hardened
+ * targets where nothing has ASLR turned off.
+ */
+export function selectTriageModules(scored: ScoredModule[]): ScoredModule[] {
+  const ranked = [...scored].sort((a, b) => b.score - a.score);
+  return [
+    ...ranked.filter((item) => item.aslr === "disabled"),
+    ...ranked.filter((item) => item.aslr !== "disabled").slice(0, TRIAGE_ASLR_TAIL_LIMIT),
+  ];
+}
+
 function scanGadgets(pointerSize: 4 | 8, moduleFilter?: string): { jmp: string[]; call: string[]; ppr: string[]; pivots: string[] } {
   const fmt = (address: bigint): string => {
     const mod = findModuleByAddress(address);
@@ -316,7 +342,8 @@ function quickBadcharScan(bytes: Uint8Array | undefined, badchars: number[]): Ar
 export function createTriageCommand(): Command {
   return {
     name: "triage",
-    description: "Fast crash triage for exploit-development workflows.",
+    description:
+      "Fast crash triage for exploit-development workflows. The MODULE SCORE table lists every attacker-controlled (ASLR-disabled) module, since those tie at the top score and are all equally worth using; only the ASLR-enabled tail is capped so hardened targets stay bounded.",
     usage: "dx @$osed().triage(patternLength?, badchars?, module?, stackBytes?)",
     examples: ["dx @$osed().triage()", 'dx @$osed().triage(10000, "00 0A 0D", "vulnserver")'],
     schema: {
@@ -340,17 +367,16 @@ export function createTriageCommand(): Command {
       const shellcode = landingCandidateAddresses(landingEvidence);
       const badcharStats = quickBadcharScan(stackBytes, badchars);
 
-      const modules = listModulesWithMitigations(moduleFilter)
-        .map((module) => ({
+      const modules = selectTriageModules(
+        listModulesWithMitigations(moduleFilter).map((module) => ({
           module: module.name,
           score: scoreModule(module),
           aslr: module.aslr,
           nxcompat: module.nxcompat,
           safeseh: module.safeseh,
           system: module.system,
-        }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 6);
+        })),
+      );
 
       const gadgets = scanGadgets(pointerSize, moduleFilter);
 
