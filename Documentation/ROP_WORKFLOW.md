@@ -225,6 +225,80 @@ dx @$osed().rop.pivots("eax")
 Finds, classifies, and ranks pivot gadgets. Filter by source register to
 find pivots that use a register you control.
 
+## Reference: `RET` vs `RET N` and stack alignment
+
+In a ROP chain, `ESP` is your instruction pointer: after every gadget's `RET`
+the CPU fetches the next gadget address from `[ESP]`. Controlling where `ESP`
+lands next is the whole game, and the two return forms are how you do it.
+
+**`RET`** (opcode `C3`) pops one slot and advances:
+
+```
+EIP = [ESP]        ; next gadget address
+ESP = ESP + 4      ; advance one slot (pointer size on x86)
+```
+
+**`RET N`** (opcode `C2 iw`, e.g. `RET 8` = `C2 08 00`) does the same, then
+adds a fixed constant to `ESP`:
+
+```
+EIP = [ESP]        ; next gadget address
+ESP = ESP + 4 + N  ; advance one slot, then skip N MORE bytes
+```
+
+Two properties matter when you pick one from your corpus:
+
+- **`N` is a constant baked into the instruction.** You match a gadget to the
+  skip you need; you do not parameterize it at exploit time.
+- **The skipped bytes are read as data, never executed.** The CPU does not
+  decode them, it only moves `ESP` past them. That is what makes `RET N` safe
+  for stepping over addresses, padding, or badchar-laden literals sitting in
+  the chain.
+
+`RET N` is the callee-cleanup convention (`stdcall`, most of the Win32 API),
+so the compiler emits these everywhere and they are plentiful as gadgets.
+
+Use `RET N` to:
+
+1. **Step over junk or non-address data** embedded between gadget addresses,
+   so those words are never interpreted as gadgets.
+2. **Re-align `ESP`** by an exact delta when a preceding gadget or API call
+   left the chain off by some slots, without a register-clobbering pile of
+   throwaway `POP r32` gadgets.
+3. **Account for `stdcall` API returns inside the chain.** A `stdcall`
+   function ends in its own `RET N` that cleans up its arguments, so you know
+   exactly where `ESP` lands when control returns to your chain.
+
+### Worked example: `VirtualProtect` cleanup is load-bearing
+
+`VirtualProtect` is `stdcall` with four 4-byte arguments, so its epilogue is
+`RET 10h` (skip 4 x 4 = 16 bytes). Lay the call frame out as data words:
+
+```
+[ &VirtualProtect ]  <- chain RETs here; this becomes the new EIP
+[ return address  ]  <- where VirtualProtect returns (back into your chain)
+[ lpAddress       ]  <- arg1  (page to make executable)
+[ dwSize          ]  <- arg2
+[ flNewProtect    ]  <- arg3  (0x40 = PAGE_EXECUTE_READWRITE)
+[ &lpflOldProtect ]  <- arg4  (writable scratch pointer)
+[ ... shellcode / next gadget ... ]
+```
+
+When `VirtualProtect` finishes, its own `RET 10h` pops the return address into
+`EIP` **and** adds `0x10` to `ESP`, skipping all four argument words in one
+step. `ESP` therefore lands on the word immediately after `&lpflOldProtect`,
+which is exactly where execution should continue. You do **not** add any
+cleanup gadget for those four args, because the callee already did it. If you
+mistakenly treated `VirtualProtect` as `cdecl` (caller cleanup) and inserted
+your own `ADD ESP, 10h` gadget afterward, `ESP` would overshoot by `0x10` and
+the chain would resume in the wrong place.
+
+The flat frame builders emit this layout for you with every value badchar-checked:
+
+```js
+dx @$osed().rop.frame_vp(vpAddr, retAddr, lpAddr, dwSize, flProtect, writable, "00 0A 0D")
+```
+
 ## Typical flow
 
 For most saved-return-address DEP bypasses, the workflow is:
