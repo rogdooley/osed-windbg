@@ -7383,10 +7383,10 @@ var osed_bundle = (() => {
     {
       name: "rop.setup",
       description: "Packs a whole set of target registers into a clobber-safe load sequence \u2014 the tool for staging a PUSHAD or stdcall frame. Exploits multi-pop gadgets to set several registers per gadget and orders gadgets so none overwrites an already-finalized register; reports honest conflicts when no ordering works. Values must be badchar-free (build tainted values with rop.construct first). Unlike rop.construct, it reasons about all target registers at once.",
-      usage: "dx @$osed().rop.setup({reg: value, ...}, badchars?)",
+      usage: 'dx @$osed().rop.setup("reg=value reg=value ...", badchars?)',
       examples: [
-        'dx @$osed().rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")',
-        'dx @$osed().rop.setup({edi: 0x10030000, esi: 0x10040000, ebp: 0x10050000, ebx: 0x00000201, edx: 0x40}, "00 0A 0D")'
+        'dx @$osed().rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")',
+        'dx @$osed().rop.setup("edi=0x10030000 esi=0x10040000 ebp=0x10050000 ebx=0x201 edx=0x40", "00 0A 0D")'
       ]
     },
     {
@@ -11497,10 +11497,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T20:47:31.558Z" : globalThis[key2];
+        value = true ? "2026-08-29T20:57:00.117Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "5278e737f1e7" : globalThis[key2];
+        value = true ? "f81711fb71c0" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13659,7 +13659,7 @@ var osed_bundle = (() => {
       info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
       const collateral = recipe.clobbers.filter((r) => r !== register);
       if (collateral.length > 0) {
-        warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup({reg: value, ...}), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
+        warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup("reg=value ..."), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
       }
       const python = formatChainPython({ steps: recipe.steps });
       for (const line of python) {
@@ -13694,16 +13694,10 @@ var osed_bundle = (() => {
         setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("Register Setup", rows2);
       }
-      const targets = {};
-      if (isPlainObject(args[0])) {
-        for (const [key2, raw] of Object.entries(args[0])) {
-          const n = Number(raw);
-          if (Number.isFinite(n)) targets[key2.trim().toLowerCase()] = n >>> 0;
-        }
-      }
+      const targets = parseRegisterTargets(args[0]);
       const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) : [];
       if (Object.keys(targets).length === 0) {
-        const rows2 = [{ Error: 'rop.setup requires a register->value map, e.g. rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")' }];
+        const rows2 = [{ Error: 'rop.setup requires register=value pairs, e.g. rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")' }];
         renderRows("Register Setup", rows2);
         setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
         return toDxResult("Register Setup", rows2);
@@ -14152,6 +14146,27 @@ var osed_bundle = (() => {
   function parseRegisterList(value) {
     const raw = Array.isArray(value) ? value.map((v) => String(v)) : typeof value === "string" ? value.split(/[,\s]+/) : [];
     return raw.map((r) => r.trim().toLowerCase()).filter((r) => r.length > 0);
+  }
+  function parseRegisterTargets(value) {
+    const targets = {};
+    if (isPlainObject(value)) {
+      for (const [key2, raw] of Object.entries(value)) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) targets[key2.trim().toLowerCase()] = n >>> 0;
+      }
+      return targets;
+    }
+    if (typeof value === "string") {
+      for (const pair of value.split(/[\s,;]+/).filter((p) => p.length > 0)) {
+        const match = /^([a-zA-Z]+)\s*[=:]\s*(.+)$/.exec(pair);
+        if (!match) continue;
+        const reg = match[1].trim().toLowerCase();
+        const raw = match[2].trim();
+        const n = /^0x[0-9a-fA-F]+$/.test(raw) ? parseInt(raw, 16) : Number(raw);
+        if (Number.isFinite(n)) targets[reg] = n >>> 0;
+      }
+    }
+    return targets;
   }
   function parseHexByteList(value) {
     if (Array.isArray(value)) {

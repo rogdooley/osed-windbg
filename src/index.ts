@@ -1316,7 +1316,7 @@ function bindApi(): OsedApi {
     out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
     const collateral = recipe.clobbers.filter((r) => r !== register);
     if (collateral.length > 0) {
-      out.warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup({reg: value, ...}), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
+      out.warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup("reg=value ..."), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
     }
     const python = formatChainPython({ steps: recipe.steps });
     for (const line of python) {
@@ -1349,16 +1349,10 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("Register Setup", rows);
     }
-    const targets: Record<string, number> = {};
-    if (isPlainObject(args[0])) {
-      for (const [key, raw] of Object.entries(args[0] as Record<string, unknown>)) {
-        const n = Number(raw);
-        if (Number.isFinite(n)) targets[key.trim().toLowerCase()] = n >>> 0;
-      }
-    }
+    const targets = parseRegisterTargets(args[0]);
     const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) as number[] : [];
     if (Object.keys(targets).length === 0) {
-      const rows = [{ Error: 'rop.setup requires a register->value map, e.g. rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")' }];
+      const rows = [{ Error: 'rop.setup requires register=value pairs, e.g. rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")' }];
       renderRows("Register Setup", rows);
       setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
       return toDxResult("Register Setup", rows);
@@ -1854,6 +1848,30 @@ function parseRegisterList(value: unknown): string[] {
       ? value.split(/[,\s]+/)
       : [];
   return raw.map((r) => r.trim().toLowerCase()).filter((r) => r.length > 0);
+}
+
+function parseRegisterTargets(value: unknown): Record<string, number> {
+  const targets: Record<string, number> = {};
+  // Object form (programmatic / SDK use): {edi: 0x10001000, ebx: 0x40}
+  if (isPlainObject(value)) {
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+      const n = Number(raw);
+      if (Number.isFinite(n)) targets[key.trim().toLowerCase()] = n >>> 0;
+    }
+    return targets;
+  }
+  // String form (WinDbg dx-friendly): "edi=0x10001000 ebx=0x40" (= or :, any of space/comma/semicolon)
+  if (typeof value === "string") {
+    for (const pair of value.split(/[\s,;]+/).filter((p) => p.length > 0)) {
+      const match = /^([a-zA-Z]+)\s*[=:]\s*(.+)$/.exec(pair);
+      if (!match) continue;
+      const reg = match[1].trim().toLowerCase();
+      const raw = match[2].trim();
+      const n = /^0x[0-9a-fA-F]+$/.test(raw) ? parseInt(raw, 16) : Number(raw);
+      if (Number.isFinite(n)) targets[reg] = n >>> 0;
+    }
+  }
+  return targets;
 }
 
 function parseHexByteList(value: unknown): number[] | unknown {

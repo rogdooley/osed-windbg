@@ -240,8 +240,11 @@ targets into multi-pop gadgets and orders them so none clobbers a finalized
 register:
 
 ```js
-dx @$osed().rop.setup({edi: 0x10030000, esi: 0x10040000, ebp: 0x10050000, ebx: 0x00000201, edx: 0x40}, "00 0A 0D")
+dx @$osed().rop.setup("edi=0x10030000 esi=0x10040000 ebp=0x10050000 ebx=0x201 edx=0x40", "00 0A 0D")
 ```
+
+(The register map is a string of `reg=value` pairs — WinDbg's `dx` evaluator
+does not accept JavaScript object-literal syntax on the command line.)
 
 It prints the finalize order and, when a register cannot be set without
 clobbering an already-final one, reports the conflict instead of emitting a

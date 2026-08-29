@@ -139,10 +139,10 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.setup",
     description: "Packs a whole set of target registers into a clobber-safe load sequence — the tool for staging a PUSHAD or stdcall frame. Exploits multi-pop gadgets to set several registers per gadget and orders gadgets so none overwrites an already-finalized register; reports honest conflicts when no ordering works. Values must be badchar-free (build tainted values with rop.construct first). Unlike rop.construct, it reasons about all target registers at once.",
-    usage: "dx @$osed().rop.setup({reg: value, ...}, badchars?)",
+    usage: 'dx @$osed().rop.setup("reg=value reg=value ...", badchars?)',
     examples: [
-      'dx @$osed().rop.setup({edi: 0x10001000, ebx: 0x40}, "00 0A 0D")',
-      'dx @$osed().rop.setup({edi: 0x10030000, esi: 0x10040000, ebp: 0x10050000, ebx: 0x00000201, edx: 0x40}, "00 0A 0D")',
+      'dx @$osed().rop.setup("edi=0x10001000 ebx=0x40", "00 0A 0D")',
+      'dx @$osed().rop.setup("edi=0x10030000 esi=0x10040000 ebp=0x10050000 ebx=0x201 edx=0x40", "00 0A 0D")',
     ],
   },
   {
