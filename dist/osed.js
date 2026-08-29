@@ -4314,10 +4314,21 @@ var osed_bundle = (() => {
   }
 
   // src/rop/planner.ts
+  var STDCALL_ARG_COUNT = {
+    VirtualProtect: 4,
+    VirtualAlloc: 4,
+    WriteProcessMemory: 5,
+    VirtualProtectEx: 5,
+    VirtualAllocEx: 5,
+    WinExec: 2
+  };
   var STRATEGY_NAMES = /* @__PURE__ */ new Map([
     ["virtualprotect", "VirtualProtect"],
     ["virtualalloc", "VirtualAlloc"],
     ["writeprocessmemory", "WriteProcessMemory"],
+    ["virtualprotectex", "VirtualProtectEx"],
+    ["virtualallocex", "VirtualAllocEx"],
+    ["winexec", "WinExec"],
     ["stackpivot", "Stack Pivot"],
     ["stack pivot", "Stack Pivot"]
   ]);
@@ -4349,7 +4360,7 @@ var osed_bundle = (() => {
         assumptions: [],
         preconditions: [
           "EIP is controlled (e.g. via SEH overwrite or saved return address).",
-          `ESP points to or can reach a region with ${strategy === "WriteProcessMemory" ? "28" : "24"}+ contiguous controlled bytes.`,
+          `ESP points to or can reach a region with ${(STDCALL_ARG_COUNT[strategy] + 2) * 4}+ contiguous controlled bytes.`,
           `${apiName} address is known or resolvable at exploit time.`,
           "All frame values are encodable under the current charset."
         ],
@@ -4702,7 +4713,7 @@ var osed_bundle = (() => {
     if (state.control.mechanism !== "saved-ret") {
       blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; DIRECT_API requires ret-based control transfer.` });
     }
-    const frameSize = plan.strategy === "WriteProcessMemory" ? 24 : 20;
+    const frameSize = (apiFrameSlots(plan.strategy).length - 1) * 4;
     if (state.stack.controlledAfterEsp < frameSize) {
       blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for ${plan.strategy} arguments (API address is the saved return, not on the stack).` });
     }
@@ -4748,7 +4759,7 @@ var osed_bundle = (() => {
     if (!findRetGadget(index)) {
       blockers.push({ kind: "blocker", source: "corpus", message: "No plain ret gadget with a known address exists in the corpus." });
     }
-    const frameSize = plan.strategy === "WriteProcessMemory" ? 28 : 24;
+    const frameSize = apiFrameSlots(plan.strategy).length * 4;
     if (state.stack.controlledAfterEsp < frameSize) {
       blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for the ${plan.strategy} stdcall frame (ret gadget + API + args).` });
     }
@@ -4846,6 +4857,33 @@ var osed_bundle = (() => {
           { role: "arg3-lpBuffer", placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
           { role: "arg4-nSize", placeholder: "NSIZE", comment: "nSize" },
           { role: "arg5-lpNBW", placeholder: "WRITABLE", comment: "lpNumberOfBytesWritten (writable dummy)" }
+        ];
+      case "VirtualProtectEx":
+        return [
+          { role: "api-address", placeholder: "VIRTUALPROTECTEX", comment: "VirtualProtectEx" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. shellcode or jmp esp)" },
+          { role: "arg1-hProcess", value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { role: "arg2-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg3-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg4-flNewProtect", value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          { role: "arg5-lpflOldProtect", placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" }
+        ];
+      case "VirtualAllocEx":
+        return [
+          { role: "api-address", placeholder: "VIRTUALALLOCEX", comment: "VirtualAllocEx" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+          { role: "arg1-hProcess", value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { role: "arg2-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+          { role: "arg3-dwSize", value: 513, comment: "dwSize" },
+          { role: "arg4-flAllocationType", value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { role: "arg5-flProtect", value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WinExec":
+        return [
+          { role: "api-address", placeholder: "WINEXEC", comment: "WinExec" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. ExitProcess or a ret)" },
+          { role: "arg1-lpCmdLine", placeholder: "LP_CMDLINE", comment: "lpCmdLine (pointer to command string)" },
+          { role: "arg2-uCmdShow", value: 1, comment: "uCmdShow = SW_SHOWNORMAL" }
         ];
       case "Stack Pivot":
         return [
@@ -6968,9 +7006,9 @@ var osed_bundle = (() => {
     },
     {
       name: "rop.plan",
-      description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses.",
+      description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses. Strategies: VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, Stack Pivot.",
       usage: "dx @$osed().rop.plan(strategy, apiResolution?)",
-      examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")']
+      examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")', 'dx @$osed().rop.plan("WinExec")']
     },
     {
       name: "rop.emit",
@@ -11096,10 +11134,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T17:02:09.140Z" : globalThis[key2];
+        value = true ? "2026-08-29T17:28:52.633Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "be4c680ed172" : globalThis[key2];
+        value = true ? "a0fac4591c8f" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12721,7 +12759,7 @@ var osed_bundle = (() => {
       const options = isPlainObject(args[0]) ? args[0] : { strategy: args[0], apiResolution: args[1] };
       const strategy = normalizeExploitStrategy(String((_a = options.strategy) != null ? _a : ""));
       if (!strategy) {
-        const rows2 = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, or Stack Pivot." }];
+        const rows2 = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, or Stack Pivot." }];
         renderRows("ROP Plan", rows2);
         return toDxResult("ROP Plan", rows2);
       }

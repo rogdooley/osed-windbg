@@ -106,9 +106,9 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "rop.plan",
-    description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses.",
+    description: "Plans feasible exploit strategies from semantic capabilities without selecting gadget addresses. Strategies: VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, Stack Pivot.",
     usage: "dx @$osed().rop.plan(strategy, apiResolution?)",
-    examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")'],
+    examples: ['dx @$osed().rop.plan("VirtualAlloc")', 'dx @$osed().rop.plan("VirtualProtect", "iat")', 'dx @$osed().rop.plan("WinExec")'],
   },
   {
     name: "rop.emit",

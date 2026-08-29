@@ -111,7 +111,12 @@ dx @$osed().rop.query("preserves", "ebx")
 dx @$osed().rop.plan("VirtualProtect")
 ```
 
-Also available: `"VirtualAlloc"` and `"WriteProcessMemory"`.
+Also available: `"VirtualAlloc"`, `"WriteProcessMemory"`, `"VirtualProtectEx"`,
+`"VirtualAllocEx"`, and `"WinExec"`. The `Ex` variants take a leading
+`hProcess` handle (`GetCurrentProcess()` = `0xFFFFFFFF`) and are drop-in
+substitutes when only the `Ex` form is importable. `"WinExec"` is a
+command-execution payload (a two-argument `stdcall` frame), not a DEP bypass:
+use it when the goal is running a command rather than running shellcode.
 
 The planner evaluates six chain shapes against the loaded corpus and reports
 which are feasible, their complexity, required capabilities, and

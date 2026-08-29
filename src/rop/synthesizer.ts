@@ -300,7 +300,9 @@ function validateForDirectApi(
     blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; DIRECT_API requires ret-based control transfer.` });
   }
 
-  const frameSize = plan.strategy === "WriteProcessMemory" ? 24 : 20;
+  // DIRECT_API: the API address is the consumed saved return, so only the
+  // return-address slot plus the argument words sit after ESP (slots - 1).
+  const frameSize = (apiFrameSlots(plan.strategy).length - 1) * 4;
   if (state.stack.controlledAfterEsp < frameSize) {
     blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for ${plan.strategy} arguments (API address is the saved return, not on the stack).` });
   }
@@ -359,7 +361,9 @@ function validateForRetToFrame(
     blockers.push({ kind: "blocker", source: "corpus", message: "No plain ret gadget with a known address exists in the corpus." });
   }
 
-  const frameSize = plan.strategy === "WriteProcessMemory" ? 28 : 24;
+  // RET_TO_FRAME: the full frame lives on the stack (API address, return
+  // address, and every argument word), i.e. one word per apiFrameSlots entry.
+  const frameSize = apiFrameSlots(plan.strategy).length * 4;
   if (state.stack.controlledAfterEsp < frameSize) {
     blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for the ${plan.strategy} stdcall frame (ret gadget + API + args).` });
   }
@@ -448,14 +452,14 @@ function validateForPivotToFrame(
 
 // ---- Slot builders ----------------------------------------------------------
 
-interface FrameSlotDef {
+export interface FrameSlotDef {
   role: string;
   value?: number;
   placeholder?: string;
   comment: string;
 }
 
-function apiFrameSlots(strategy: ExploitStrategy): FrameSlotDef[] {
+export function apiFrameSlots(strategy: ExploitStrategy): FrameSlotDef[] {
   switch (strategy) {
     case "VirtualProtect":
       return [
@@ -484,6 +488,33 @@ function apiFrameSlots(strategy: ExploitStrategy): FrameSlotDef[] {
         { role: "arg3-lpBuffer", placeholder: "LP_BUFFER", comment: "lpBuffer (source shellcode)" },
         { role: "arg4-nSize", placeholder: "NSIZE", comment: "nSize" },
         { role: "arg5-lpNBW", placeholder: "WRITABLE", comment: "lpNumberOfBytesWritten (writable dummy)" },
+      ];
+    case "VirtualProtectEx":
+      return [
+        { role: "api-address", placeholder: "VIRTUALPROTECTEX", comment: "VirtualProtectEx" },
+        { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. shellcode or jmp esp)" },
+        { role: "arg1-hProcess", value: 0xffffffff, comment: "hProcess = GetCurrentProcess()" },
+        { role: "arg2-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+        { role: "arg3-dwSize", value: 0x201, comment: "dwSize" },
+        { role: "arg4-flNewProtect", value: 0x40, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+        { role: "arg5-lpflOldProtect", placeholder: "WRITABLE", comment: "lpflOldProtect (writable dummy)" },
+      ];
+    case "VirtualAllocEx":
+      return [
+        { role: "api-address", placeholder: "VIRTUALALLOCEX", comment: "VirtualAllocEx" },
+        { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address" },
+        { role: "arg1-hProcess", value: 0xffffffff, comment: "hProcess = GetCurrentProcess()" },
+        { role: "arg2-lpAddress", placeholder: "LP_ADDRESS", comment: "lpAddress" },
+        { role: "arg3-dwSize", value: 0x201, comment: "dwSize" },
+        { role: "arg4-flAllocationType", value: 0x1000, comment: "flAllocationType = MEM_COMMIT" },
+        { role: "arg5-flProtect", value: 0x40, comment: "flProtect = PAGE_EXECUTE_READWRITE" },
+      ];
+    case "WinExec":
+      return [
+        { role: "api-address", placeholder: "WINEXEC", comment: "WinExec" },
+        { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. ExitProcess or a ret)" },
+        { role: "arg1-lpCmdLine", placeholder: "LP_CMDLINE", comment: "lpCmdLine (pointer to command string)" },
+        { role: "arg2-uCmdShow", value: 0x1, comment: "uCmdShow = SW_SHOWNORMAL" },
       ];
     case "Stack Pivot":
       return [

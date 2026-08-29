@@ -724,7 +724,7 @@ function bindApi(): OsedApi {
       : { strategy: args[0], apiResolution: args[1] };
     const strategy = normalizeExploitStrategy(String(options.strategy ?? ""));
     if (!strategy) {
-      const rows = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, or Stack Pivot." }];
+      const rows = [{ Error: "Unsupported strategy. Use VirtualProtect, VirtualAlloc, WriteProcessMemory, VirtualProtectEx, VirtualAllocEx, WinExec, or Stack Pivot." }];
       renderRows("ROP Plan", rows);
       return toDxResult("ROP Plan", rows);
     }

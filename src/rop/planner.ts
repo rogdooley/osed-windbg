@@ -5,7 +5,29 @@ export type ExploitStrategy =
   | "VirtualProtect"
   | "VirtualAlloc"
   | "WriteProcessMemory"
+  | "VirtualProtectEx"
+  | "VirtualAllocEx"
+  | "WinExec"
   | "Stack Pivot";
+
+export type ApiExploitStrategy = Exclude<ExploitStrategy, "Stack Pivot">;
+
+/**
+ * Canonical number of stdcall arguments for each API strategy. This is the
+ * single source of truth for frame sizing: the on-stack frame is the API
+ * address, the return address, and these argument words, so the synthesizer's
+ * apiFrameSlots() must always yield STDCALL_ARG_COUNT + 2 slots (enforced by a
+ * test). Ex variants add a leading hProcess handle; WinExec is a simple
+ * two-argument command-execution payload rather than a DEP bypass.
+ */
+export const STDCALL_ARG_COUNT: Record<ApiExploitStrategy, number> = {
+  VirtualProtect: 4,
+  VirtualAlloc: 4,
+  WriteProcessMemory: 5,
+  VirtualProtectEx: 5,
+  VirtualAllocEx: 5,
+  WinExec: 2,
+};
 
 export type ApiResolutionMode = "direct" | "iat";
 
@@ -61,6 +83,9 @@ const STRATEGY_NAMES = new Map<string, ExploitStrategy>([
   ["virtualprotect", "VirtualProtect"],
   ["virtualalloc", "VirtualAlloc"],
   ["writeprocessmemory", "WriteProcessMemory"],
+  ["virtualprotectex", "VirtualProtectEx"],
+  ["virtualallocex", "VirtualAllocEx"],
+  ["winexec", "WinExec"],
   ["stackpivot", "Stack Pivot"],
   ["stack pivot", "Stack Pivot"],
 ]);
@@ -96,7 +121,7 @@ function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
       assumptions: [],
       preconditions: [
         "EIP is controlled (e.g. via SEH overwrite or saved return address).",
-        `ESP points to or can reach a region with ${strategy === "WriteProcessMemory" ? "28" : "24"}+ contiguous controlled bytes.`,
+        `ESP points to or can reach a region with ${(STDCALL_ARG_COUNT[strategy as ApiExploitStrategy] + 2) * 4}+ contiguous controlled bytes.`,
         `${apiName} address is known or resolvable at exploit time.`,
         "All frame values are encodable under the current charset.",
       ],
