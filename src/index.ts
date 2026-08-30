@@ -250,6 +250,20 @@ function moduleBaseByName(name: string): bigint | undefined {
   return exact?.base;
 }
 
+// Predicate that returns false for addresses inside a module currently loaded
+// off its preferred base (relocated → its address will differ next run), so
+// gadget selection can prefer reliable, preferred-base modules. Enumerates the
+// live module list once per build.
+function buildStableAddressPredicate(): (address: bigint) => boolean {
+  const relocated: Array<[bigint, bigint]> = [];
+  for (const mod of listModulesWithMitigations()) {
+    if (mod.preferredBase !== undefined && mod.preferredBase !== BigInt(0) && mod.base !== mod.preferredBase) {
+      relocated.push([mod.base, mod.base + mod.size]);
+    }
+  }
+  return (address: bigint) => !relocated.some(([lo, hi]) => address >= lo && address < hi);
+}
+
 // Modules whose current base differs from the base recorded when they were
 // scanned — their gadget addresses in the corpus are stale and must not be used.
 function corpusStaleModules(): Array<{ name: string; was: bigint; now: bigint | undefined }> {
@@ -1384,7 +1398,7 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
       return toDxResult("Value Construction", rows);
     }
-    const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve);
+    const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve, buildStableAddressPredicate());
     if (!recipe) {
       const preserveNote = preserve.length > 0 ? ` while preserving ${preserve.join(", ")}` : "";
       const rows = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}${preserveNote}` }];
@@ -1441,7 +1455,7 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
       return toDxResult("Register Setup", rows);
     }
-    const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars);
+    const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars, buildStableAddressPredicate());
     out.section(`Register Setup: ${Object.keys(targets).join(", ")}`);
     out.info(`Set ${plan.ordered.length}/${Object.keys(targets).length} register(s) | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
     if (plan.steps.length > 0) {

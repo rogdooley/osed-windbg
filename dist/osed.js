@@ -1446,6 +1446,7 @@ var osed_bundle = (() => {
       let aslr = "unknown";
       let nxcompat = "unknown";
       let safeseh = "unknown";
+      let preferredBase = base;
       try {
         const mz = readUint16LE(base);
         if (mz === 23117) {
@@ -1456,6 +1457,9 @@ var osed_bundle = (() => {
             characteristics = readUint16LE(pe + BigInt(22));
             const optionalHeaderMagic = readUint16LE(pe + BigInt(24));
             dllCharacteristics = readUint16LE(pe + BigInt(94));
+            if (optionalHeaderMagic === 267) {
+              preferredBase = BigInt(readUint32LE(pe + BigInt(52)));
+            }
             aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
             nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
             safeseh = parseSafeSeh(base, pe, optionalHeaderMagic);
@@ -1474,7 +1478,8 @@ var osed_bundle = (() => {
         aslr,
         nxcompat,
         safeseh,
-        system
+        system,
+        preferredBase
       };
     }).filter((item) => {
       if (!filter) {
@@ -4297,10 +4302,19 @@ var osed_bundle = (() => {
     return true;
   }
   var MAX_RET_IMM = 64;
+  var stableAddressHint;
+  function gadgetIsStable(gadget) {
+    if (!stableAddressHint) return true;
+    const addr = firstKnownAddress(gadget);
+    return addr === void 0 ? true : stableAddressHint(addr);
+  }
   function selectBest(candidates2, preserve) {
     const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
     if (withAddr.length === 0) return void 0;
     withAddr.sort((a, b) => {
+      const aStable = gadgetIsStable(a.gadget) ? 0 : 1;
+      const bStable = gadgetIsStable(b.gadget) ? 0 : 1;
+      if (aStable !== bStable) return aStable - bStable;
       if (a.retImm !== b.retImm) return a.retImm - b.retImm;
       const aCost = a.effects.clobbers.length + a.effects.fillers.length;
       const bCost = b.effects.clobbers.length + b.effects.fillers.length;
@@ -4540,14 +4554,19 @@ var osed_bundle = (() => {
     }
     return void 0;
   }
-  function solveValue(index, register, value, badchars, preserveRegisters = []) {
+  function solveValue(index, register, value, badchars, preserveRegisters = [], preferStable) {
     var _a, _b, _c, _d, _e, _f;
     const reg = register.trim().toLowerCase();
     const v = value >>> 0;
     const bc = new Set(badchars.map((b) => b & 255));
     const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
     preserve.delete(reg);
-    return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
+    stableAddressHint = preferStable;
+    try {
+      return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
+    } finally {
+      stableAddressHint = void 0;
+    }
   }
 
   // src/rop/register_setup.ts
@@ -4681,7 +4700,7 @@ var osed_bundle = (() => {
   function addressBadcharFree(address, badchars) {
     return isBadcharFree2(Number(address & BigInt(4294967295)), badchars);
   }
-  function planRegisterSetupPacking(index, targets, badchars = []) {
+  function planRegisterSetupPacking(index, targets, badchars = [], preferStable) {
     var _a, _b;
     const bc = new Set(badchars.map((b) => b & 255));
     const targetValues = /* @__PURE__ */ new Map();
@@ -4732,7 +4751,8 @@ var osed_bundle = (() => {
         const waste = candidate.shape.writes.size - cover.size + candidate.shape.espFillers.length;
         let deferSum = 0;
         for (const reg of cover) deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
-        const key2 = [cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
+        const stable = !preferStable || preferStable(candidate.address) ? 1 : 0;
+        const key2 = [stable, cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
         if (keyGreater(key2, bestKey)) {
           bestKey = key2;
           best = { candidate, cover };
@@ -4759,7 +4779,7 @@ var osed_bundle = (() => {
         }
         continue;
       }
-      const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater);
+      const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater, preferStable);
       if (!arith) break;
       steps.push(...arith.recipe.steps);
       pending.delete(arith.register);
@@ -4769,12 +4789,12 @@ var osed_bundle = (() => {
     const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
     return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
   }
-  function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater) {
+  function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater, preferStable) {
     const preserve = [...done];
     let best;
     let bestKey;
     for (const reg of pending) {
-      const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve);
+      const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve, preferStable);
       if (!recipe) continue;
       const scratchIsPendingTarget = recipe.scratchRegister && pending.has(recipe.scratchRegister) ? 1 : 0;
       const usesScratch = recipe.scratchRegister ? 1 : 0;
@@ -11652,10 +11672,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-30T21:47:50.914Z" : globalThis[key2];
+        value = true ? "2026-08-30T21:57:09.788Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "41d1170c1611" : globalThis[key2];
+        value = true ? "862cb1a2eb65" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12838,6 +12858,15 @@ var osed_bundle = (() => {
     const exact = (_a = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a : matches[0];
     return exact == null ? void 0 : exact.base;
   }
+  function buildStableAddressPredicate() {
+    const relocated = [];
+    for (const mod of listModulesWithMitigations()) {
+      if (mod.preferredBase !== void 0 && mod.preferredBase !== BigInt(0) && mod.base !== mod.preferredBase) {
+        relocated.push([mod.base, mod.base + mod.size]);
+      }
+    }
+    return (address) => !relocated.some(([lo, hi]) => address >= lo && address < hi);
+  }
   function corpusStaleModules() {
     const tracked = corpusModules.filter((entry) => entry.base !== void 0);
     if (tracked.length === 0) return [];
@@ -13868,7 +13897,7 @@ var osed_bundle = (() => {
         setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
         return toDxResult("Value Construction", rows2);
       }
-      const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve);
+      const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve, buildStableAddressPredicate());
       if (!recipe) {
         const preserveNote = preserve.length > 0 ? ` while preserving ${preserve.join(", ")}` : "";
         const rows2 = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}${preserveNote}` }];
@@ -13925,7 +13954,7 @@ var osed_bundle = (() => {
         setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: ["No target registers."] });
         return toDxResult("Register Setup", rows2);
       }
-      const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars);
+      const plan = planRegisterSetupPacking(currentRopCorpus, targets, badchars, buildStableAddressPredicate());
       section(`Register Setup: ${Object.keys(targets).join(", ")}`);
       info(`Set ${plan.ordered.length}/${Object.keys(targets).length} register(s) | Stack: ${plan.stackBytes} bytes | Order: ${plan.ordered.join(" -> ") || "n/a"}`);
       if (plan.steps.length > 0) {

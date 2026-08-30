@@ -15,6 +15,8 @@ export type ModuleMitigation = {
   nxcompat: TriState;
   safeseh: TriState;
   system: boolean;
+  /** PE preferred ImageBase. If it differs from `base`, the module was relocated (unstable across runs). */
+  preferredBase: bigint;
 };
 
 const IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 0x0040;
@@ -146,6 +148,7 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
       let aslr: TriState = "unknown";
       let nxcompat: TriState = "unknown";
       let safeseh: TriState = "unknown";
+      let preferredBase = base;
 
       try {
         const mz = readUint16LE(base);
@@ -157,6 +160,10 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
             characteristics = readUint16LE(pe + BigInt(0x16));
             const optionalHeaderMagic = readUint16LE(pe + BigInt(0x18));
             dllCharacteristics = readUint16LE(pe + BigInt(0x5e));
+            // PE32 ImageBase lives at optional-header offset 0x1C (pe + 0x18 + 0x1C).
+            if (optionalHeaderMagic === 0x10b) {
+              preferredBase = BigInt(readUint32LE(pe + BigInt(0x34)));
+            }
 
             aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";
             nxcompat = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_NX_COMPAT) !== 0 ? "enabled" : "disabled";
@@ -180,6 +187,7 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
         nxcompat,
         safeseh,
         system,
+        preferredBase,
       };
     })
     .filter((item) => {

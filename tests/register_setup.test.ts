@@ -143,6 +143,19 @@ describe("register setup packing", () => {
     expect(plan.ordered.indexOf("edx")).toBeLessThan(plan.ordered.indexOf("ebx"));
   });
 
+  it("prefers a stable-module gadget when packing", () => {
+    const unstable = 0x03d01000;
+    const stable = 0x10001000;
+    const index = buildMockIndex([
+      makeGadget([insn("pop", ["ebx"]), insn("pop", ["esi"]), insn("ret", [])], unstable),
+      makeGadget([insn("pop", ["ebx"]), insn("pop", ["esi"]), insn("ret", [])], stable),
+    ]);
+    const preferStable = (a: bigint) => a !== BigInt(unstable);
+    const plan = planRegisterSetupPacking(index, { ebx: 0x11111111, esi: 0x22222222 }, [], preferStable);
+    expect(plan.success).toBe(true);
+    expect(plan.steps[0].address).toBe(BigInt(stable));
+  });
+
   it("reports an unbuildable tainted value honestly", () => {
     // Only a direct pop; 0x41 is null-heavy and there is no neg/add gadget.
     const index = buildMockIndex([

@@ -459,6 +459,28 @@ describe("value_solver", () => {
     });
   });
 
+  describe("stable-module preference", () => {
+    it("prefers a gadget from a preferred-base (stable) module", () => {
+      const unstable = 0x03d01000; // relocated module
+      const stable = 0x10001000;   // preferred-base module
+      const index = buildMockIndex([
+        makePopGadget("ebx", unstable), // listed first
+        makePopGadget("ebx", stable),
+      ]);
+      const preferStable = (a: bigint) => a !== BigInt(unstable);
+      const result = solveValue(index, "ebx", 0x02020202, [], [], preferStable);
+      expect(result!.steps[0].address).toBe(BigInt(stable));
+    });
+
+    it("still uses an unstable gadget when no stable one exists", () => {
+      const unstable = 0x03d01000;
+      const index = buildMockIndex([makePopGadget("ebx", unstable)]);
+      const preferStable = (a: bigint) => a !== BigInt(unstable);
+      const result = solveValue(index, "ebx", 0x02020202, [], [], preferStable);
+      expect(result!.steps[0].address).toBe(BigInt(unstable));
+    });
+  });
+
   describe("recipe ordering preference", () => {
     it("prefers direct over negate when both work", () => {
       const index = buildMockIndex([

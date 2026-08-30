@@ -202,6 +202,17 @@ function isBadcharFree(value: number, badchars: Set<number>): boolean {
 // `ret 0x1010` — are excluded rather than compensated with hundreds of words.
 const MAX_RET_IMM = 0x40;
 
+// Optional reliability hint: returns false for addresses in a module that is
+// currently relocated off its preferred base (its address will differ next run).
+// Set for the duration of solveValue so selectBest can prefer stable gadgets.
+let stableAddressHint: ((address: bigint) => boolean) | undefined;
+
+function gadgetIsStable(gadget: RopGadget): boolean {
+  if (!stableAddressHint) return true;
+  const addr = firstKnownAddress(gadget);
+  return addr === undefined ? true : stableAddressHint(addr);
+}
+
 function selectBest(candidates: RopGadget[], preserve?: Set<string>): GadgetSelection | undefined {
   const withAddr = candidates
     .map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) }))
@@ -215,6 +226,11 @@ function selectBest(candidates: RopGadget[], preserve?: Set<string>): GadgetSele
     .filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
   if (withAddr.length === 0) return undefined;
   withAddr.sort((a, b) => {
+    // Reliability first: a gadget from a module loaded at its preferred base
+    // keeps its address next run; one from a relocated module does not.
+    const aStable = gadgetIsStable(a.gadget) ? 0 : 1;
+    const bStable = gadgetIsStable(b.gadget) ? 0 : 1;
+    if (aStable !== bStable) return aStable - bStable;
     if (a.retImm !== b.retImm) return a.retImm - b.retImm;
     // Prefer gadgets with the smallest side-effect footprint: a clean
     // `pop reg ; ret` beats one that also pops, writes, or skips stack.
@@ -490,6 +506,7 @@ export function solveValue(
   value: number,
   badchars: number[],
   preserveRegisters: string[] = [],
+  preferStable?: (address: bigint) => boolean,
 ): ValueRecipe | undefined {
   const reg = register.trim().toLowerCase();
   const v = value >>> 0;
@@ -499,11 +516,16 @@ export function solveValue(
   const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
   preserve.delete(reg);
 
-  return tryDirect(index, reg, v, bc, preserve)
-    ?? tryNegate(index, reg, v, bc, preserve)
-    ?? tryComplement(index, reg, v, bc, preserve)
-    ?? tryTwoOp(index, reg, v, bc, preserve, "add")
-    ?? tryTwoOp(index, reg, v, bc, preserve, "sub")
-    ?? tryZeroAdd(index, reg, v, bc, preserve)
-    ?? tryZeroSubNeg(index, reg, v, bc, preserve);
+  stableAddressHint = preferStable;
+  try {
+    return tryDirect(index, reg, v, bc, preserve)
+      ?? tryNegate(index, reg, v, bc, preserve)
+      ?? tryComplement(index, reg, v, bc, preserve)
+      ?? tryTwoOp(index, reg, v, bc, preserve, "add")
+      ?? tryTwoOp(index, reg, v, bc, preserve, "sub")
+      ?? tryZeroAdd(index, reg, v, bc, preserve)
+      ?? tryZeroSubNeg(index, reg, v, bc, preserve);
+  } finally {
+    stableAddressHint = undefined;
+  }
 }
