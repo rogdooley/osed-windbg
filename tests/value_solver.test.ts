@@ -422,6 +422,43 @@ describe("value_solver", () => {
     });
   });
 
+  describe("ret N cap", () => {
+    it("prefers a clean scratch over one reached by a ret N gadget", () => {
+      const index = buildMockIndex([
+        makePopGadget("ebx", 0x10010101),
+        makePopGadget("edx", 0x10020202),
+        makeAddGadget("ebx", "edx", 0x10030303), // clean, ret 0
+        makePopGadget("ecx", 0x10040404),
+        makeGadget(
+          [makeInsn("add", ["ebx", "ecx"]), makeInsn("ret", ["0x1010"])],
+          0x10050505,
+          [{ kind: "REGISTER_ADD", register: "ebx", targetRegister: "ecx", evidence: "add ebx, ecx" }],
+        ),
+      ]);
+      const result = solveValue(index, "ebx", 0x00000201, [0x00, 0x0a, 0x0d]);
+      expect(result).toBeDefined();
+      expect(result!.recipe).toBe("two-add");
+      expect(result!.scratchRegister).toBe("edx"); // not ecx (the ret 0x1010 monster)
+      expect(result!.stackBytes).toBeLessThan(64); // no giant padding block
+    });
+
+    it("never selects a gadget whose ret N exceeds the cap", () => {
+      const index = buildMockIndex([
+        makePopGadget("ebx", 0x10010101),
+        makePopGadget("ecx", 0x10040404),
+        makeGadget(
+          [makeInsn("add", ["ebx", "ecx"]), makeInsn("ret", ["0x1010"])],
+          0x10050505,
+          [{ kind: "REGISTER_ADD", register: "ebx", targetRegister: "ecx", evidence: "add ebx, ecx" }],
+        ),
+      ]);
+      // The only add gadget is over-cap, so no two-add is possible — better to
+      // report nothing than to emit ~1000 padding words.
+      const result = solveValue(index, "ebx", 0x00000201, [0x00, 0x0a, 0x0d]);
+      expect(result).toBeUndefined();
+    });
+  });
+
   describe("recipe ordering preference", () => {
     it("prefers direct over negate when both work", () => {
       const index = buildMockIndex([

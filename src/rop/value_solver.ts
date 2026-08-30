@@ -196,10 +196,16 @@ function isBadcharFree(value: number, badchars: Set<number>): boolean {
   return true;
 }
 
+// A gadget ending in `ret N` costs N/4 filler words in the chain and shifts ESP
+// forward by N. Beyond this cap the padding is impractical (and demands that
+// much extra controlled stack), so such gadgets — e.g. a function epilogue with
+// `ret 0x1010` — are excluded rather than compensated with hundreds of words.
+const MAX_RET_IMM = 0x40;
+
 function selectBest(candidates: RopGadget[], preserve?: Set<string>): GadgetSelection | undefined {
   const withAddr = candidates
     .map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) }))
-    .filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== undefined)
+    .filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== undefined)
     // Drop gadgets whose ESP movement cannot be cleanly padded — they would
     // desync the chain no matter how the values are laid out.
     .filter((s) => s.effects.safe)
@@ -376,6 +382,10 @@ function tryTwoOp(
   const pop = findPopGadget(index, reg, preserve);
   if (!pop) return undefined;
 
+  // Evaluate every scratch register and keep the cheapest chain (fewest words),
+  // so a clean `add reg, edx ; ret` beats an `add reg, ecx ; ret N` that would
+  // drag in filler words.
+  let best: ValueRecipe | undefined;
   for (const scratch of SCRATCH_CANDIDATES) {
     if (scratch === reg || preserve.has(scratch)) continue;
     const binGadget = findBinaryGadget(index, capKind, reg, scratch, preserve);
@@ -396,15 +406,16 @@ function tryTwoOp(
     const op = mode === "add" ? "add" : "sub";
     steps.push(...emitGadgetWithSideEffects(binGadget, `${op} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
 
-    return {
+    const recipe: ValueRecipe = {
       steps,
       recipe: mode === "add" ? "two-add" : "two-sub",
       scratchRegister: scratch,
       stackBytes: steps.length * 4,
       clobbers: collectClobbers(reg, [pop.gadget, scratchPop.gadget, binGadget.gadget], scratch),
     };
+    if (!best || recipe.stackBytes < best.stackBytes) best = recipe;
   }
-  return undefined;
+  return best;
 }
 
 function tryZeroAdd(

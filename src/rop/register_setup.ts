@@ -179,10 +179,13 @@ export function planRegisterSetupPacking(
         return addr === undefined || addressBadcharFree(addr, bc);
       }));
 
+  // A `ret N` costs N/4 filler words; beyond this cap the padding is impractical
+  // (e.g. a function epilogue with `ret 0x1010` would drag in ~1000 junk words).
+  const MAX_RET_IMM = 0x40;
   const candidates: Candidate[] = workingIndex.gadgets
     .map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) }))
     .filter((c): c is Candidate & { address: bigint } =>
-      c.address !== undefined && c.retImm >= 0 && c.shape.safe && c.shape.popRegs.length > 0)
+      c.address !== undefined && c.retImm >= 0 && c.retImm <= MAX_RET_IMM && c.shape.safe && c.shape.popRegs.length > 0)
     .map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
 
   // How often each register appears as a write across candidates. Registers that

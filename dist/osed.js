@@ -4296,8 +4296,9 @@ var osed_bundle = (() => {
     }
     return true;
   }
+  var MAX_RET_IMM = 64;
   function selectBest(candidates2, preserve) {
-    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
+    const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
     if (withAddr.length === 0) return void 0;
     withAddr.sort((a, b) => {
       if (a.retImm !== b.retImm) return a.retImm - b.retImm;
@@ -4458,6 +4459,7 @@ var osed_bundle = (() => {
     const capKind = mode === "add" ? "REGISTER_ADD" : "REGISTER_SUB";
     const pop = findPopGadget(index, reg, preserve);
     if (!pop) return void 0;
+    let best;
     for (const scratch of SCRATCH_CANDIDATES) {
       if (scratch === reg || preserve.has(scratch)) continue;
       const binGadget = findBinaryGadget(index, capKind, reg, scratch, preserve);
@@ -4473,15 +4475,16 @@ var osed_bundle = (() => {
       steps.push(...scratchSteps);
       const op = mode === "add" ? "add" : "sub";
       steps.push(...emitGadgetWithSideEffects(binGadget, `${op} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
-      return {
+      const recipe = {
         steps,
         recipe: mode === "add" ? "two-add" : "two-sub",
         scratchRegister: scratch,
         stackBytes: steps.length * 4,
         clobbers: collectClobbers(reg, [pop.gadget, scratchPop.gadget, binGadget.gadget], scratch)
       };
+      if (!best || recipe.stackBytes < best.stackBytes) best = recipe;
     }
-    return void 0;
+    return best;
   }
   function tryZeroAdd(index, reg, value, badchars, preserve) {
     if (!isBadcharFree(value, badchars)) return void 0;
@@ -4689,7 +4692,8 @@ var osed_bundle = (() => {
       const addr = firstKnownAddress(g);
       return addr === void 0 || addressBadcharFree(addr, bc);
     }));
-    const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
+    const MAX_RET_IMM2 = 64;
+    const candidates2 = workingIndex.gadgets.map((gadget) => ({ gadget, shape: analyzeGadget(gadget), address: firstKnownAddress(gadget), retImm: retImmBytes(gadget) })).filter((c) => c.address !== void 0 && c.retImm >= 0 && c.retImm <= MAX_RET_IMM2 && c.shape.safe && c.shape.popRegs.length > 0).map((c) => ({ gadget: c.gadget, shape: c.shape, address: c.address, retImm: c.retImm, score: c.gadget.score }));
     const clobberFrequency = /* @__PURE__ */ new Map();
     for (const c of candidates2) {
       for (const reg of c.shape.writes) clobberFrequency.set(reg, ((_a = clobberFrequency.get(reg)) != null ? _a : 0) + 1);
@@ -11648,10 +11652,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-30T18:58:56.132Z" : globalThis[key2];
+        value = true ? "2026-08-30T20:23:08.369Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "cb808ff92764" : globalThis[key2];
+        value = true ? "a99dcbbf7550" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
