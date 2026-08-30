@@ -1408,6 +1408,7 @@ function bindApi(): OsedApi {
           writable: args[5],
           flNewProtect: args[6],
           mode: args[7],
+          badchars: args[8],
         };
     const params: VirtualProtectParams = {
       virtualProtect: options.virtualProtect !== undefined ? Number(options.virtualProtect) : undefined,
@@ -1418,9 +1419,10 @@ function bindApi(): OsedApi {
       writable: options.writable !== undefined ? Number(options.writable) : undefined,
       flNewProtect: options.flNewProtect !== undefined ? Number(options.flNewProtect) : undefined,
       mode: options.mode === "direct" ? "direct" : "ret-slide",
+      badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) as number[] : undefined,
     };
 
-    const plan = planVirtualProtect(currentRopCorpus, params);
+    const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking);
     const python = formatChainPython(plan);
     const sectionLabel = plan.hasPushad
       ? "ROP Chain — VirtualProtect (PUSHAD)"
@@ -1479,6 +1481,7 @@ function bindApi(): OsedApi {
           lpBuffer: args[2],
           nSize: args[3],
           writable: args[4],
+          badchars: args[5],
         };
     const params: WriteProcessMemoryParams = {
       writeProcessMemory: options.writeProcessMemory !== undefined ? Number(options.writeProcessMemory) : undefined,
@@ -1486,9 +1489,10 @@ function bindApi(): OsedApi {
       lpBuffer: options.lpBuffer !== undefined ? Number(options.lpBuffer) : undefined,
       nSize: options.nSize !== undefined ? Number(options.nSize) : undefined,
       writable: options.writable !== undefined ? Number(options.writable) : undefined,
+      badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) as number[] : undefined,
     };
 
-    const plan = planWriteProcessMemory(currentRopCorpus, params);
+    const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking);
     const python = formatChainPython(plan);
     const sectionLabel = plan.hasPushad
       ? "ROP Chain — WriteProcessMemory (PUSHAD)"
@@ -1547,6 +1551,7 @@ function bindApi(): OsedApi {
           lpAddress: args[2],
           flAllocationType: args[3],
           flProtect: args[4],
+          badchars: args[5],
         };
     const params: VirtualAllocParams = {
       virtualAlloc: options.virtualAlloc !== undefined ? Number(options.virtualAlloc) : undefined,
@@ -1554,9 +1559,10 @@ function bindApi(): OsedApi {
       lpAddress: options.lpAddress !== undefined ? Number(options.lpAddress) : undefined,
       flAllocationType: options.flAllocationType !== undefined ? Number(options.flAllocationType) : undefined,
       flProtect: options.flProtect !== undefined ? Number(options.flProtect) : undefined,
+      badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) as number[] : undefined,
     };
 
-    const plan = planVirtualAlloc(currentRopCorpus, params);
+    const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking);
     const python = formatChainPython(plan);
     const sectionLabel = plan.hasPushad
       ? "ROP Chain — VirtualAlloc (PUSHAD)"

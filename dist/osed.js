@@ -3934,16 +3934,43 @@ var osed_bundle = (() => {
   function named(value, placeholder) {
     return value === void 0 ? { placeholder } : { value: value >>> 0 };
   }
-  function planPushadChain(index, specs, label, mode, constraints = []) {
+  function hasBadchar(value, badchars) {
+    const w = value >>> 0;
+    for (let i = 0; i < 4; i++) {
+      if (badchars.has(w >>> i * 8 & 255)) return true;
+    }
+    return false;
+  }
+  function planPushadChain(index, specs, label, mode, constraints = [], badchars = [], setupSolver) {
     const steps = [];
     const satisfied = [];
     const unsatisfied = [];
     const placeholders = /* @__PURE__ */ new Set();
+    const bc = new Set(badchars.map((b) => b & 255));
+    const taintedTargets = {};
+    const directSpecs = [];
     for (const spec of specs) {
       if (spec.missingReason) {
         unsatisfied.push({ register: spec.register, reason: spec.missingReason });
-        continue;
+      } else if (spec.placeholder === void 0 && spec.value !== void 0 && bc.size > 0 && hasBadchar(spec.value, bc)) {
+        taintedTargets[spec.register] = spec.value >>> 0;
+      } else {
+        directSpecs.push(spec);
       }
+    }
+    if (Object.keys(taintedTargets).length > 0) {
+      if (!setupSolver) {
+        for (const [register, value] of Object.entries(taintedTargets)) {
+          unsatisfied.push({ register, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
+        }
+      } else {
+        const setup = setupSolver(index, taintedTargets, badchars);
+        steps.push(...setup.steps);
+        satisfied.push(...setup.ordered);
+        unsatisfied.push(...setup.unresolved);
+      }
+    }
+    for (const spec of directSpecs) {
       const selection = selectPopGadget(index, spec.register);
       if (!selection) {
         const reason = index.loadRegister(spec.register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
@@ -4011,17 +4038,18 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
     ];
   }
-  function planVirtualProtect(index, params = {}) {
-    var _a;
+  function planVirtualProtect(index, params = {}, setupSolver) {
+    var _a, _b;
     const mode = (_a = params.mode) != null ? _a : "ret-slide";
+    const badchars = (_b = params.badchars) != null ? _b : [];
     if (mode === "direct") {
       return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
         "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain."
-      ]);
+      ], badchars, setupSolver);
     }
     return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
       "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes."
-    ]);
+    ], badchars, setupSolver);
   }
   function writeProcessMemorySpecs(params) {
     return [
@@ -4034,10 +4062,11 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by WPM (nop sled)" }
     ];
   }
-  function planWriteProcessMemory(index, params = {}) {
+  function planWriteProcessMemory(index, params = {}, setupSolver) {
+    var _a;
     return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
       "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination."
-    ]);
+    ], (_a = params.badchars) != null ? _a : [], setupSolver);
   }
   function virtualAllocSpecs(params) {
     var _a, _b;
@@ -4053,10 +4082,11 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by VirtualAlloc (junk)" }
     ];
   }
-  function planVirtualAlloc(index, params = {}) {
+  function planVirtualAlloc(index, params = {}, setupSolver) {
+    var _a;
     return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
       "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
-    ]);
+    ], (_a = params.badchars) != null ? _a : [], setupSolver);
   }
 
   // src/rop/value_solver.ts
@@ -11618,10 +11648,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-29T21:29:31.521Z" : globalThis[key2];
+        value = true ? "2026-08-30T18:58:56.132Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "fe6c96ef328f" : globalThis[key2];
+        value = true ? "cb808ff92764" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13872,7 +13902,8 @@ var osed_bundle = (() => {
         dwSize: args[4],
         writable: args[5],
         flNewProtect: args[6],
-        mode: args[7]
+        mode: args[7],
+        badchars: args[8]
       };
       const params = {
         virtualProtect: options.virtualProtect !== void 0 ? Number(options.virtualProtect) : void 0,
@@ -13882,9 +13913,10 @@ var osed_bundle = (() => {
         dwSize: options.dwSize !== void 0 ? Number(options.dwSize) : void 0,
         writable: options.writable !== void 0 ? Number(options.writable) : void 0,
         flNewProtect: options.flNewProtect !== void 0 ? Number(options.flNewProtect) : void 0,
-        mode: options.mode === "direct" ? "direct" : "ret-slide"
+        mode: options.mode === "direct" ? "direct" : "ret-slide",
+        badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
       };
-      const plan = planVirtualProtect(currentRopCorpus, params);
+      const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking);
       const python = formatChainPython(plan);
       const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualProtect (PUSHAD)" : "ROP Register Setup \u2014 VirtualProtect (PUSHAD missing)";
       section(sectionLabel);
@@ -13935,16 +13967,18 @@ var osed_bundle = (() => {
         returnAddress: args[1],
         lpBuffer: args[2],
         nSize: args[3],
-        writable: args[4]
+        writable: args[4],
+        badchars: args[5]
       };
       const params = {
         writeProcessMemory: options.writeProcessMemory !== void 0 ? Number(options.writeProcessMemory) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
         lpBuffer: options.lpBuffer !== void 0 ? Number(options.lpBuffer) : void 0,
         nSize: options.nSize !== void 0 ? Number(options.nSize) : void 0,
-        writable: options.writable !== void 0 ? Number(options.writable) : void 0
+        writable: options.writable !== void 0 ? Number(options.writable) : void 0,
+        badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
       };
-      const plan = planWriteProcessMemory(currentRopCorpus, params);
+      const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking);
       const python = formatChainPython(plan);
       const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 WriteProcessMemory (PUSHAD)" : "ROP Register Setup \u2014 WriteProcessMemory (PUSHAD missing)";
       section(sectionLabel);
@@ -13995,16 +14029,18 @@ var osed_bundle = (() => {
         returnAddress: args[1],
         lpAddress: args[2],
         flAllocationType: args[3],
-        flProtect: args[4]
+        flProtect: args[4],
+        badchars: args[5]
       };
       const params = {
         virtualAlloc: options.virtualAlloc !== void 0 ? Number(options.virtualAlloc) : void 0,
         returnAddress: options.returnAddress !== void 0 ? Number(options.returnAddress) : void 0,
         lpAddress: options.lpAddress !== void 0 ? Number(options.lpAddress) : void 0,
         flAllocationType: options.flAllocationType !== void 0 ? Number(options.flAllocationType) : void 0,
-        flProtect: options.flProtect !== void 0 ? Number(options.flProtect) : void 0
+        flProtect: options.flProtect !== void 0 ? Number(options.flProtect) : void 0,
+        badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
       };
-      const plan = planVirtualAlloc(currentRopCorpus, params);
+      const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking);
       const python = formatChainPython(plan);
       const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualAlloc (PUSHAD)" : "ROP Register Setup \u2014 VirtualAlloc (PUSHAD missing)";
       section(sectionLabel);

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sequencesFromLiveHits } from "../src/semantics/live-provider";
-import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame } from "../src/rop";
+import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planRegisterSetupPacking, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame } from "../src/rop";
 
 // Chain construction over an index built from (synthetic) live gadget hits, so it
 // exercises the full live -> index -> plan path.
@@ -417,5 +417,49 @@ describe("flat stdcall DEP frames", () => {
     expect(va.steps[3]).toEqual({ kind: "value", value: 0x201, comment: "dwSize" });
     expect(va.steps[4]).toEqual({ kind: "value", value: 0x1000, comment: "flAllocationType = MEM_COMMIT" });
     expect(va.steps[5]).toEqual({ kind: "value", value: 0x40, comment: "flProtect = PAGE_EXECUTE_READWRITE" });
+  });
+});
+
+describe("PUSHAD chain with badchars constructs null-tainted values", () => {
+  // Corpus rich enough to construct 0x1000 / 0x40 arithmetically, at badchar-free addresses.
+  const richIndex = buildCapabilityIndexFromSequences(
+    sequencesFromLiveHits([
+      { mnemonic: "pop eax ; ret", address: BigInt(0x11223301), module: "vuln" },
+      { mnemonic: "pop ebx ; ret", address: BigInt(0x11223302), module: "vuln" },
+      { mnemonic: "pop ecx ; ret", address: BigInt(0x11223303), module: "vuln" },
+      { mnemonic: "pop edx ; ret", address: BigInt(0x11223304), module: "vuln" },
+      { mnemonic: "pop esi ; ret", address: BigInt(0x11223305), module: "vuln" },
+      { mnemonic: "pop edi ; ret", address: BigInt(0x11223306), module: "vuln" },
+      { mnemonic: "pop ebp ; ret", address: BigInt(0x11223307), module: "vuln" },
+      { mnemonic: "add edx, ebx ; ret", address: BigInt(0x11223308), module: "vuln" },
+      { mnemonic: "add ebx, esi ; ret", address: BigInt(0x11223309), module: "vuln" },
+      { mnemonic: "pushad ; ret", address: BigInt(0x1122330b), module: "vuln" },
+    ]),
+  );
+
+  test("emits no null/badchar word for the tainted flAllocationType and flProtect", () => {
+    const badchars = [0x00, 0x0a, 0x0d];
+    const plan = planVirtualAlloc(richIndex, { badchars }, planRegisterSetupPacking);
+    const bc = new Set(badchars);
+    const hasBad = (v: number) => [0, 8, 16, 24].some((s) => bc.has((v >>> s) & 0xff));
+
+    // The literal 0x1000 / 0x40 must NOT appear as popped constants — they are constructed.
+    const literals = plan.steps.filter((s) => s.kind === "value" && s.value !== undefined).map((s) => s.value!);
+    expect(literals).not.toContain(0x00001000);
+    expect(literals).not.toContain(0x00000040);
+    // No emitted numeric word may contain a badchar.
+    for (const v of literals) expect(hasBad(v)).toBe(false);
+    // ebx and edx were still satisfied (via construction).
+    expect(plan.satisfied).toContain("ebx");
+    expect(plan.satisfied).toContain("edx");
+  });
+
+  test("without a value solver, tainted registers are reported, not silently popped", () => {
+    const plan = planVirtualAlloc(richIndex, { badchars: [0x00, 0x0a, 0x0d] });
+    const literals = plan.steps.filter((s) => s.kind === "value" && s.value !== undefined).map((s) => s.value!);
+    expect(literals).not.toContain(0x00001000);
+    expect(literals).not.toContain(0x00000040);
+    expect(plan.unsatisfied.some((u) => u.register === "ebx")).toBe(true);
+    expect(plan.unsatisfied.some((u) => u.register === "edx")).toBe(true);
   });
 });

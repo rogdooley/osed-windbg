@@ -573,23 +573,70 @@ function named(value: number | undefined, placeholder: string): Pick<RegisterSpe
   return value === undefined ? { placeholder } : { value: value >>> 0 };
 }
 
+// Builds the null-tainted register values for a PUSHAD frame via the register
+// setup engine (injected to avoid an import cycle). Returns the construction
+// steps, the registers it finalized, and any it could not build.
+export type RegisterSetupFn = (
+  index: CapabilityIndex,
+  targets: Record<string, number>,
+  badchars: number[],
+) => { steps: ChainStep[]; ordered: string[]; unresolved: Array<{ register: string; reason: string }> };
+
+function hasBadchar(value: number, badchars: Set<number>): boolean {
+  const w = value >>> 0;
+  for (let i = 0; i < 4; i++) {
+    if (badchars.has((w >>> (i * 8)) & 0xff)) return true;
+  }
+  return false;
+}
+
 function planPushadChain(
   index: CapabilityIndex,
   specs: RegisterSpec[],
   label: string,
   mode: PushadDispatchMode,
   constraints: string[] = [],
+  badchars: number[] = [],
+  setupSolver?: RegisterSetupFn,
 ): PushadPlan {
   const steps: ChainStep[] = [];
   const satisfied: string[] = [];
   const unsatisfied: Array<{ register: string; reason: string }> = [];
   const placeholders = new Set<string>();
+  const bc = new Set(badchars.map((b) => b & 0xff));
 
+  // Partition: numeric values that carry a badchar must be constructed
+  // arithmetically (a direct pop would place a literal null/badchar word on the
+  // stack, which dies on delivery). Everything else is a clean direct pop.
+  const taintedTargets: Record<string, number> = {};
+  const directSpecs: RegisterSpec[] = [];
   for (const spec of specs) {
     if (spec.missingReason) {
       unsatisfied.push({ register: spec.register, reason: spec.missingReason });
-      continue;
+    } else if (spec.placeholder === undefined && spec.value !== undefined && bc.size > 0 && hasBadchar(spec.value, bc)) {
+      taintedTargets[spec.register] = spec.value >>> 0;
+    } else {
+      directSpecs.push(spec);
     }
+  }
+
+  // Construct the tainted registers FIRST, so the later clean single-pops (which
+  // write only their own register) overwrite any scratch junk the construction
+  // left behind and never clobber a constructed value.
+  if (Object.keys(taintedTargets).length > 0) {
+    if (!setupSolver) {
+      for (const [register, value] of Object.entries(taintedTargets)) {
+        unsatisfied.push({ register, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
+      }
+    } else {
+      const setup = setupSolver(index, taintedTargets, badchars);
+      steps.push(...setup.steps);
+      satisfied.push(...setup.ordered);
+      unsatisfied.push(...setup.unresolved);
+    }
+  }
+
+  for (const spec of directSpecs) {
     const selection = selectPopGadget(index, spec.register);
     if (!selection) {
       const reason = index.loadRegister(spec.register).length > 0
@@ -640,6 +687,7 @@ export interface VirtualProtectParams {
   writable?: number;
   flNewProtect?: number;
   mode?: PushadDispatchMode;
+  badchars?: number[];
 }
 
 export type VirtualProtectPlan = PushadPlan;
@@ -677,16 +725,17 @@ function virtualProtectRetSlideSpecs(params: VirtualProtectParams, retGadget: Ro
   ];
 }
 
-export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}): VirtualProtectPlan {
+export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}, setupSolver?: RegisterSetupFn): VirtualProtectPlan {
   const mode = params.mode ?? "ret-slide";
+  const badchars = params.badchars ?? [];
   if (mode === "direct") {
     return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
       "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain.",
-    ]);
+    ], badchars, setupSolver);
   }
   return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
     "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes.",
-  ]);
+  ], badchars, setupSolver);
 }
 
 // -- WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNBW) ------
@@ -699,6 +748,7 @@ export interface WriteProcessMemoryParams {
   lpBuffer?: number;
   nSize?: number;
   writable?: number;
+  badchars?: number[];
 }
 
 export type WriteProcessMemoryPlan = PushadPlan;
@@ -715,10 +765,10 @@ function writeProcessMemorySpecs(params: WriteProcessMemoryParams): RegisterSpec
   ];
 }
 
-export function planWriteProcessMemory(index: CapabilityIndex, params: WriteProcessMemoryParams = {}): WriteProcessMemoryPlan {
+export function planWriteProcessMemory(index: CapabilityIndex, params: WriteProcessMemoryParams = {}, setupSolver?: RegisterSetupFn): WriteProcessMemoryPlan {
   return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
     "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination.",
-  ]);
+  ], params.badchars ?? [], setupSolver);
 }
 
 // -- VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) -------------
@@ -731,6 +781,7 @@ export interface VirtualAllocParams {
   lpAddress?: number;
   flAllocationType?: number;
   flProtect?: number;
+  badchars?: number[];
 }
 
 export type VirtualAllocPlan = PushadPlan;
@@ -749,8 +800,8 @@ function virtualAllocSpecs(params: VirtualAllocParams): RegisterSpec[] {
   ];
 }
 
-export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocParams = {}): VirtualAllocPlan {
+export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocParams = {}, setupSolver?: RegisterSetupFn): VirtualAllocPlan {
   return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
     "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape.",
-  ]);
+  ], params.badchars ?? [], setupSolver);
 }
