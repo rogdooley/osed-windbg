@@ -11652,10 +11652,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-30T20:23:08.369Z" : globalThis[key2];
+        value = true ? "2026-08-30T20:47:56.334Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "a99dcbbf7550" : globalThis[key2];
+        value = true ? "7af8f177c923" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13176,41 +13176,59 @@ var osed_bundle = (() => {
       }, Array.isArray(parsedBadchars) ? parsedBadchars : void 0);
     };
     const executeRopQuery = (...args) => {
+      var _a;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.query");
       }
       let query;
+      let fieldError;
+      const listFields = [
+        "reads",
+        "writes",
+        "preserves",
+        "preservesThroughout",
+        "capability",
+        "terminator"
+      ];
+      const scalarFields = [
+        "stackDelta",
+        "memoryReads",
+        "memoryWrites",
+        "memoryRead",
+        "memoryWrite",
+        "executableOnly"
+      ];
+      const fieldAliases = {
+        write: "writes",
+        read: "reads",
+        preserve: "preserves",
+        preservethroughout: "preservesThroughout",
+        cap: "capability",
+        capabilities: "capability",
+        term: "terminator",
+        stackdelta: "stackDelta",
+        memorywrite: "memoryWrite",
+        memoryread: "memoryRead"
+      };
       if (isPlainObject(args[0])) {
         query = args[0];
       } else if (typeof args[0] === "string" && args[1] !== void 0) {
-        const field = args[0];
-        const listFields = [
-          "reads",
-          "writes",
-          "preserves",
-          "preservesThroughout",
-          "capability",
-          "terminator"
-        ];
-        const scalarFields = [
-          "stackDelta",
-          "memoryReads",
-          "memoryWrites",
-          "memoryRead",
-          "memoryWrite",
-          "executableOnly"
-        ];
+        const raw = args[0].trim();
+        const field = (_a = fieldAliases[raw.toLowerCase()]) != null ? _a : raw;
         if (listFields.includes(field)) {
           query = { [field]: [args[1]] };
         } else if (scalarFields.includes(field)) {
           query = { [field]: args[1] };
+        } else {
+          fieldError = `Unsupported field '${raw}'. Supported: ${[...listFields, ...scalarFields].join(", ")}.`;
         }
         if (query && args[2] !== void 0) {
           query.executableOnly = Boolean(args[2]);
         }
       }
       if (!query) {
-        const rows2 = [{ Error: "rop.query requires a supported field and value." }];
+        const message = fieldError != null ? fieldError : "rop.query requires a supported field and value. Supported: " + [...listFields, ...scalarFields].join(", ") + ".";
+        const rows2 = [{ Error: message }];
         renderRows("ROP Query", rows2);
         setResult({
           command: "rop.query",
@@ -13218,7 +13236,7 @@ var osed_bundle = (() => {
           success: false,
           findings: [],
           warnings: [],
-          errors: ["Use rop.query(field, value, executableOnly?)."]
+          errors: [message]
         });
         return toDxResult("ROP Query", rows2);
       }

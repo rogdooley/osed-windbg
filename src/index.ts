@@ -623,37 +623,55 @@ function bindApi(): OsedApi {
       return helperHelp("rop.query");
     }
     let query: RopQuery | undefined;
+    let fieldError: string | undefined;
+    const listFields: Array<keyof RopQuery> = [
+      "reads",
+      "writes",
+      "preserves",
+      "preservesThroughout",
+      "capability",
+      "terminator",
+    ];
+    const scalarFields: Array<keyof RopQuery> = [
+      "stackDelta",
+      "memoryReads",
+      "memoryWrites",
+      "memoryRead",
+      "memoryWrite",
+      "executableOnly",
+    ];
+    // Common singular/short forms mapped to the canonical field name.
+    const fieldAliases: Record<string, keyof RopQuery> = {
+      write: "writes",
+      read: "reads",
+      preserve: "preserves",
+      preservethroughout: "preservesThroughout",
+      cap: "capability",
+      capabilities: "capability",
+      term: "terminator",
+      stackdelta: "stackDelta",
+      memorywrite: "memoryWrite",
+      memoryread: "memoryRead",
+    };
     if (isPlainObject(args[0])) {
       query = args[0] as RopQuery;
     } else if (typeof args[0] === "string" && args[1] !== undefined) {
-      const field = args[0] as keyof RopQuery;
-      const listFields: Array<keyof RopQuery> = [
-        "reads",
-        "writes",
-        "preserves",
-        "preservesThroughout",
-        "capability",
-        "terminator",
-      ];
-      const scalarFields: Array<keyof RopQuery> = [
-        "stackDelta",
-        "memoryReads",
-        "memoryWrites",
-        "memoryRead",
-        "memoryWrite",
-        "executableOnly",
-      ];
+      const raw = args[0].trim();
+      const field = (fieldAliases[raw.toLowerCase()] ?? raw) as keyof RopQuery;
       if (listFields.includes(field)) {
         query = { [field]: [args[1]] } as RopQuery;
       } else if (scalarFields.includes(field)) {
         query = { [field]: args[1] } as RopQuery;
+      } else {
+        fieldError = `Unsupported field '${raw}'. Supported: ${[...listFields, ...scalarFields].join(", ")}.`;
       }
       if (query && args[2] !== undefined) {
         query.executableOnly = Boolean(args[2]);
       }
     }
     if (!query) {
-      const rows = [{ Error: "rop.query requires a supported field and value." }];
+      const message = fieldError ?? "rop.query requires a supported field and value. Supported: " + [...listFields, ...scalarFields].join(", ") + ".";
+      const rows = [{ Error: message }];
       renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
@@ -661,7 +679,7 @@ function bindApi(): OsedApi {
         success: false,
         findings: [],
         warnings: [],
-        errors: ["Use rop.query(field, value, executableOnly?)."],
+        errors: [message],
       });
       return toDxResult("ROP Query", rows);
     }
