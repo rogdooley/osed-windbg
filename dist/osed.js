@@ -11652,10 +11652,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-30T21:23:11.449Z" : globalThis[key2];
+        value = true ? "2026-08-30T21:47:50.914Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3fea3876df4d" : globalThis[key2];
+        value = true ? "41d1170c1611" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12831,6 +12831,29 @@ var osed_bundle = (() => {
   function resetCorpusModules() {
     corpusModules = [];
   }
+  function moduleBaseByName(name) {
+    var _a;
+    if (!name || name === "<all>") return void 0;
+    const matches = listModulesWithMitigations(name);
+    const exact = (_a = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a : matches[0];
+    return exact == null ? void 0 : exact.base;
+  }
+  function corpusStaleModules() {
+    const tracked = corpusModules.filter((entry) => entry.base !== void 0);
+    if (tracked.length === 0) return [];
+    const liveBases = /* @__PURE__ */ new Map();
+    for (const mod of listModulesWithMitigations()) {
+      liveBases.set(mod.name.toLowerCase(), mod.base);
+    }
+    const stale = [];
+    for (const entry of tracked) {
+      const now = liveBases.get(entry.name.toLowerCase());
+      if (now === void 0 || now !== entry.base) {
+        stale.push({ name: entry.name, was: entry.base, now });
+      }
+    }
+    return stale;
+  }
   function getGlobalObject() {
     if (typeof globalThis !== "undefined") {
       return globalThis;
@@ -12981,6 +13004,16 @@ var osed_bundle = (() => {
       });
       return toDxResult(`Help: ${name}`, rows);
     };
+    const staleCorpusGuard = (title, command) => {
+      const stale = corpusStaleModules();
+      if (stale.length === 0) return void 0;
+      const detail = stale.map((s) => `${s.name} ${hex32(s.was)} -> ${s.now !== void 0 ? hex32(s.now) : "not loaded"}`).join("; ");
+      const message = `Corpus is STALE \u2014 module(s) rebased since scan: ${detail}. These non-ASLR modules relocated (e.g. after a target relaunch), so the corpus's gadget addresses now point at the wrong memory. Re-run rop.scan_live(...) for them before building a chain.`;
+      const rows = [{ Error: message }];
+      renderRows(title, rows);
+      setResult({ command, args: {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult(title, rows);
+    };
     const scanCorpus = (text, options = {}, badchars) => {
       invalidateCorpusPlans();
       resetCorpusModules();
@@ -13052,19 +13085,22 @@ var osed_bundle = (() => {
           if (reason) warnings.push(reason);
         }
         const modName = mod != null ? mod : "<all>";
+        const base = moduleBaseByName(modName);
         const existing = corpusModules.find((m) => m.name === modName);
         if (existing) {
           existing.accepted = accepted;
           existing.rejected = rejected;
           existing.usable = accepted > 0;
           existing.reason = reason;
+          existing.base = base;
         } else {
           corpusModules.push({
             name: modName,
             accepted,
             rejected,
             usable: accepted > 0,
-            reason
+            reason,
+            base
           });
         }
       }
@@ -13253,6 +13289,8 @@ var osed_bundle = (() => {
         });
         return toDxResult("ROP Query", rows2);
       }
+      const queryStale = staleCorpusGuard("ROP Query", "rop.query");
+      if (queryStale) return queryStale;
       const gadgets = currentRopCorpus.query(query);
       const rows = queryRows(query);
       renderRows("ROP Query", rows);
@@ -13332,6 +13370,8 @@ var osed_bundle = (() => {
         renderRows("ROP Emit", rows2);
         return toDxResult("ROP Emit", rows2);
       }
+      const emitStale = staleCorpusGuard("ROP Emit", "rop.emit");
+      if (emitStale) return emitStale;
       const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], strategyId: args[1] };
       const planId = Number((_a = options.planId) != null ? _a : options.plan_id);
       const strategyId = (_b = options.strategyId) != null ? _b : options.strategy_id;
@@ -13373,6 +13413,8 @@ var osed_bundle = (() => {
         renderRows("ROP Synthesize", rows2);
         return toDxResult("ROP Synthesize", rows2);
       }
+      const synthStale = staleCorpusGuard("ROP Synthesize", "rop.synthesize");
+      if (synthStale) return synthStale;
       const options = isPlainObject(args[0]) ? args[0] : __spreadValues({ planId: args[0] }, isPlainObject(args[1]) ? args[1] : {});
       const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
       const entry = ropPlans.get(planId);
@@ -13450,6 +13492,8 @@ var osed_bundle = (() => {
         renderRows("ROP Export", rows2);
         return toDxResult("ROP Export", rows2);
       }
+      const exportStale = staleCorpusGuard("ROP Export", "rop.export");
+      if (exportStale) return exportStale;
       const options = isPlainObject(args[0]) ? args[0] : { planId: args[0], path: args[1] };
       const planId = Number((_b = (_a = options.planId) != null ? _a : options.plan_id) != null ? _b : args[0]);
       const filePath = (_d = (_c = options.path) != null ? _c : options.file) != null ? _d : typeof args[1] === "string" ? args[1] : void 0;
@@ -13648,6 +13692,8 @@ var osed_bundle = (() => {
         renderRows("ROP Pivots", rows2);
         return toDxResult("ROP Pivots", rows2);
       }
+      const pivotsStale = staleCorpusGuard("ROP Pivots", "rop.pivots");
+      if (pivotsStale) return pivotsStale;
       const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1] };
       const filterRegister = typeof options.register === "string" ? options.register.toLowerCase().trim() : void 0;
       const minDelta = typeof options.minDelta === "number" ? options.minDelta : void 0;
@@ -13809,6 +13855,8 @@ var osed_bundle = (() => {
         setResult({ command: "rop.construct", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("Value Construction", rows2);
       }
+      const constructStale = staleCorpusGuard("Value Construction", "rop.construct");
+      if (constructStale) return constructStale;
       const register = typeof args[0] === "string" ? args[0].toLowerCase() : void 0;
       const rawValue = args[1] !== void 0 ? Number(args[1]) : NaN;
       const value = Number.isFinite(rawValue) ? rawValue >>> 0 : void 0;
@@ -13867,6 +13915,8 @@ var osed_bundle = (() => {
         setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("Register Setup", rows2);
       }
+      const setupStale = staleCorpusGuard("Register Setup", "rop.setup");
+      if (setupStale) return setupStale;
       const targets = parseRegisterTargets(args[0]);
       const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) : [];
       if (Object.keys(targets).length === 0) {
@@ -13916,6 +13966,8 @@ var osed_bundle = (() => {
         setResult({ command: "rop.chain_vp", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP VirtualProtect Chain", rows2);
       }
+      const chainVpStale = staleCorpusGuard("ROP VirtualProtect Chain", "rop.chain_vp");
+      if (chainVpStale) return chainVpStale;
       const options = isPlainObject(args[0]) ? args[0] : {
         virtualProtect: args[0],
         retGadget: args[1],
@@ -13984,6 +14036,8 @@ var osed_bundle = (() => {
         setResult({ command: "rop.chain_wpm", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP WriteProcessMemory Chain", rows2);
       }
+      const chainWpmStale = staleCorpusGuard("ROP WriteProcessMemory Chain", "rop.chain_wpm");
+      if (chainWpmStale) return chainWpmStale;
       const options = isPlainObject(args[0]) ? args[0] : {
         writeProcessMemory: args[0],
         returnAddress: args[1],
@@ -14046,6 +14100,8 @@ var osed_bundle = (() => {
         setResult({ command: "rop.chain_va", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP VirtualAlloc Chain", rows2);
       }
+      const chainVaStale = staleCorpusGuard("ROP VirtualAlloc Chain", "rop.chain_va");
+      if (chainVaStale) return chainVaStale;
       const options = isPlainObject(args[0]) ? args[0] : {
         virtualAlloc: args[0],
         returnAddress: args[1],

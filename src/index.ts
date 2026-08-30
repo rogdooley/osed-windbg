@@ -85,6 +85,8 @@ interface CorpusModuleEntry {
   rejected: number;
   usable: boolean;
   reason?: string;
+  /** Module base at scan time; used to detect a rebase (relaunch) that invalidates gadget addresses. */
+  base?: bigint;
 }
 let corpusModules: CorpusModuleEntry[] = [];
 const ropEmitter = new RankedSemanticEmitter();
@@ -237,6 +239,35 @@ function invalidateCorpusPlans(): void {
 
 function resetCorpusModules(): void {
   corpusModules = [];
+}
+
+// Current live base of a module by name, or undefined for the "<all>" scan or
+// an unresolved name. Used to capture scan-time bases and detect rebases.
+function moduleBaseByName(name: string): bigint | undefined {
+  if (!name || name === "<all>") return undefined;
+  const matches = listModulesWithMitigations(name);
+  const exact = matches.find((m) => m.name.toLowerCase() === name.toLowerCase()) ?? matches[0];
+  return exact?.base;
+}
+
+// Modules whose current base differs from the base recorded when they were
+// scanned — their gadget addresses in the corpus are stale and must not be used.
+function corpusStaleModules(): Array<{ name: string; was: bigint; now: bigint | undefined }> {
+  const tracked = corpusModules.filter((entry) => entry.base !== undefined);
+  if (tracked.length === 0) return [];
+  // Enumerate the live module list once and look each tracked module up in it.
+  const liveBases = new Map<string, bigint>();
+  for (const mod of listModulesWithMitigations()) {
+    liveBases.set(mod.name.toLowerCase(), mod.base);
+  }
+  const stale: Array<{ name: string; was: bigint; now: bigint | undefined }> = [];
+  for (const entry of tracked) {
+    const now = liveBases.get(entry.name.toLowerCase());
+    if (now === undefined || now !== entry.base!) {
+      stale.push({ name: entry.name, was: entry.base!, now });
+    }
+  }
+  return stale;
 }
 
 function getGlobalObject(): Record<string, unknown> | undefined {
@@ -401,6 +432,22 @@ function bindApi(): OsedApi {
     return toDxResult(`Help: ${name}`, rows);
   };
 
+  // Refuse to emit gadgets when a scanned module has rebased since scan time —
+  // its addresses now point at the wrong memory. Returns an error DxResult to
+  // return early, or undefined when the corpus is still valid.
+  const staleCorpusGuard = (title: string, command: string): DxResult | undefined => {
+    const stale = corpusStaleModules();
+    if (stale.length === 0) return undefined;
+    const detail = stale
+      .map((s) => `${s.name} ${hex32(s.was)} -> ${s.now !== undefined ? hex32(s.now) : "not loaded"}`)
+      .join("; ");
+    const message = `Corpus is STALE — module(s) rebased since scan: ${detail}. These non-ASLR modules relocated (e.g. after a target relaunch), so the corpus's gadget addresses now point at the wrong memory. Re-run rop.scan_live(...) for them before building a chain.`;
+    const rows = [{ Error: message }];
+    renderRows(title, rows);
+    setResult({ command, args: {}, success: false, findings: [], warnings: [], errors: [message] });
+    return toDxResult(title, rows);
+  };
+
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}, badchars?: number[]): DxResult => {
     invalidateCorpusPlans();
     resetCorpusModules();
@@ -476,12 +523,14 @@ function bindApi(): OsedApi {
         if (reason) warnings.push(reason);
       }
       const modName = mod ?? "<all>";
+      const base = moduleBaseByName(modName);
       const existing = corpusModules.find((m) => m.name === modName);
       if (existing) {
         existing.accepted = accepted;
         existing.rejected = rejected;
         existing.usable = accepted > 0;
         existing.reason = reason;
+        existing.base = base;
       } else {
         corpusModules.push({
           name: modName,
@@ -489,6 +538,7 @@ function bindApi(): OsedApi {
           rejected,
           usable: accepted > 0,
           reason,
+          base,
         });
       }
     }
@@ -696,6 +746,8 @@ function bindApi(): OsedApi {
       });
       return toDxResult("ROP Query", rows);
     }
+    const queryStale = staleCorpusGuard("ROP Query", "rop.query");
+    if (queryStale) return queryStale;
 
     const gadgets = currentRopCorpus.query(query);
     const rows = queryRows(query);
@@ -779,6 +831,8 @@ function bindApi(): OsedApi {
       renderRows("ROP Emit", rows);
       return toDxResult("ROP Emit", rows);
     }
+    const emitStale = staleCorpusGuard("ROP Emit", "rop.emit");
+    if (emitStale) return emitStale;
     const options = isPlainObject(args[0])
       ? args[0]
       : { planId: args[0], strategyId: args[1] };
@@ -822,6 +876,8 @@ function bindApi(): OsedApi {
       renderRows("ROP Synthesize", rows);
       return toDxResult("ROP Synthesize", rows);
     }
+    const synthStale = staleCorpusGuard("ROP Synthesize", "rop.synthesize");
+    if (synthStale) return synthStale;
     const options = isPlainObject(args[0])
       ? args[0]
       : { planId: args[0], ...(isPlainObject(args[1]) ? args[1] as Record<string, unknown> : {}) };
@@ -909,6 +965,8 @@ function bindApi(): OsedApi {
       renderRows("ROP Export", rows);
       return toDxResult("ROP Export", rows);
     }
+    const exportStale = staleCorpusGuard("ROP Export", "rop.export");
+    if (exportStale) return exportStale;
     const options = isPlainObject(args[0])
       ? args[0]
       : { planId: args[0], path: args[1] };
@@ -1126,6 +1184,8 @@ function bindApi(): OsedApi {
       renderRows("ROP Pivots", rows);
       return toDxResult("ROP Pivots", rows);
     }
+    const pivotsStale = staleCorpusGuard("ROP Pivots", "rop.pivots");
+    if (pivotsStale) return pivotsStale;
     const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1] };
     const filterRegister = typeof options.register === "string"
       ? options.register.toLowerCase().trim()
@@ -1311,6 +1371,8 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.construct", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("Value Construction", rows);
     }
+    const constructStale = staleCorpusGuard("Value Construction", "rop.construct");
+    if (constructStale) return constructStale;
     const register = typeof args[0] === "string" ? args[0].toLowerCase() : undefined;
     const rawValue = args[1] !== undefined ? Number(args[1]) : NaN;
     const value = Number.isFinite(rawValue) ? rawValue >>> 0 : undefined;
@@ -1369,6 +1431,8 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.setup", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("Register Setup", rows);
     }
+    const setupStale = staleCorpusGuard("Register Setup", "rop.setup");
+    if (setupStale) return setupStale;
     const targets = parseRegisterTargets(args[0]);
     const badchars = Array.isArray(parseHexByteList(args[1])) ? parseHexByteList(args[1]) as number[] : [];
     if (Object.keys(targets).length === 0) {
@@ -1416,6 +1480,8 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.chain_vp", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("ROP VirtualProtect Chain", rows);
     }
+    const chainVpStale = staleCorpusGuard("ROP VirtualProtect Chain", "rop.chain_vp");
+    if (chainVpStale) return chainVpStale;
 
     const options = isPlainObject(args[0])
       ? args[0]
@@ -1492,6 +1558,8 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.chain_wpm", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("ROP WriteProcessMemory Chain", rows);
     }
+    const chainWpmStale = staleCorpusGuard("ROP WriteProcessMemory Chain", "rop.chain_wpm");
+    if (chainWpmStale) return chainWpmStale;
 
     const options = isPlainObject(args[0])
       ? args[0]
@@ -1562,6 +1630,8 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.chain_va", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("ROP VirtualAlloc Chain", rows);
     }
+    const chainVaStale = staleCorpusGuard("ROP VirtualAlloc Chain", "rop.chain_va");
+    if (chainVaStale) return chainVaStale;
 
     const options = isPlainObject(args[0])
       ? args[0]
