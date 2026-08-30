@@ -1332,9 +1332,11 @@ function bindApi(): OsedApi {
     }
     out.section(`Value Construction: ${register} = ${hex32(value)}`);
     out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
-    const collateral = recipe.clobbers.filter((r) => r !== register);
+    // Incidental clobbers = everything the recipe changes besides the target and
+    // the (deliberate) scratch register.
+    const collateral = recipe.clobbers.filter((r) => r !== register && r !== recipe.scratchRegister);
     if (collateral.length > 0) {
-      out.warn(`This recipe also alters ${collateral.join(", ")}. During PUSHAD or stack-frame setup, run it BEFORE those registers hold live values, or pass them in the preserve list (4th arg). construct() builds ONE register at a time; for a whole frame use rop.setup("reg=value ..."), which packs registers into multi-pop gadgets and orders them clobber-safely.`);
+      out.warn(`Side effect: this recipe also changes ${collateral.join(", ")} (harmless unless you need ${collateral.length > 1 ? "them" : "it"} preserved). To keep a register live, pass it as the 4th arg, e.g. rop.construct("${register}", ..., "<badchars>", "${collateral[0]}").`);
     }
     const python = formatChainPython({ steps: recipe.steps });
     for (const line of python) {
