@@ -11672,10 +11672,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-30T21:57:09.788Z" : globalThis[key2];
+        value = true ? "2026-08-30T22:12:03.537Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "862cb1a2eb65" : globalThis[key2];
+        value = true ? "84d6d051a101" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12868,15 +12868,15 @@ var osed_bundle = (() => {
     return (address) => !relocated.some(([lo, hi]) => address >= lo && address < hi);
   }
   function corpusStaleModules() {
+    var _a;
     const tracked = corpusModules.filter((entry) => entry.base !== void 0);
     if (tracked.length === 0) return [];
-    const liveBases = /* @__PURE__ */ new Map();
-    for (const mod of listModulesWithMitigations()) {
-      liveBases.set(mod.name.toLowerCase(), mod.base);
-    }
+    const live = listModulesWithMitigations();
     const stale = [];
     for (const entry of tracked) {
-      const now = liveBases.get(entry.name.toLowerCase());
+      const needle = entry.name.toLowerCase();
+      const match = (_a = live.find((m) => m.name.toLowerCase() === needle)) != null ? _a : live.find((m) => m.name.toLowerCase().includes(needle) || m.path.toLowerCase().includes(needle));
+      const now = match == null ? void 0 : match.base;
       if (now === void 0 || now !== entry.base) {
         stale.push({ name: entry.name, was: entry.base, now });
       }

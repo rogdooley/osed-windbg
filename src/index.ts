@@ -269,14 +269,16 @@ function buildStableAddressPredicate(): (address: bigint) => boolean {
 function corpusStaleModules(): Array<{ name: string; was: bigint; now: bigint | undefined }> {
   const tracked = corpusModules.filter((entry) => entry.base !== undefined);
   if (tracked.length === 0) return [];
-  // Enumerate the live module list once and look each tracked module up in it.
-  const liveBases = new Map<string, bigint>();
-  for (const mod of listModulesWithMitigations()) {
-    liveBases.set(mod.name.toLowerCase(), mod.base);
-  }
+  // Enumerate the live module list once. The tracked name is the (possibly short)
+  // filter the user passed to scan_live, while the live module.Name is often a
+  // full path — match the same substring way moduleBaseByName captured the base.
+  const live = listModulesWithMitigations();
   const stale: Array<{ name: string; was: bigint; now: bigint | undefined }> = [];
   for (const entry of tracked) {
-    const now = liveBases.get(entry.name.toLowerCase());
+    const needle = entry.name.toLowerCase();
+    const match = live.find((m) => m.name.toLowerCase() === needle)
+      ?? live.find((m) => m.name.toLowerCase().includes(needle) || m.path.toLowerCase().includes(needle));
+    const now = match?.base;
     if (now === undefined || now !== entry.base!) {
       stale.push({ name: entry.name, was: entry.base!, now });
     }
