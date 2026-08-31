@@ -3645,6 +3645,26 @@ var osed_bundle = (() => {
     }
     return steps;
   }
+  function fixRetImmPadding(steps) {
+    const isPad = (s) => s.kind === "value" && typeof s.comment === "string" && s.comment.startsWith("padding (ret ");
+    const out = [];
+    let i = 0;
+    while (i < steps.length) {
+      if (isPad(steps[i])) {
+        const run = [];
+        while (i < steps.length && isPad(steps[i])) run.push(steps[i++]);
+        if (i < steps.length && steps[i].kind === "gadget") {
+          out.push(steps[i++]);
+          out.push(...run);
+        } else {
+          out.push(...run);
+        }
+      } else {
+        out.push(steps[i++]);
+      }
+    }
+    return out;
+  }
   function isSinglePopRetLike(gadget, register) {
     if (gadget.instructions.length !== 2) return false;
     const [pop, ret] = gadget.instructions;
@@ -4021,15 +4041,16 @@ var osed_bundle = (() => {
     } else {
       unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
     }
+    const finalSteps = fixRetImmPadding(steps);
     return {
-      steps,
+      steps: finalSteps,
       satisfied,
       unsatisfied,
       placeholders: [...placeholders],
       constraints,
       hasPushad: pushad !== void 0,
       mode,
-      stackBytes: steps.length * 4
+      stackBytes: finalSteps.length * 4
     };
   }
   function virtualProtectDirectSpecs(params) {
@@ -4835,7 +4856,8 @@ var osed_bundle = (() => {
       ordered.push(arith.register);
     }
     const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
-    return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
+    const finalSteps = fixRetImmPadding(steps);
+    return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * 4, success: unresolved.length === 0 };
   }
   function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater) {
     const preserve = [...done];
@@ -5048,7 +5070,7 @@ var osed_bundle = (() => {
     steps.push(gadgetStep2(pivot, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
     steps.push(...retImmPadding(retImmBytes(pivot)));
     return {
-      steps,
+      steps: fixRetImmPadding(steps),
       unsatisfied,
       gadgets: {
         store: firstKnownAddress(resolved[0].store.gadget),
@@ -11915,10 +11937,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-31T02:07:51.481Z" : globalThis[key2];
+        value = true ? "2026-08-31T02:22:21.257Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "f7aaf6cd4678" : globalThis[key2];
+        value = true ? "80808075fdef" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14148,6 +14170,7 @@ var osed_bundle = (() => {
         setResult({ command: "rop.construct", args: { register, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}${preserveNote}`] });
         return toDxResult("Value Construction", rows2);
       }
+      recipe.steps = fixRetImmPadding(recipe.steps);
       section(`Value Construction: ${register} = ${hex32(value)}`);
       info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
       const collateral = recipe.clobbers.filter((r) => r !== register && r !== recipe.scratchRegister);

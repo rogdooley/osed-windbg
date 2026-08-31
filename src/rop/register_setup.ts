@@ -1,5 +1,5 @@
 import { buildCapabilities, CapabilityIndex } from "./capabilities";
-import { ChainStep, firstKnownAddress, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
+import { ChainStep, firstKnownAddress, fixRetImmPadding, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { solveValue } from "./value_solver";
 
@@ -294,7 +294,8 @@ function planRegisterSetupPackingInner(
   }
 
   const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates, done, targetValues, badchars, bc) }));
-  return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
+  const finalSteps = fixRetImmPadding(steps);
+  return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * 4, success: unresolved.length === 0 };
 }
 
 function pickArithmeticBuild(

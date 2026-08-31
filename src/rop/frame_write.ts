@@ -1,5 +1,5 @@
 import { CapabilityIndex } from "./capabilities";
-import { ChainStep, firstKnownAddress, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint, getStableAddressHint } from "./chain";
+import { ChainStep, firstKnownAddress, fixRetImmPadding, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint, getStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { solveValue } from "./value_solver";
 
@@ -246,7 +246,7 @@ function planWriteFrameInner(
   steps.push(...retImmPadding(retImmBytes(pivot!)));
 
   return {
-    steps,
+    steps: fixRetImmPadding(steps),
     unsatisfied,
     gadgets: {
       store: firstKnownAddress(resolved[0].store.gadget),

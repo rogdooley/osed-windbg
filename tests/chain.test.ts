@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { sequencesFromLiveHits } from "../src/semantics/live-provider";
-import { buildCapabilityIndexFromSequences, formatChainPython, planRegisterSetup, planRegisterSetupPacking, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame } from "../src/rop";
+import { buildCapabilityIndexFromSequences, fixRetImmPadding, formatChainPython, planRegisterSetup, planRegisterSetupPacking, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame } from "../src/rop";
 
 // Chain construction over an index built from (synthetic) live gadget hits, so it
 // exercises the full live -> index -> plan path.
@@ -169,11 +169,14 @@ describe("ret imm compensation", () => {
       ]),
     );
     const plan = planVirtualProtect(pushadRetImm, { mode: "direct", virtualProtect: 0x7c801ad0 });
-    // EDI's pop has ret 4, so there should be a padding word after the EDI value.
+    // EDI's pop has ret 4: after [pop edi][edi value] the ret 4 reads the NEXT
+    // gadget as its return address, THEN skips the padding — so the padding sits
+    // AFTER the following gadget, not before it.
     const ediGadgetIdx = plan.steps.findIndex((s) => s.comment.includes("pop edi"));
     expect(ediGadgetIdx).toBeGreaterThanOrEqual(0);
     expect(plan.steps[ediGadgetIdx].comment).toContain("ret 4");
-    expect(plan.steps[ediGadgetIdx + 2]).toEqual({
+    expect(plan.steps[ediGadgetIdx + 2].kind).toBe("gadget"); // the return-address gadget
+    expect(plan.steps[ediGadgetIdx + 3]).toEqual({
       kind: "value", value: 0x41414141, comment: "padding (ret 4 compensation)",
     });
     // ESI's pop is plain ret — no padding after its value.
@@ -417,6 +420,25 @@ describe("flat stdcall DEP frames", () => {
     expect(va.steps[3]).toEqual({ kind: "value", value: 0x201, comment: "dwSize" });
     expect(va.steps[4]).toEqual({ kind: "value", value: 0x1000, comment: "flAllocationType = MEM_COMMIT" });
     expect(va.steps[5]).toEqual({ kind: "value", value: 0x40, comment: "flProtect = PAGE_EXECUTE_READWRITE" });
+  });
+});
+
+describe("ret N padding placement", () => {
+  test("moves the padding after the following gadget (the return address)", () => {
+    const steps = [
+      { kind: "gadget" as const, address: BigInt(0x1000), comment: "add edx, ebx ; pop ebx ; ret 0x10" },
+      { kind: "value" as const, value: 0x41414141, comment: "junk (ebx side effect)" },
+      { kind: "value" as const, value: 0x41414141, comment: "padding (ret 16 compensation)" },
+      { kind: "value" as const, value: 0x41414141, comment: "padding (ret 16 compensation)" },
+      { kind: "gadget" as const, address: BigInt(0x2000), comment: "mov [eax], edx" },
+    ];
+    const fixed = fixRetImmPadding(steps);
+    // gadget, junk(data), THEN the next gadget (return address), THEN the skipped padding
+    expect(fixed.map((s) => s.kind)).toEqual(["gadget", "value", "gadget", "value", "value"]);
+    expect(fixed[1].comment).toContain("junk");
+    expect(fixed[2].address).toBe(BigInt(0x2000));
+    expect(fixed[3].comment).toContain("padding");
+    expect(fixed[4].comment).toContain("padding");
   });
 });
 

@@ -107,6 +107,31 @@ export function retImmPadding(retImm: number): ChainStep[] {
   return steps;
 }
 
+// `ret N` pops the next return address, THEN skips N bytes — so its padding must
+// sit AFTER the following gadget address, not before it. Recipes emit the padding
+// immediately after the gadget for convenience; this pass moves each padding run
+// past the gadget step that follows it, producing a correctly ordered chain.
+export function fixRetImmPadding(steps: ChainStep[]): ChainStep[] {
+  const isPad = (s: ChainStep): boolean => s.kind === "value" && typeof s.comment === "string" && s.comment.startsWith("padding (ret ");
+  const out: ChainStep[] = [];
+  let i = 0;
+  while (i < steps.length) {
+    if (isPad(steps[i])) {
+      const run: ChainStep[] = [];
+      while (i < steps.length && isPad(steps[i])) run.push(steps[i++]);
+      if (i < steps.length && steps[i].kind === "gadget") {
+        out.push(steps[i++]); // the return-address gadget the ret N lands on
+        out.push(...run);      // then the bytes it skips
+      } else {
+        out.push(...run); // trailing padding (caller appends the continuation)
+      }
+    } else {
+      out.push(steps[i++]);
+    }
+  }
+  return out;
+}
+
 function isSinglePopRetLike(gadget: RopGadget, register: string): boolean {
   if (gadget.instructions.length !== 2) return false;
   const [pop, ret] = gadget.instructions;
@@ -700,15 +725,16 @@ function planPushadChain(
     unsatisfied.push({ register: "pushad", reason: "no pushad ; ret gadget in corpus" });
   }
 
+  const finalSteps = fixRetImmPadding(steps);
   return {
-    steps,
+    steps: finalSteps,
     satisfied,
     unsatisfied,
     placeholders: [...placeholders],
     constraints,
     hasPushad: pushad !== undefined,
     mode,
-    stackBytes: steps.length * 4,
+    stackBytes: finalSteps.length * 4,
   };
 }
 

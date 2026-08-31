@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, type FrameWord, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, type FrameWord, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1408,6 +1408,8 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.construct", args: { register, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}${preserveNote}`] });
       return toDxResult("Value Construction", rows);
     }
+    // ret N padding must sit after the following gadget address, not before it.
+    recipe.steps = fixRetImmPadding(recipe.steps);
     out.section(`Value Construction: ${register} = ${hex32(value)}`);
     out.info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
     // Incidental clobbers = everything the recipe changes besides the target and
