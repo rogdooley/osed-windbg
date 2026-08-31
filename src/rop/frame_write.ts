@@ -56,14 +56,27 @@ function pickBest(cands: RopGadget[]): RopGadget | undefined {
     })[0];
 }
 
-// mov [eax], ecx ; ret  (canonical store: EAX = pointer, ECX = value)
-function findStore(index: CapabilityIndex): RopGadget | undefined {
-  return pickBest(index.gadgets.filter((g) =>
-    g.instructions.length === 2 &&
-    g.instructions[0].mnemonic === "mov" &&
-    /\[eax\]$/.test(op(g, 0, 0)) &&
-    op(g, 0, 1) === "ecx" &&
-    lastIsRet(g)));
+const VALUE_REGS = ["ecx", "edx", "ebx", "esi", "edi", "ebp"];
+
+interface Store { gadget: RopGadget; reg: string; }
+
+// All `mov [eax], <reg> ; ret` stores (EAX = pointer). The value register varies
+// by gadget; we pick per word whichever one the value can be built in.
+function findStores(index: CapabilityIndex): Store[] {
+  const byReg = new Map<string, RopGadget[]>();
+  for (const g of index.gadgets) {
+    if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
+    if (!/\[eax\]$/.test(op(g, 0, 0))) continue;
+    const reg = op(g, 0, 1);
+    if (!VALUE_REGS.includes(reg)) continue;
+    (byReg.get(reg) ?? byReg.set(reg, []).get(reg)!).push(g);
+  }
+  const stores: Store[] = [];
+  for (const [reg, gadgets] of byReg) {
+    const best = pickBest(gadgets);
+    if (best) stores.push({ gadget: best, reg });
+  }
+  return stores;
 }
 
 // add eax, 4 ; ret  (advance the write pointer one dword). Extra pops after the
@@ -129,6 +142,14 @@ export function planWriteFrame(
   }
 }
 
+interface ResolvedWord {
+  word: FrameWord;
+  store: Store;
+  reg: string;
+  recipe?: NonNullable<ReturnType<typeof solveValue>>; // set when the value is synthesised
+  pop?: RopGadget; // set when the value is popped directly
+}
+
 function planWriteFrameInner(
   index: CapabilityIndex,
   bufAddress: { value?: number; placeholder?: string },
@@ -136,25 +157,49 @@ function planWriteFrameInner(
   badchars: number[],
 ): WriteFramePlan {
   const bc = new Set(badchars.map((b) => b & 0xff));
-  const steps: ChainStep[] = [];
   const unsatisfied: string[] = [];
   const placeholders = new Set<string>();
 
-  const store = findStore(index);
+  const stores = findStores(index);
   const advance = findAdvance(index);
   const pivot = findPivot(index);
   const popEax = findCleanPop(index, "eax");
-  const popEcx = findCleanPop(index, "ecx");
+  const popByReg = new Map<string, RopGadget | undefined>();
+  const popFor = (reg: string): RopGadget | undefined => {
+    if (!popByReg.has(reg)) popByReg.set(reg, findCleanPop(index, reg));
+    return popByReg.get(reg);
+  };
 
-  if (!store) unsatisfied.push("no `mov [eax], ecx ; ret` store gadget");
+  if (stores.length === 0) unsatisfied.push("no `mov [eax], <reg> ; ret` store gadget");
   if (!popEax) unsatisfied.push("no clean `pop eax ; ret`");
-  if (!popEcx) unsatisfied.push("no clean `pop ecx ; ret`");
   if (words.length > 1 && !advance) unsatisfied.push("no `add eax, 4 ; ret` pointer-advance gadget");
   if (!pivot) unsatisfied.push("no `xchg eax, esp` / `mov esp, eax` pivot gadget");
   if (unsatisfied.length > 0) {
-    return { steps, unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
+    return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
   }
 
+  // Resolve every word first (pick a store whose value register can hold it),
+  // so we either emit a complete frame or report exactly what's missing.
+  const resolved: ResolvedWord[] = [];
+  for (const word of words) {
+    if (word.placeholder || (word.value !== undefined && isBadcharFree(word.value, bc))) {
+      const store = stores.find((s) => popFor(s.reg) !== undefined);
+      if (!store) { unsatisfied.push(`no store+pop for ${word.comment}`); continue; }
+      resolved.push({ word, store, reg: store.reg, pop: popFor(store.reg) });
+    } else {
+      let done = false;
+      for (const store of stores) {
+        const recipe = solveValue(index, store.reg, word.value!, badchars, ["eax"]);
+        if (recipe) { resolved.push({ word, store, reg: store.reg, recipe }); done = true; break; }
+      }
+      if (!done) unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex(word.value!)} for ${word.comment} while preserving eax`);
+    }
+  }
+  if (unsatisfied.length > 0) {
+    return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
+  }
+
+  const steps: ChainStep[] = [];
   const setEax = (word: { value?: number; placeholder?: string }, comment: string): void => {
     steps.push(gadgetStep(popEax!, "pop eax"));
     if (word.placeholder) {
@@ -169,9 +214,8 @@ function planWriteFrameInner(
   // EAX = BUF (the frame's base / first slot).
   setEax(bufAddress, `eax = BUF ${bufAddress.placeholder ?? hex(bufAddress.value!)}`);
 
-  words.forEach((word, i) => {
+  resolved.forEach((r, i) => {
     if (i > 0) {
-      // Advance the write pointer by one dword; pad any side-effect pops.
       steps.push(gadgetStep(advance!.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
       for (let k = 0; k < advance!.junkPops; k++) {
         steps.push({ kind: "value", value: 0x41414141, comment: "junk (advance side-effect pop)" });
@@ -179,29 +223,21 @@ function planWriteFrameInner(
       steps.push(...retImmPadding(retImmBytes(advance!.gadget)));
     }
 
-    // ECX = this frame word. Placeholder or badchar-free -> pop; else synthesise
-    // in ECX while preserving EAX (the write pointer).
-    if (word.placeholder) {
-      steps.push(gadgetStep(popEcx!, "pop ecx"));
-      placeholders.add(word.placeholder);
-      steps.push({ kind: "value", placeholder: word.placeholder, comment: `ecx = ${word.placeholder} (${word.comment})` });
-      steps.push(...retImmPadding(retImmBytes(popEcx!)));
-    } else if (isBadcharFree(word.value!, bc)) {
-      steps.push(gadgetStep(popEcx!, "pop ecx"));
-      steps.push({ kind: "value", value: word.value! >>> 0, comment: `ecx = ${hex(word.value!)} (${word.comment})` });
-      steps.push(...retImmPadding(retImmBytes(popEcx!)));
+    if (r.recipe) {
+      steps.push(...r.recipe.steps);
     } else {
-      const recipe = solveValue(index, "ecx", word.value!, badchars, ["eax"]);
-      if (!recipe) {
-        unsatisfied.push(`cannot build ecx = ${hex(word.value!)} for ${word.comment} while preserving eax`);
-        return;
+      steps.push(gadgetStep(r.pop!, `pop ${r.reg}`));
+      if (r.word.placeholder) {
+        placeholders.add(r.word.placeholder);
+        steps.push({ kind: "value", placeholder: r.word.placeholder, comment: `${r.reg} = ${r.word.placeholder} (${r.word.comment})` });
+      } else {
+        steps.push({ kind: "value", value: r.word.value! >>> 0, comment: `${r.reg} = ${hex(r.word.value!)} (${r.word.comment})` });
       }
-      steps.push(...recipe.steps);
+      steps.push(...retImmPadding(retImmBytes(r.pop!)));
     }
 
-    // [eax] = ecx
-    steps.push(gadgetStep(store!, `mov [eax], ecx  -> BUF+0x${(i * 4).toString(16)} = ${word.comment}`));
-    steps.push(...retImmPadding(retImmBytes(store!)));
+    steps.push(gadgetStep(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
+    steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
   });
 
   // Re-point EAX at BUF and pivot ESP onto the assembled frame.
@@ -213,15 +249,14 @@ function planWriteFrameInner(
     steps,
     unsatisfied,
     gadgets: {
-      store: firstKnownAddress(store!),
+      store: firstKnownAddress(resolved[0].store.gadget),
       advance: advance ? firstKnownAddress(advance.gadget) : undefined,
       pivot: firstKnownAddress(pivot!),
       popEax: firstKnownAddress(popEax!),
-      popEcx: firstKnownAddress(popEcx!),
     },
     placeholders: [...placeholders],
     stackBytes: steps.length * 4,
-    success: unsatisfied.length === 0,
+    success: true,
   };
 }
 

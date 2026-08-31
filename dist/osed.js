@@ -4905,8 +4905,23 @@ var osed_bundle = (() => {
       return b.score - a.score;
     })[0];
   }
-  function findStore(index) {
-    return pickBest(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "mov" && /\[eax\]$/.test(op(g, 0, 0)) && op(g, 0, 1) === "ecx" && lastIsRet(g)));
+  var VALUE_REGS = ["ecx", "edx", "ebx", "esi", "edi", "ebp"];
+  function findStores(index) {
+    var _a;
+    const byReg = /* @__PURE__ */ new Map();
+    for (const g of index.gadgets) {
+      if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
+      if (!/\[eax\]$/.test(op(g, 0, 0))) continue;
+      const reg = op(g, 0, 1);
+      if (!VALUE_REGS.includes(reg)) continue;
+      ((_a = byReg.get(reg)) != null ? _a : byReg.set(reg, []).get(reg)).push(g);
+    }
+    const stores = [];
+    for (const [reg, gadgets] of byReg) {
+      const best = pickBest(gadgets);
+      if (best) stores.push({ gadget: best, reg });
+    }
+    return stores;
   }
   function findAdvance(index) {
     const cands = index.gadgets.filter((g) => {
@@ -4951,22 +4966,50 @@ var osed_bundle = (() => {
   function planWriteFrameInner(index, bufAddress, words, badchars) {
     var _a, _b;
     const bc = new Set(badchars.map((b) => b & 255));
-    const steps = [];
     const unsatisfied = [];
     const placeholders = /* @__PURE__ */ new Set();
-    const store = findStore(index);
+    const stores = findStores(index);
     const advance = findAdvance(index);
     const pivot = findPivot(index);
     const popEax = findCleanPop(index, "eax");
-    const popEcx = findCleanPop(index, "ecx");
-    if (!store) unsatisfied.push("no `mov [eax], ecx ; ret` store gadget");
+    const popByReg = /* @__PURE__ */ new Map();
+    const popFor = (reg) => {
+      if (!popByReg.has(reg)) popByReg.set(reg, findCleanPop(index, reg));
+      return popByReg.get(reg);
+    };
+    if (stores.length === 0) unsatisfied.push("no `mov [eax], <reg> ; ret` store gadget");
     if (!popEax) unsatisfied.push("no clean `pop eax ; ret`");
-    if (!popEcx) unsatisfied.push("no clean `pop ecx ; ret`");
     if (words.length > 1 && !advance) unsatisfied.push("no `add eax, 4 ; ret` pointer-advance gadget");
     if (!pivot) unsatisfied.push("no `xchg eax, esp` / `mov esp, eax` pivot gadget");
     if (unsatisfied.length > 0) {
-      return { steps, unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
+      return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
     }
+    const resolved = [];
+    for (const word of words) {
+      if (word.placeholder || word.value !== void 0 && isBadcharFree3(word.value, bc)) {
+        const store = stores.find((s) => popFor(s.reg) !== void 0);
+        if (!store) {
+          unsatisfied.push(`no store+pop for ${word.comment}`);
+          continue;
+        }
+        resolved.push({ word, store, reg: store.reg, pop: popFor(store.reg) });
+      } else {
+        let done = false;
+        for (const store of stores) {
+          const recipe = solveValue(index, store.reg, word.value, badchars, ["eax"]);
+          if (recipe) {
+            resolved.push({ word, store, reg: store.reg, recipe });
+            done = true;
+            break;
+          }
+        }
+        if (!done) unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex(word.value)} for ${word.comment} while preserving eax`);
+      }
+    }
+    if (unsatisfied.length > 0) {
+      return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
+    }
+    const steps = [];
     const setEax = (word, comment) => {
       steps.push(gadgetStep2(popEax, "pop eax"));
       if (word.placeholder) {
@@ -4978,7 +5021,7 @@ var osed_bundle = (() => {
       steps.push(...retImmPadding(retImmBytes(popEax)));
     };
     setEax(bufAddress, `eax = BUF ${(_a = bufAddress.placeholder) != null ? _a : hex(bufAddress.value)}`);
-    words.forEach((word, i) => {
+    resolved.forEach((r, i) => {
       if (i > 0) {
         steps.push(gadgetStep2(advance.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
         for (let k = 0; k < advance.junkPops; k++) {
@@ -4986,25 +5029,20 @@ var osed_bundle = (() => {
         }
         steps.push(...retImmPadding(retImmBytes(advance.gadget)));
       }
-      if (word.placeholder) {
-        steps.push(gadgetStep2(popEcx, "pop ecx"));
-        placeholders.add(word.placeholder);
-        steps.push({ kind: "value", placeholder: word.placeholder, comment: `ecx = ${word.placeholder} (${word.comment})` });
-        steps.push(...retImmPadding(retImmBytes(popEcx)));
-      } else if (isBadcharFree3(word.value, bc)) {
-        steps.push(gadgetStep2(popEcx, "pop ecx"));
-        steps.push({ kind: "value", value: word.value >>> 0, comment: `ecx = ${hex(word.value)} (${word.comment})` });
-        steps.push(...retImmPadding(retImmBytes(popEcx)));
+      if (r.recipe) {
+        steps.push(...r.recipe.steps);
       } else {
-        const recipe = solveValue(index, "ecx", word.value, badchars, ["eax"]);
-        if (!recipe) {
-          unsatisfied.push(`cannot build ecx = ${hex(word.value)} for ${word.comment} while preserving eax`);
-          return;
+        steps.push(gadgetStep2(r.pop, `pop ${r.reg}`));
+        if (r.word.placeholder) {
+          placeholders.add(r.word.placeholder);
+          steps.push({ kind: "value", placeholder: r.word.placeholder, comment: `${r.reg} = ${r.word.placeholder} (${r.word.comment})` });
+        } else {
+          steps.push({ kind: "value", value: r.word.value >>> 0, comment: `${r.reg} = ${hex(r.word.value)} (${r.word.comment})` });
         }
-        steps.push(...recipe.steps);
+        steps.push(...retImmPadding(retImmBytes(r.pop)));
       }
-      steps.push(gadgetStep2(store, `mov [eax], ecx  -> BUF+0x${(i * 4).toString(16)} = ${word.comment}`));
-      steps.push(...retImmPadding(retImmBytes(store)));
+      steps.push(gadgetStep2(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
+      steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
     });
     setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex(bufAddress.value)} (for pivot)`);
     steps.push(gadgetStep2(pivot, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
@@ -5013,15 +5051,14 @@ var osed_bundle = (() => {
       steps,
       unsatisfied,
       gadgets: {
-        store: firstKnownAddress(store),
+        store: firstKnownAddress(resolved[0].store.gadget),
         advance: advance ? firstKnownAddress(advance.gadget) : void 0,
         pivot: firstKnownAddress(pivot),
-        popEax: firstKnownAddress(popEax),
-        popEcx: firstKnownAddress(popEcx)
+        popEax: firstKnownAddress(popEax)
       },
       placeholders: [...placeholders],
       stackBytes: steps.length * 4,
-      success: unsatisfied.length === 0
+      success: true
     };
   }
   function hex(value) {
@@ -11878,10 +11915,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-31T01:58:51.723Z" : globalThis[key2];
+        value = true ? "2026-08-31T02:07:51.481Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b247ff1c5252" : globalThis[key2];
+        value = true ? "f7aaf6cd4678" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

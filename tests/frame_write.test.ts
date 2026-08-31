@@ -92,7 +92,7 @@ describe("write-based frame", () => {
     const noStore = core.filter((x) => x.canonicalId !== "mock_286326787"); // drop the mov[eax] store
     const plan = planWriteFrame(index(noStore), { placeholder: "BUF" }, [{ value: 0x11111111, comment: "api" }], []);
     expect(plan.success).toBe(false);
-    expect(plan.unsatisfied.some((u) => u.includes("mov [eax], ecx"))).toBe(true);
+    expect(plan.unsatisfied.some((u) => u.includes("mov [eax], <reg>"))).toBe(true);
     expect(plan.steps).toHaveLength(0);
   });
 
