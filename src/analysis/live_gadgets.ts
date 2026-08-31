@@ -27,7 +27,13 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
   const pointerSize = getPointerSize();
   const patterns = knownPatternsForPointerSize(pointerSize);
   const filter = badcharAddressFilter(options.badchars ?? [], pointerSize);
-  const maxPerPattern = options.maxPerPattern ?? 5;
+  const maxPerPattern = options.maxPerPattern ?? 40;
+  // Scan far deeper than we keep: most low-address hits are rejected by the
+  // badchar filter (their address holds a null/bad byte), and clean gadgets in
+  // preferred-base modules often live deep in .text. Scanning only a few
+  // candidates left the corpus with just the first survivors — frequently none
+  // clean-and-stable — so the solver fell back to dirtier gadgets.
+  const scanDepth = Math.min(Math.max(maxPerPattern * 20, 1500), 4000);
 
   const hits: LiveGadgetHit[] = [];
   const warningSet = new Set<string>();
@@ -39,7 +45,7 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
       {
         module: options.module,
         executableOnly: true,
-        maxResults: Math.min(maxPerPattern * 4, 200),
+        maxResults: scanDepth,
         chunkSize: 0x4000,
       },
       Uint8Array.from(pattern.bytes),

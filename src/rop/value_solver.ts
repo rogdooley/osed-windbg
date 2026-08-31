@@ -1,5 +1,5 @@
 import { CapabilityIndex } from "./capabilities";
-import { ChainStep, GadgetSelection, firstKnownAddress, hex32, retImmBytes, retImmPadding } from "./chain";
+import { ChainStep, GadgetSelection, firstKnownAddress, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 
 export type RecipeKind = "direct" | "negate" | "complement" | "two-add" | "two-sub" | "zero-add" | "zero-sub-neg";
@@ -202,15 +202,9 @@ function isBadcharFree(value: number, badchars: Set<number>): boolean {
 // `ret 0x1010` — are excluded rather than compensated with hundreds of words.
 const MAX_RET_IMM = 0x40;
 
-// Optional reliability hint: returns false for addresses in a module that is
-// currently relocated off its preferred base (its address will differ next run).
-// Set for the duration of solveValue so selectBest can prefer stable gadgets.
-let stableAddressHint: ((address: bigint) => boolean) | undefined;
-
 function gadgetIsStable(gadget: RopGadget): boolean {
-  if (!stableAddressHint) return true;
   const addr = firstKnownAddress(gadget);
-  return addr === undefined ? true : stableAddressHint(addr);
+  return addr === undefined ? true : isAddressStable(addr);
 }
 
 function selectBest(candidates: RopGadget[], preserve?: Set<string>): GadgetSelection | undefined {
@@ -516,7 +510,8 @@ export function solveValue(
   const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
   preserve.delete(reg);
 
-  stableAddressHint = preferStable;
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
   try {
     return tryDirect(index, reg, v, bc, preserve)
       ?? tryNegate(index, reg, v, bc, preserve)
@@ -526,6 +521,6 @@ export function solveValue(
       ?? tryZeroAdd(index, reg, v, bc, preserve)
       ?? tryZeroSubNeg(index, reg, v, bc, preserve);
   } finally {
-    stableAddressHint = undefined;
+    setStableAddressHint(prevHint);
   }
 }

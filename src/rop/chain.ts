@@ -8,6 +8,29 @@ import { RopGadget } from "./types";
 // order-independent. It is a pure evidence emitter: it produces a chain layout as
 // text, it does not write target memory.
 
+// Shared reliability hint: returns false for an address in a module currently
+// relocated off its preferred base (its address differs next run). Set for the
+// duration of a solve/plan call. It steers both which LOCATION firstKnownAddress
+// emits for a multi-module gadget, and which gadget the selectors prefer.
+let stableAddressHint: ((address: bigint) => boolean) | undefined;
+
+export function setStableAddressHint(hint: ((address: bigint) => boolean) | undefined): void {
+  stableAddressHint = hint;
+}
+
+export function getStableAddressHint(): ((address: bigint) => boolean) | undefined {
+  return stableAddressHint;
+}
+
+export function isAddressStable(address: bigint): boolean {
+  return !stableAddressHint || stableAddressHint(address);
+}
+
+function gadgetStability(gadget: RopGadget): number {
+  const addr = firstKnownAddress(gadget);
+  return addr !== undefined && !isAddressStable(addr) ? 1 : 0; // 0 = stable (sorts first)
+}
+
 export interface ChainTarget {
   register: string;
   value: number;
@@ -46,7 +69,15 @@ export interface ChainPlan {
 }
 
 export function firstKnownAddress(gadget: RopGadget): bigint | undefined {
-  const location = gadget.locations.find((entry) => entry.virtualAddress !== undefined);
+  const known = gadget.locations.filter((entry) => entry.virtualAddress !== undefined);
+  if (known.length === 0) return undefined;
+  // A gadget can appear in several modules; prefer a location in a stable
+  // (preferred-base) module so the emitted address survives the next run.
+  if (stableAddressHint) {
+    const stable = known.find((entry) => stableAddressHint!(BigInt(entry.virtualAddress!)));
+    if (stable) return BigInt(stable.virtualAddress!);
+  }
+  const location = known[0];
   return location?.virtualAddress !== undefined ? BigInt(location.virtualAddress) : undefined;
 }
 
@@ -91,10 +122,13 @@ function selectPopGadget(index: CapabilityIndex, register: string): GadgetSelect
   const candidates = index
     .loadRegister(register)
     .filter((g) => isSinglePopRetLike(g, register) && firstKnownAddress(g) !== undefined);
-  // Prefer plain ret, fall back to smallest ret imm.
-  const plainRet = candidates.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+  // Prefer stable (preferred-base) modules, then plain ret, then smallest ret imm.
+  const plainRet = candidates.filter((g) => retImmBytes(g) === 0)
+    .sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
   if (plainRet) return { gadget: plainRet, retImm: 0 };
   const withImm = candidates.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+    const stab = gadgetStability(a) - gadgetStability(b);
+    if (stab !== 0) return stab;
     const diff = retImmBytes(a) - retImmBytes(b);
     return diff !== 0 ? diff : b.score - a.score;
   })[0];
@@ -556,7 +590,7 @@ function isPushadRet(gadget: RopGadget): boolean {
 function findPushadRet(index: CapabilityIndex): RopGadget | undefined {
   return index.gadgets
     .filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== undefined)
-    .sort((a, b) => b.score - a.score)[0];
+    .sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
 }
 
 function isPlainRet(gadget: RopGadget): boolean {
@@ -566,7 +600,7 @@ function isPlainRet(gadget: RopGadget): boolean {
 function findPlainRet(index: CapabilityIndex): RopGadget | undefined {
   return index.gadgets
     .filter((gadget) => isPlainRet(gadget) && firstKnownAddress(gadget) !== undefined)
-    .sort((a, b) => b.score - a.score)[0];
+    .sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
 }
 
 function named(value: number | undefined, placeholder: string): Pick<RegisterSpec, "value" | "placeholder"> {
@@ -580,6 +614,7 @@ export type RegisterSetupFn = (
   index: CapabilityIndex,
   targets: Record<string, number>,
   badchars: number[],
+  preferStable?: (address: bigint) => boolean,
 ) => { steps: ChainStep[]; ordered: string[]; unresolved: Array<{ register: string; reason: string }> };
 
 function hasBadchar(value: number, badchars: Set<number>): boolean {
@@ -598,6 +633,7 @@ function planPushadChain(
   constraints: string[] = [],
   badchars: number[] = [],
   setupSolver?: RegisterSetupFn,
+  preferStable?: (address: bigint) => boolean,
 ): PushadPlan {
   const steps: ChainStep[] = [];
   const satisfied: string[] = [];
@@ -629,7 +665,7 @@ function planPushadChain(
         unsatisfied.push({ register, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
       }
     } else {
-      const setup = setupSolver(index, taintedTargets, badchars);
+      const setup = setupSolver(index, taintedTargets, badchars, preferStable);
       steps.push(...setup.steps);
       satisfied.push(...setup.ordered);
       unsatisfied.push(...setup.unresolved);
@@ -725,17 +761,23 @@ function virtualProtectRetSlideSpecs(params: VirtualProtectParams, retGadget: Ro
   ];
 }
 
-export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}, setupSolver?: RegisterSetupFn): VirtualProtectPlan {
+export function planVirtualProtect(index: CapabilityIndex, params: VirtualProtectParams = {}, setupSolver?: RegisterSetupFn, preferStable?: (address: bigint) => boolean): VirtualProtectPlan {
   const mode = params.mode ?? "ret-slide";
   const badchars = params.badchars ?? [];
-  if (mode === "direct") {
-    return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
-      "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain.",
-    ], badchars, setupSolver);
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    if (mode === "direct") {
+      return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
+        "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain.",
+      ], badchars, setupSolver, preferStable);
+    }
+    return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
+      "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes.",
+    ], badchars, setupSolver, preferStable);
+  } finally {
+    setStableAddressHint(prevHint);
   }
-  return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
-    "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes.",
-  ], badchars, setupSolver);
 }
 
 // -- WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNBW) ------
@@ -765,10 +807,16 @@ function writeProcessMemorySpecs(params: WriteProcessMemoryParams): RegisterSpec
   ];
 }
 
-export function planWriteProcessMemory(index: CapabilityIndex, params: WriteProcessMemoryParams = {}, setupSolver?: RegisterSetupFn): WriteProcessMemoryPlan {
-  return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
-    "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination.",
-  ], params.badchars ?? [], setupSolver);
+export function planWriteProcessMemory(index: CapabilityIndex, params: WriteProcessMemoryParams = {}, setupSolver?: RegisterSetupFn, preferStable?: (address: bigint) => boolean): WriteProcessMemoryPlan {
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
+      "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination.",
+    ], params.badchars ?? [], setupSolver, preferStable);
+  } finally {
+    setStableAddressHint(prevHint);
+  }
 }
 
 // -- VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) -------------
@@ -800,8 +848,14 @@ function virtualAllocSpecs(params: VirtualAllocParams): RegisterSpec[] {
   ];
 }
 
-export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocParams = {}, setupSolver?: RegisterSetupFn): VirtualAllocPlan {
-  return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
-    "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape.",
-  ], params.badchars ?? [], setupSolver);
+export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocParams = {}, setupSolver?: RegisterSetupFn, preferStable?: (address: bigint) => boolean): VirtualAllocPlan {
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
+      "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape.",
+    ], params.badchars ?? [], setupSolver, preferStable);
+  } finally {
+    setStableAddressHint(prevHint);
+  }
 }

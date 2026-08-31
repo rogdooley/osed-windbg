@@ -1524,7 +1524,7 @@ function bindApi(): OsedApi {
       badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) as number[] : undefined,
     };
 
-    const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking);
+    const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
     const python = formatChainPython(plan);
     const sectionLabel = plan.hasPushad
       ? "ROP Chain — VirtualProtect (PUSHAD)"
@@ -1596,7 +1596,7 @@ function bindApi(): OsedApi {
       badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) as number[] : undefined,
     };
 
-    const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking);
+    const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
     const python = formatChainPython(plan);
     const sectionLabel = plan.hasPushad
       ? "ROP Chain — WriteProcessMemory (PUSHAD)"
@@ -1668,7 +1668,7 @@ function bindApi(): OsedApi {
       badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) as number[] : undefined,
     };
 
-    const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking);
+    const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
     const python = formatChainPython(plan);
     const sectionLabel = plan.hasPushad
       ? "ROP Chain — VirtualAlloc (PUSHAD)"

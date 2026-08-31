@@ -1,5 +1,5 @@
 import { buildCapabilities, CapabilityIndex } from "./capabilities";
-import { ChainStep, firstKnownAddress, hex32, retImmBytes, retImmPadding } from "./chain";
+import { ChainStep, firstKnownAddress, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { solveValue } from "./value_solver";
 
@@ -164,6 +164,22 @@ export function planRegisterSetupPacking(
   badchars: number[] = [],
   preferStable?: (address: bigint) => boolean,
 ): RegisterSetupPlan {
+  // Set the shared stability hint for the whole run so firstKnownAddress emits
+  // stable locations while candidates are built, and restore any outer hint.
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    return planRegisterSetupPackingInner(index, targets, badchars);
+  } finally {
+    setStableAddressHint(prevHint);
+  }
+}
+
+function planRegisterSetupPackingInner(
+  index: CapabilityIndex,
+  targets: Record<string, number>,
+  badchars: number[] = [],
+): RegisterSetupPlan {
   const bc = new Set(badchars.map((b) => b & 0xff));
   const targetValues = new Map<string, number>();
   for (const [reg, value] of Object.entries(targets)) {
@@ -240,7 +256,7 @@ export function planRegisterSetupPacking(
       // gadgets clobber, so they get set last); then least waste; then score.
       // Reliability leads: prefer gadgets from preferred-base (non-relocated)
       // modules whose address survives to the next run.
-      const stable = !preferStable || preferStable(candidate.address) ? 1 : 0;
+      const stable = isAddressStable(candidate.address) ? 1 : 0;
       const key = [stable, cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
       if (keyGreater(key, bestKey)) { bestKey = key; best = { candidate, cover }; }
     }
@@ -269,7 +285,7 @@ export function planRegisterSetupPacking(
     // null-heavy). Fall back to arithmetic construction for one register, built
     // so it preserves every already-finalized register. Registers that NEED a
     // scratch are built first, while pending registers are still free to borrow.
-    const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater, preferStable);
+    const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater);
     if (!arith) break;
     steps.push(...arith.recipe.steps);
     pending.delete(arith.register);
@@ -288,13 +304,13 @@ function pickArithmeticBuild(
   badchars: number[],
   done: Set<string>,
   keyGreater: (a: number[], b: number[] | undefined) => boolean,
-  preferStable?: (address: bigint) => boolean,
 ): { register: string; recipe: NonNullable<ReturnType<typeof solveValue>> } | undefined {
   const preserve = [...done];
   let best: { register: string; recipe: NonNullable<ReturnType<typeof solveValue>> } | undefined;
   let bestKey: number[] | undefined;
   for (const reg of pending) {
-    const recipe = solveValue(index, reg, targetValues.get(reg)!, badchars, preserve, preferStable);
+    // solveValue inherits the shared stability hint set by the caller.
+    const recipe = solveValue(index, reg, targetValues.get(reg)!, badchars, preserve);
     if (!recipe) continue;
     // Dependency-driven ordering. If this register's build borrows another
     // pending TARGET as scratch, it must run before that target is finalized

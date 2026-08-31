@@ -454,6 +454,28 @@ describe("PUSHAD chain with badchars constructs null-tainted values", () => {
     expect(plan.satisfied).toContain("edx");
   });
 
+  test("PUSHAD selection prefers a pop gadget from a stable module", () => {
+    const unstable = 0x03d01000;
+    const stable = 0x10001000;
+    const idx = buildCapabilityIndexFromSequences(
+      sequencesFromLiveHits([
+        { mnemonic: "pop edi ; ret", address: BigInt(unstable), module: "reloc" },
+        { mnemonic: "pop edi ; ret", address: BigInt(stable), module: "pref" },
+        { mnemonic: "pop esi ; ret", address: BigInt(0x10002000), module: "pref" },
+        { mnemonic: "pop ebp ; ret", address: BigInt(0x10003000), module: "pref" },
+        { mnemonic: "pop ebx ; ret", address: BigInt(0x10004000), module: "pref" },
+        { mnemonic: "pop edx ; ret", address: BigInt(0x10005000), module: "pref" },
+        { mnemonic: "pop ecx ; ret", address: BigInt(0x10006000), module: "pref" },
+        { mnemonic: "pop eax ; ret", address: BigInt(0x10007000), module: "pref" },
+        { mnemonic: "pushad ; ret", address: BigInt(0x10008000), module: "pref" },
+      ]),
+    );
+    const preferStable = (a: bigint) => a !== BigInt(unstable);
+    const plan = planVirtualAlloc(idx, {}, undefined, preferStable);
+    const ediStep = plan.steps.find((s) => s.comment.startsWith("pop edi"));
+    expect(ediStep?.address).toBe(BigInt(stable));
+  });
+
   test("without a value solver, tainted registers are reported, not silently popped", () => {
     const plan = planVirtualAlloc(richIndex, { badchars: [0x00, 0x0a, 0x0d] });
     const literals = plan.steps.filter((s) => s.kind === "value" && s.value !== undefined).map((s) => s.value!);

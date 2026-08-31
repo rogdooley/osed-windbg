@@ -245,7 +245,9 @@ export function scanPattern(options: ScanOptions, pattern: Uint8Array): ScanResu
   const warnings: ScanWarning[] = [];
 
   const normalizedChunk = Math.max(0x1000, Math.min(0x4000, options.chunkSize));
-  const normalizedMax = Math.min(options.maxResults, 200);
+  // Ceiling guards against pathological scans; high enough that deep gadget
+  // discovery (which must scan past many badchar-address hits) is not throttled.
+  const normalizedMax = Math.min(options.maxResults, 5000);
 
   const scope = forEachSection({
     ...options,

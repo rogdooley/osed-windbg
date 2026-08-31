@@ -806,7 +806,7 @@ var osed_bundle = (() => {
     const seenHits = /* @__PURE__ */ new Set();
     const warnings = [];
     const normalizedChunk = Math.max(4096, Math.min(16384, options.chunkSize));
-    const normalizedMax = Math.min(options.maxResults, 200);
+    const normalizedMax = Math.min(options.maxResults, 5e3);
     const scope = forEachSection(__spreadProps(__spreadValues({}, options), {
       chunkSize: normalizedChunk,
       maxResults: normalizedMax
@@ -3604,8 +3604,28 @@ var osed_bundle = (() => {
   }
 
   // src/rop/chain.ts
+  var stableAddressHint;
+  function setStableAddressHint(hint) {
+    stableAddressHint = hint;
+  }
+  function getStableAddressHint() {
+    return stableAddressHint;
+  }
+  function isAddressStable(address) {
+    return !stableAddressHint || stableAddressHint(address);
+  }
+  function gadgetStability(gadget) {
+    const addr = firstKnownAddress(gadget);
+    return addr !== void 0 && !isAddressStable(addr) ? 1 : 0;
+  }
   function firstKnownAddress(gadget) {
-    const location = gadget.locations.find((entry) => entry.virtualAddress !== void 0);
+    const known = gadget.locations.filter((entry) => entry.virtualAddress !== void 0);
+    if (known.length === 0) return void 0;
+    if (stableAddressHint) {
+      const stable = known.find((entry) => stableAddressHint(BigInt(entry.virtualAddress)));
+      if (stable) return BigInt(stable.virtualAddress);
+    }
+    const location = known[0];
     return (location == null ? void 0 : location.virtualAddress) !== void 0 ? BigInt(location.virtualAddress) : void 0;
   }
   function retImmBytes(gadget) {
@@ -3632,9 +3652,11 @@ var osed_bundle = (() => {
   }
   function selectPopGadget(index, register) {
     const candidates2 = index.loadRegister(register).filter((g) => isSinglePopRetLike(g, register) && firstKnownAddress(g) !== void 0);
-    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
+    const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
     if (plainRet) return { gadget: plainRet, retImm: 0 };
     const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
+      const stab = gadgetStability(a) - gadgetStability(b);
+      if (stab !== 0) return stab;
       const diff = retImmBytes(a) - retImmBytes(b);
       return diff !== 0 ? diff : b.score - a.score;
     })[0];
@@ -3928,13 +3950,13 @@ var osed_bundle = (() => {
     return pushad.mnemonic === "pushad" && ret.mnemonic === "ret" && ret.operands.length === 0;
   }
   function findPushadRet(index) {
-    return index.gadgets.filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+    return index.gadgets.filter((gadget) => isPushadRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
   }
   function isPlainRet(gadget) {
     return gadget.instructions.length === 1 && gadget.instructions[0].mnemonic === "ret" && gadget.instructions[0].operands.length === 0;
   }
   function findPlainRet(index) {
-    return index.gadgets.filter((gadget) => isPlainRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => b.score - a.score)[0];
+    return index.gadgets.filter((gadget) => isPlainRet(gadget) && firstKnownAddress(gadget) !== void 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
   }
   function named(value, placeholder) {
     return value === void 0 ? { placeholder } : { value: value >>> 0 };
@@ -3946,7 +3968,7 @@ var osed_bundle = (() => {
     }
     return false;
   }
-  function planPushadChain(index, specs, label, mode, constraints = [], badchars = [], setupSolver) {
+  function planPushadChain(index, specs, label, mode, constraints = [], badchars = [], setupSolver, preferStable) {
     const steps = [];
     const satisfied = [];
     const unsatisfied = [];
@@ -3969,7 +3991,7 @@ var osed_bundle = (() => {
           unsatisfied.push({ register, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
         }
       } else {
-        const setup = setupSolver(index, taintedTargets, badchars);
+        const setup = setupSolver(index, taintedTargets, badchars, preferStable);
         steps.push(...setup.steps);
         satisfied.push(...setup.ordered);
         unsatisfied.push(...setup.unresolved);
@@ -4043,18 +4065,24 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by VirtualProtect (junk)" }
     ];
   }
-  function planVirtualProtect(index, params = {}, setupSolver) {
+  function planVirtualProtect(index, params = {}, setupSolver, preferStable) {
     var _a, _b;
     const mode = (_a = params.mode) != null ? _a : "ret-slide";
     const badchars = (_b = params.badchars) != null ? _b : [];
-    if (mode === "direct") {
-      return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
-        "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain."
-      ], badchars, setupSolver);
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      if (mode === "direct") {
+        return planPushadChain(index, virtualProtectDirectSpecs(params), "VirtualProtect", "direct", [
+          "direct PUSHAD mode uses saved ESP as dwSize; verify the saved stack pointer is an acceptable size argument before using the chain."
+        ], badchars, setupSolver, preferStable);
+      }
+      return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
+        "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes."
+      ], badchars, setupSolver, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
     }
-    return planPushadChain(index, virtualProtectRetSlideSpecs(params, findPlainRet(index)), "VirtualProtect", "ret-slide", [
-      "RET-slide PUSHAD mode uses saved ESP as lpAddress; verify ESP points into the shellcode/NOP sled when pushad executes."
-    ], badchars, setupSolver);
   }
   function writeProcessMemorySpecs(params) {
     return [
@@ -4067,11 +4095,17 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by WPM (nop sled)" }
     ];
   }
-  function planWriteProcessMemory(index, params = {}, setupSolver) {
+  function planWriteProcessMemory(index, params = {}, setupSolver, preferStable) {
     var _a;
-    return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
-      "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination."
-    ], (_a = params.badchars) != null ? _a : [], setupSolver);
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planPushadChain(index, writeProcessMemorySpecs(params), "WriteProcessMemory", "direct", [
+        "direct PUSHAD WriteProcessMemory uses saved ESP as lpBaseAddress; this is only a DEP bypass if that saved ESP is already an executable destination."
+      ], (_a = params.badchars) != null ? _a : [], setupSolver, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
   }
   function virtualAllocSpecs(params) {
     var _a, _b;
@@ -4087,11 +4121,17 @@ var osed_bundle = (() => {
       { register: "eax", value: 2425393296, meaning: "unused by VirtualAlloc (junk)" }
     ];
   }
-  function planVirtualAlloc(index, params = {}, setupSolver) {
+  function planVirtualAlloc(index, params = {}, setupSolver, preferStable) {
     var _a;
-    return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
-      "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
-    ], (_a = params.badchars) != null ? _a : [], setupSolver);
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
+        "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape."
+      ], (_a = params.badchars) != null ? _a : [], setupSolver, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
   }
 
   // src/rop/value_solver.ts
@@ -4302,11 +4342,9 @@ var osed_bundle = (() => {
     return true;
   }
   var MAX_RET_IMM = 64;
-  var stableAddressHint;
   function gadgetIsStable(gadget) {
-    if (!stableAddressHint) return true;
     const addr = firstKnownAddress(gadget);
-    return addr === void 0 ? true : stableAddressHint(addr);
+    return addr === void 0 ? true : isAddressStable(addr);
   }
   function selectBest(candidates2, preserve) {
     const withAddr = candidates2.map((g) => ({ gadget: g, retImm: retImmBytes(g), effects: gadgetEffects(g) })).filter((s) => s.retImm >= 0 && s.retImm <= MAX_RET_IMM && firstKnownAddress(s.gadget) !== void 0).filter((s) => s.effects.safe).filter((s) => !preserve || !s.effects.clobbers.some((r) => preserve.has(r)));
@@ -4561,11 +4599,12 @@ var osed_bundle = (() => {
     const bc = new Set(badchars.map((b) => b & 255));
     const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
     preserve.delete(reg);
-    stableAddressHint = preferStable;
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
     try {
       return (_f = (_e = (_d = (_c = (_b = (_a = tryDirect(index, reg, v, bc, preserve)) != null ? _a : tryNegate(index, reg, v, bc, preserve)) != null ? _b : tryComplement(index, reg, v, bc, preserve)) != null ? _c : tryTwoOp(index, reg, v, bc, preserve, "add")) != null ? _d : tryTwoOp(index, reg, v, bc, preserve, "sub")) != null ? _e : tryZeroAdd(index, reg, v, bc, preserve)) != null ? _f : tryZeroSubNeg(index, reg, v, bc, preserve);
     } finally {
-      stableAddressHint = void 0;
+      setStableAddressHint(prevHint);
     }
   }
 
@@ -4701,6 +4740,15 @@ var osed_bundle = (() => {
     return isBadcharFree2(Number(address & BigInt(4294967295)), badchars);
   }
   function planRegisterSetupPacking(index, targets, badchars = [], preferStable) {
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planRegisterSetupPackingInner(index, targets, badchars);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function planRegisterSetupPackingInner(index, targets, badchars = []) {
     var _a, _b;
     const bc = new Set(badchars.map((b) => b & 255));
     const targetValues = /* @__PURE__ */ new Map();
@@ -4751,7 +4799,7 @@ var osed_bundle = (() => {
         const waste = candidate.shape.writes.size - cover.size + candidate.shape.espFillers.length;
         let deferSum = 0;
         for (const reg of cover) deferSum += (_b = clobberFrequency.get(reg)) != null ? _b : 0;
-        const stable = !preferStable || preferStable(candidate.address) ? 1 : 0;
+        const stable = isAddressStable(candidate.address) ? 1 : 0;
         const key2 = [stable, cover.size, -deferSum, -waste, candidate.score, -candidate.retImm];
         if (keyGreater(key2, bestKey)) {
           bestKey = key2;
@@ -4779,7 +4827,7 @@ var osed_bundle = (() => {
         }
         continue;
       }
-      const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater, preferStable);
+      const arith = pickArithmeticBuild(workingIndex, pending, targetValues, badchars, done, keyGreater);
       if (!arith) break;
       steps.push(...arith.recipe.steps);
       pending.delete(arith.register);
@@ -4789,12 +4837,12 @@ var osed_bundle = (() => {
     const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates2, done, targetValues, badchars, bc) }));
     return { steps, ordered, unresolved, stackBytes: steps.length * 4, success: unresolved.length === 0 };
   }
-  function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater, preferStable) {
+  function pickArithmeticBuild(index, pending, targetValues, badchars, done, keyGreater) {
     const preserve = [...done];
     let best;
     let bestKey;
     for (const reg of pending) {
-      const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve, preferStable);
+      const recipe = solveValue(index, reg, targetValues.get(reg), badchars, preserve);
       if (!recipe) continue;
       const scratchIsPendingTarget = recipe.scratchRegister && pending.has(recipe.scratchRegister) ? 1 : 0;
       const usesScratch = recipe.scratchRegister ? 1 : 0;
@@ -11371,7 +11419,8 @@ var osed_bundle = (() => {
     const pointerSize = getPointerSize();
     const patterns = knownPatternsForPointerSize(pointerSize);
     const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
-    const maxPerPattern = (_b = options.maxPerPattern) != null ? _b : 5;
+    const maxPerPattern = (_b = options.maxPerPattern) != null ? _b : 40;
+    const scanDepth = Math.min(Math.max(maxPerPattern * 20, 1500), 4e3);
     const hits = [];
     const warningSet = /* @__PURE__ */ new Set();
     let scanned = 0;
@@ -11381,7 +11430,7 @@ var osed_bundle = (() => {
         {
           module: options.module,
           executableOnly: true,
-          maxResults: Math.min(maxPerPattern * 4, 200),
+          maxResults: scanDepth,
           chunkSize: 16384
         },
         Uint8Array.from(pattern.bytes)
@@ -11672,10 +11721,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-30T22:12:03.537Z" : globalThis[key2];
+        value = true ? "2026-08-31T01:21:48.672Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "84d6d051a101" : globalThis[key2];
+        value = true ? "f46d953e21cb" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14019,7 +14068,7 @@ var osed_bundle = (() => {
         mode: options.mode === "direct" ? "direct" : "ret-slide",
         badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
       };
-      const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking);
+      const plan = planVirtualProtect(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
       const python = formatChainPython(plan);
       const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualProtect (PUSHAD)" : "ROP Register Setup \u2014 VirtualProtect (PUSHAD missing)";
       section(sectionLabel);
@@ -14083,7 +14132,7 @@ var osed_bundle = (() => {
         writable: options.writable !== void 0 ? Number(options.writable) : void 0,
         badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
       };
-      const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking);
+      const plan = planWriteProcessMemory(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
       const python = formatChainPython(plan);
       const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 WriteProcessMemory (PUSHAD)" : "ROP Register Setup \u2014 WriteProcessMemory (PUSHAD missing)";
       section(sectionLabel);
@@ -14147,7 +14196,7 @@ var osed_bundle = (() => {
         flProtect: options.flProtect !== void 0 ? Number(options.flProtect) : void 0,
         badchars: Array.isArray(parseHexByteList(options.badchars)) ? parseHexByteList(options.badchars) : void 0
       };
-      const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking);
+      const plan = planVirtualAlloc(currentRopCorpus, params, planRegisterSetupPacking, buildStableAddressPredicate());
       const python = formatChainPython(plan);
       const sectionLabel = plan.hasPushad ? "ROP Chain \u2014 VirtualAlloc (PUSHAD)" : "ROP Register Setup \u2014 VirtualAlloc (PUSHAD missing)";
       section(sectionLabel);
