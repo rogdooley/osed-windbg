@@ -376,13 +376,28 @@ class PEParser {
 
 class ExportResolver {
   private readonly parser: PEParser;
+  // parseExports reads the module's whole export table (many string reads). It is
+  // called per import entry by nearestSymbol during iat_find, so without a cache
+  // an all-modules scan re-reads kernel32/kernelbase exports tens of thousands of
+  // times — minutes to hours. Cache per module base (a rebase changes the key).
+  private readonly exportCache = new Map<string, ExportEntry[]>();
 
   public constructor(parser: PEParser) {
     this.parser = parser;
   }
 
+  private cachedExports(module: ModuleInfo): ExportEntry[] {
+    const key = module.base.toString();
+    let cached = this.exportCache.get(key);
+    if (!cached) {
+      cached = this.parser.parseExports(module);
+      this.exportCache.set(key, cached);
+    }
+    return cached;
+  }
+
   public enumerate(module: ModuleInfo, filter?: string): Array<Record<string, string>> {
-    const entries = this.parser.parseExports(module);
+    const entries = this.cachedExports(module);
     const needle = normalizeNeedle(filter);
     return entries
       .filter((entry) => {
@@ -409,11 +424,11 @@ class ExportResolver {
     if (!needle) {
       return undefined;
     }
-    return this.parser.parseExports(module).find((entry) => entry.name.toLowerCase() === needle);
+    return this.cachedExports(module).find((entry) => entry.name.toLowerCase() === needle);
   }
 
   public getExports(module: ModuleInfo): ExportEntry[] {
-    return this.parser.parseExports(module);
+    return this.cachedExports(module);
   }
 
   public getExportDirectory(module: ModuleInfo): ExportDirectoryInfo | undefined {
@@ -429,7 +444,7 @@ class ExportResolver {
       return undefined;
     }
     const targetOrdinal = exportDir.ordinalBase + ordinalIndex;
-    return this.parser.parseExports(module).find((entry) => entry.ordinal === targetOrdinal);
+    return this.cachedExports(module).find((entry) => entry.ordinal === targetOrdinal);
   }
 
   public isForwarded(module: ModuleInfo, entry: ExportEntry): { forwarded: boolean; target: string } {
@@ -449,8 +464,7 @@ class ExportResolver {
   }
 
   public nearestSymbol(module: ModuleInfo, address: bigint): { name: string; offset: bigint } | undefined {
-    const exportsList = this.parser
-      .parseExports(module)
+    const exportsList = this.cachedExports(module)
       .filter((entry) => entry.name.length > 0)
       .sort((a, b) => (a.va < b.va ? -1 : 1));
 

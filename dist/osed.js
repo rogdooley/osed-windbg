@@ -10266,10 +10266,24 @@ var osed_bundle = (() => {
   };
   var ExportResolver = class {
     constructor(parser) {
+      // parseExports reads the module's whole export table (many string reads). It is
+      // called per import entry by nearestSymbol during iat_find, so without a cache
+      // an all-modules scan re-reads kernel32/kernelbase exports tens of thousands of
+      // times — minutes to hours. Cache per module base (a rebase changes the key).
+      this.exportCache = /* @__PURE__ */ new Map();
       this.parser = parser;
     }
+    cachedExports(module) {
+      const key2 = module.base.toString();
+      let cached = this.exportCache.get(key2);
+      if (!cached) {
+        cached = this.parser.parseExports(module);
+        this.exportCache.set(key2, cached);
+      }
+      return cached;
+    }
     enumerate(module, filter) {
-      const entries = this.parser.parseExports(module);
+      const entries = this.cachedExports(module);
       const needle = normalizeNeedle(filter);
       return entries.filter((entry) => {
         if (!needle) {
@@ -10292,10 +10306,10 @@ var osed_bundle = (() => {
       if (!needle) {
         return void 0;
       }
-      return this.parser.parseExports(module).find((entry) => entry.name.toLowerCase() === needle);
+      return this.cachedExports(module).find((entry) => entry.name.toLowerCase() === needle);
     }
     getExports(module) {
-      return this.parser.parseExports(module);
+      return this.cachedExports(module);
     }
     getExportDirectory(module) {
       return this.parser.parseExportDirectory(module);
@@ -10309,7 +10323,7 @@ var osed_bundle = (() => {
         return void 0;
       }
       const targetOrdinal = exportDir.ordinalBase + ordinalIndex;
-      return this.parser.parseExports(module).find((entry) => entry.ordinal === targetOrdinal);
+      return this.cachedExports(module).find((entry) => entry.ordinal === targetOrdinal);
     }
     isForwarded(module, entry) {
       const exportDir = this.parser.parseExportDirectory(module);
@@ -10327,7 +10341,7 @@ var osed_bundle = (() => {
       return { forwarded: false, target: "" };
     }
     nearestSymbol(module, address) {
-      const exportsList = this.parser.parseExports(module).filter((entry) => entry.name.length > 0).sort((a, b) => a.va < b.va ? -1 : 1);
+      const exportsList = this.cachedExports(module).filter((entry) => entry.name.length > 0).sort((a, b) => a.va < b.va ? -1 : 1);
       let nearest;
       for (const entry of exportsList) {
         if (entry.va > address) {
@@ -11937,10 +11951,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-31T02:22:21.257Z" : globalThis[key2];
+        value = true ? "2026-08-31T11:21:21.503Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "80808075fdef" : globalThis[key2];
+        value = true ? "41eea8ca7063" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
