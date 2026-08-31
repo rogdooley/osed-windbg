@@ -146,6 +146,15 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "rop.frame_write",
+    description: "Builds a stdcall call frame WITHOUT pushad: assembles it word-by-word in a writable buffer via a canonical `mov [eax], ecx ; ret` store (eax=pointer, ecx=value), then `xchg eax, esp` pivots ESP onto the frame so the trailing ret dispatches into the API. Null/badchar-heavy words are synthesised in ecx (preserving the eax pointer) instead of placed in the payload. Words are ordered: word0 = API address (ret enters it), word1 = post-call target (must be executable), then the stdcall args. BUF must be a writable, stable, badchar-free address.",
+    usage: 'dx @$osed().rop.frame_write(buf, "word0 word1 arg1 arg2 ...", badchars?)',
+    examples: [
+      'dx @$osed().rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
+      'dx @$osed().rop.frame_write("0x00420000", "0x10030000 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
+    ],
+  },
+  {
     name: "rop.export",
     description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
     usage: "dx @$osed().rop.export(planId, path?)",

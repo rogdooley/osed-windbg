@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, type FrameWord, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1791,6 +1791,73 @@ function bindApi(): OsedApi {
     return renderFlatFrame("rop.frame_va", "ROP Frame — VirtualAlloc (stdcall)", options, planVirtualAllocFrame(params));
   };
 
+  const parseFrameWordToken = (token: string): FrameWord => {
+    const t = token.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(t)) return { value: parseInt(t, 16) >>> 0, comment: t };
+    if (/^[0-9]+$/.test(t)) return { value: Number(t) >>> 0, comment: t };
+    return { placeholder: t.toUpperCase(), comment: t };
+  };
+
+  const executeRopFrameWrite = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.frame_write");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Write Frame", rows);
+      setResult({ command: "rop.frame_write", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP Write Frame", rows);
+    }
+    const stale = staleCorpusGuard("ROP Write Frame", "rop.frame_write");
+    if (stale) return stale;
+
+    const bufToken = typeof args[0] === "string" ? args[0].trim() : undefined;
+    const wordsSpec = typeof args[1] === "string" ? args[1] : undefined;
+    const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) as number[] : [];
+    const words = (wordsSpec ?? "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
+    if (!bufToken || words.length === 0) {
+      const rows = [{ Error: 'rop.frame_write requires a buffer and ordered frame words, e.g. rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")' }];
+      renderRows("ROP Write Frame", rows);
+      setResult({ command: "rop.frame_write", args: {}, success: false, findings: [], warnings: [], errors: ["Missing buffer or frame words."] });
+      return toDxResult("ROP Write Frame", rows);
+    }
+    const buf = /^0x[0-9a-fA-F]+$/.test(bufToken)
+      ? { value: parseInt(bufToken, 16) >>> 0 }
+      : { placeholder: bufToken.toUpperCase() };
+
+    const plan = planWriteFrame(currentRopCorpus, buf, words, badchars, buildStableAddressPredicate());
+
+    out.section("ROP Write Frame (no PUSHAD)");
+    if (plan.success) {
+      const g = plan.gadgets;
+      out.info(`Store: ${g.store !== undefined ? hex32(g.store) : "?"} | Advance: ${g.advance !== undefined ? hex32(g.advance) : "n/a"} | Pivot: ${g.pivot !== undefined ? hex32(g.pivot) : "?"} | Stack: ${plan.stackBytes} bytes`);
+      if (plan.placeholders.length > 0) out.info(`Define before use: ${plan.placeholders.join(", ")}`);
+      out.info("Frame layout (built in BUF, then ESP pivots onto it):");
+      words.forEach((w, i) => out.print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${w.placeholder ?? hex32(w.value!)}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target — MUST be executable" : `arg${i - 1}`})`));
+      const python = formatChainPython({ steps: plan.steps });
+      for (const line of python) out.print(line);
+    }
+    for (const u of plan.unsatisfied) out.warn(u);
+    if (!plan.success && plan.unsatisfied.length === 0) out.warn("No frame produced.");
+
+    const rows: Array<Record<string, string>> = plan.steps.map((step) => ({
+      Type: step.kind,
+      Value: step.address !== undefined ? hex32(step.address) : step.value !== undefined ? hex32(step.value) : step.placeholder ?? "",
+      Meaning: step.comment,
+    }));
+    if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: plan.unsatisfied[0] ?? "no frame" });
+    renderRows("ROP Write Frame", rows);
+    setResult({
+      command: "rop.frame_write",
+      args: { buf: bufToken, words: words.length, badchars },
+      success: plan.success,
+      findings: [{ steps: plan.steps, gadgets: plan.gadgets, placeholders: plan.placeholders }],
+      warnings: plan.unsatisfied,
+      errors: [],
+    });
+    return toDxResult("ROP Write Frame", rows);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -1822,6 +1889,7 @@ function bindApi(): OsedApi {
     frame_vp: executeRopFrameVp,
     frame_wpm: executeRopFrameWpm,
     frame_va: executeRopFrameVa,
+    frame_write: executeRopFrameWrite,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
