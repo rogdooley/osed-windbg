@@ -5125,6 +5125,7 @@ var osed_bundle = (() => {
   }
 
   // src/rop/slot_dispatch.ts
+  var REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"];
   function op2(g, i, n) {
     var _a, _b;
     return ((_b = (_a = g.instructions[i]) == null ? void 0 : _a.operands[n]) != null ? _b : "").trim().toLowerCase();
@@ -5143,17 +5144,54 @@ var osed_bundle = (() => {
       return b.score - a.score;
     })[0];
   }
-  function findPopEax(index) {
-    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op2(g, 0, 0) === "eax" && lastIsRet2(g)));
+  function findPop(index, reg) {
+    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op2(g, 0, 0) === reg && lastIsRet2(g)));
   }
-  function findDerefEax(index) {
-    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "mov" && lastIsRet2(g) && op2(g, 0, 0) === "eax" && /\[eax\]$/.test(op2(g, 0, 1))));
+  function findMemLoad(index, valReg, ptrReg) {
+    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "mov" && lastIsRet2(g) && op2(g, 0, 0) === valReg && new RegExp(`\\[${ptrReg}\\]$`).test(op2(g, 0, 1))));
   }
-  function findJmpEax(index) {
+  function findJmp(index, reg) {
     return pickBest2(index.gadgets.filter((g) => {
       var _a;
-      return ((_a = g.instructions[0]) == null ? void 0 : _a.mnemonic) === "jmp" && op2(g, 0, 0) === "eax";
+      return ((_a = g.instructions[0]) == null ? void 0 : _a.mnemonic) === "jmp" && op2(g, 0, 0) === reg;
     }));
+  }
+  function stableCount(chain) {
+    return [chain.popPtr, chain.deref, chain.dispatch].filter((g) => isAddressStable(firstKnownAddress(g))).length;
+  }
+  function findDerefChain(index) {
+    const candidates2 = [];
+    for (const valReg of REGS) {
+      const dispatch = findJmp(index, valReg);
+      if (!dispatch) continue;
+      for (const ptrReg of REGS) {
+        const deref = findMemLoad(index, valReg, ptrReg);
+        const popPtr = findPop(index, ptrReg);
+        if (deref && popPtr) candidates2.push({ popPtr, deref, dispatch, ptrReg, valReg });
+      }
+    }
+    if (candidates2.length === 0) return void 0;
+    return candidates2.sort((a, b) => {
+      if (stableCount(a) !== stableCount(b)) return stableCount(b) - stableCount(a);
+      const selfA = a.ptrReg === a.valReg ? 0 : 1;
+      const selfB = b.ptrReg === b.valReg ? 0 : 1;
+      if (selfA !== selfB) return selfA - selfB;
+      const insA = a.popPtr.instructions.length + a.deref.instructions.length + a.dispatch.instructions.length;
+      const insB = b.popPtr.instructions.length + b.deref.instructions.length + b.dispatch.instructions.length;
+      if (insA !== insB) return insA - insB;
+      return b.popPtr.score + b.deref.score + b.dispatch.score - (a.popPtr.score + a.deref.score + a.dispatch.score);
+    })[0];
+  }
+  function missingDerefParts(index) {
+    const missing = [];
+    const anyJmp = REGS.some((r) => findJmp(index, r));
+    const anyLoad = REGS.some((v) => REGS.some((p) => findMemLoad(index, v, p)));
+    if (!anyLoad) missing.push("no `mov <reg>, [<reg>] ; ret` to dereference the IAT slot");
+    if (!anyJmp) missing.push("no `jmp <reg>` to dispatch the dereferenced pointer");
+    if (anyLoad && anyJmp) {
+      missing.push("no register composes pop <ptr> + mov <val>,[<ptr>] + jmp <val> (deref/dispatch registers do not line up)");
+    }
+    return missing;
   }
   var FAIL = (unsatisfied) => ({
     steps: [],
@@ -5174,35 +5212,33 @@ var osed_bundle = (() => {
     }
   }
   function planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable) {
-    const popEax = findPopEax(index);
-    const deref = findDerefEax(index);
-    const jmpEax = findJmpEax(index);
+    const chain = findDerefChain(index);
     const missing = [];
-    if (!popEax) missing.push("no `pop eax ; ret` to load the IAT slot pointer");
-    if (!deref) missing.push("no `mov eax, [eax] ; ret` to dereference the IAT slot");
-    if (!jmpEax) missing.push("no `jmp eax` to dispatch the dereferenced pointer");
+    if (!chain) missing.push(...missingDerefParts(index));
     if (frame.length === 0) missing.push("no frame words (need at least a return target)");
-    if (missing.length > 0) return FAIL(missing);
-    const popEaxAddr = firstKnownAddress(popEax);
-    const derefAddr = firstKnownAddress(deref);
-    const jmpEaxAddr = firstKnownAddress(jmpEax);
+    if (!chain || missing.length > 0) return FAIL(missing);
+    const popAddr = firstKnownAddress(chain.popPtr);
+    const derefAddr = firstKnownAddress(chain.deref);
+    const jmpAddr = firstKnownAddress(chain.dispatch);
     const unstable = [];
-    if (!isAddressStable(popEaxAddr)) unstable.push(`pop eax @ ${hex2(Number(popEaxAddr))}`);
-    if (!isAddressStable(derefAddr)) unstable.push(`mov eax,[eax] @ ${hex2(Number(derefAddr))}`);
-    if (!isAddressStable(jmpEaxAddr)) unstable.push(`jmp eax @ ${hex2(Number(jmpEaxAddr))}`);
+    if (!isAddressStable(popAddr)) unstable.push(`pop ${chain.ptrReg} @ ${hex2(Number(popAddr))}`);
+    if (!isAddressStable(derefAddr)) unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex2(Number(derefAddr))}`);
+    if (!isAddressStable(jmpAddr)) unstable.push(`jmp ${chain.valReg} @ ${hex2(Number(jmpAddr))}`);
     const words = [
-      { value: Number(popEaxAddr) >>> 0, comment: "pop eax ; ret (deref preamble)" },
+      { value: Number(popAddr) >>> 0, comment: `pop ${chain.ptrReg} ; ret (deref preamble)` },
       { value: slot >>> 0, comment: `IAT slot ${hex2(slot)}` },
-      { value: Number(derefAddr) >>> 0, comment: "mov eax,[eax] ; ret (deref -> live API)" },
-      { value: Number(jmpEaxAddr) >>> 0, comment: "jmp eax (dispatch)" },
+      { value: Number(derefAddr) >>> 0, comment: `mov ${chain.valReg},[${chain.ptrReg}] ; ret (deref -> live API)` },
+      { value: Number(jmpAddr) >>> 0, comment: `jmp ${chain.valReg} (dispatch)` },
       ...frame
     ];
     const plan = planWriteFrame(index, bufAddress, words, badchars, preferStable);
     return __spreadProps(__spreadValues({}, plan), {
       dispatch: {
-        popEax: popEaxAddr,
+        popPtr: popAddr,
         deref: derefAddr,
-        jmpEax: jmpEaxAddr,
+        jmp: jmpAddr,
+        ptrReg: chain.ptrReg,
+        valReg: chain.valReg,
         slot: slot >>> 0,
         unstable
       }
@@ -7957,7 +7993,7 @@ var osed_bundle = (() => {
     },
     {
       name: "rop.slot_call",
-      description: "ASLR-proof stdcall call through a non-ASLR IAT slot, using a deref preamble dispatched by `jmp eax` (no `push eax`/store-out-of-eax needed). Emits, as data in a write-built frame: `pop eax` (=slot), `mov eax,[eax]` (eax = live API address), `jmp eax` (dispatch), then the fake stdcall frame \u2014 arg0 = the API's return target (must be executable, e.g. shellcode / jmp esp), then the stdcall args. The API's real (ASLR'd) address is NEVER placed in the payload; it is read from the fixed IAT slot at runtime. Null/badchar args are synthesised in a register and stored (via the frame_write engine). BUF must be a writable, stable, badchar-free address. Warns if any preamble gadget is at a non-stable (relocating) address.",
+      description: "ASLR-proof stdcall call through a non-ASLR IAT slot, using a deref preamble dispatched by `jmp <reg>`. The deref/dispatch register is chosen from the loaded corpus (any register, or a two-register `mov <val>,[<ptr>]` split), ranked stable-first \u2014 not assumed to be eax. Emits, as data in a write-built frame: `pop <ptr>` (=slot), `mov <val>,[<ptr>]` (val = live API address), `jmp <val>` (dispatch), then the fake stdcall frame \u2014 arg0 = the API's return target (must be executable, e.g. shellcode / jmp esp), then the stdcall args. The API's real (ASLR'd) address is NEVER placed in the payload; it is read from the fixed IAT slot at runtime. Null/badchar args are synthesised in a register and stored (via the frame_write engine). BUF must be a writable, stable, badchar-free address. Reports honestly when the corpus has no composable deref/dispatch; warns if any preamble gadget is at a non-stable (relocating) address.",
       usage: 'dx @$osed().rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 ...", badchars?)',
       examples: [
         // VirtualAlloc(lpAddress, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE) via its IAT slot;
@@ -12088,10 +12124,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-09-01T01:32:34.106Z" : globalThis[key2];
+        value = true ? "2026-09-01T02:22:44.574Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "525a9abc66d3" : globalThis[key2];
+        value = true ? "a3ba520d8d98" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14744,7 +14780,7 @@ var osed_bundle = (() => {
       return toDxResult("ROP Write Frame", rows);
     };
     const executeRopSlotCall = (...args) => {
-      var _a;
+      var _a, _b, _c;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.slot_call");
       }
@@ -14770,17 +14806,19 @@ var osed_bundle = (() => {
       }
       const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
       const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
-      section("ROP Slot Call (deref IAT slot + jmp eax dispatch)");
+      section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
       if (plan.success) {
         const d = plan.dispatch;
-        info(`Deref preamble: pop eax ${d.popEax !== void 0 ? hex32(d.popEax) : "?"} -> [${hex32(BigInt(d.slot))}] via mov eax,[eax] ${d.deref !== void 0 ? hex32(d.deref) : "?"} -> jmp eax ${d.jmpEax !== void 0 ? hex32(d.jmpEax) : "?"}`);
+        const pr = (_a = d.ptrReg) != null ? _a : "reg";
+        const vr = (_b = d.valReg) != null ? _b : "reg";
+        info(`Deref preamble: pop ${pr} ${d.popPtr !== void 0 ? hex32(d.popPtr) : "?"} -> [${hex32(BigInt(d.slot))}] via mov ${vr},[${pr}] ${d.deref !== void 0 ? hex32(d.deref) : "?"} -> jmp ${vr} ${d.jmp !== void 0 ? hex32(d.jmp) : "?"}`);
         if (d.unstable.length > 0) warn(`Preamble gadget(s) at a NON-stable address (will break if the module relocates): ${d.unstable.join(", ")}`);
         info(`Stack: ${plan.stackBytes} bytes${plan.placeholders.length > 0 ? ` | Define before use: ${plan.placeholders.join(", ")}` : ""}`);
         info("Frame layout (built in BUF, then ESP pivots onto it):");
-        print(`  BUF+0x00 = ${hex32(BigInt(Number(d.popEax)))}  (pop eax ; ret)`);
-        print(`  BUF+0x04 = ${hex32(BigInt(d.slot))}  (IAT slot -> popped into eax)`);
-        print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov eax,[eax] ; ret -> eax = live API)`);
-        print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmpEax)))}  (jmp eax -> dispatch)`);
+        print(`  BUF+0x00 = ${hex32(BigInt(Number(d.popPtr)))}  (pop ${pr} ; ret)`);
+        print(`  BUF+0x04 = ${hex32(BigInt(d.slot))}  (IAT slot -> popped into ${pr})`);
+        print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov ${vr},[${pr}] ; ret -> ${vr} = live API)`);
+        print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmp)))}  (jmp ${vr} -> dispatch)`);
         frame.forEach((w, i) => {
           var _a2;
           const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
@@ -14800,7 +14838,7 @@ var osed_bundle = (() => {
           Meaning: step.comment
         };
       });
-      if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: (_a = plan.unsatisfied[0]) != null ? _a : "no chain" });
+      if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: (_c = plan.unsatisfied[0]) != null ? _c : "no chain" });
       renderRows("ROP Slot Call", rows);
       setResult({
         command: "rop.slot_call",

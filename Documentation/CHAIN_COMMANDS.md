@@ -5,6 +5,17 @@ This is the canonical guide to the ROP dispatch builders (`slot_call`,
 [Decision table](#decision-table). If you're new to the *why*, start at
 [Theory](#theory-the-mental-model).
 
+> **This guide is target-agnostic.** The builders read whatever corpus you load
+> and choose gadgets by capability — nothing here is hardcoded to a particular
+> DLL or register (e.g. `slot_call` composes its deref/dispatch through *any*
+> register, not just `eax`). Concrete addresses in the examples
+> (`0x1005D060`, `0x10075A4B`, filter03, …) come from **one running worked
+> example — the Mini-stream "ASX to MP3 Converter"** — and are there to make the
+> steps concrete. On your own target, run the **queries each section names**
+> (`sc.iat_find`, `rop.query`, `code_caves`, …) to find the equivalents; the
+> commands report honestly when a required primitive is absent from *your*
+> corpus.
+
 - [Theory: the mental model](#theory-the-mental-model)
 - [Slot vs target](#slot-vs-target-read-this-first)
 - [Decision table](#decision-table)
@@ -142,9 +153,11 @@ dd 0x1005D060  ->  76e25680      (*slot == target)
 All builders end at `EIP = <API>`; they differ only in how they get there and
 lay out the stdcall frame.
 
-- **`slot_call`** — `pop eax=<slot> ; mov eax,[eax] ; jmp eax`. Dereferences the
-  slot at runtime, so the ASLR'd target is fetched on the box and never appears
-  in the payload. Null/badchar words are synthesised in a register and stored.
+- **`slot_call`** — `pop <ptr>=<slot> ; mov <val>,[<ptr>] ; jmp <val>`.
+  Dereferences the slot at runtime, so the ASLR'd target is fetched on the box
+  and never appears in the payload. The deref/dispatch register is chosen from
+  the corpus (any register, or a two-register `mov <val>,[<ptr>]` split), ranked
+  stable-first. Null/badchar words are synthesised in a register and stored.
   **The only ASLR-proof builder.**
 - **`chain_*`** — sets registers with `pop` gadgets, then `pushad ; ret` packs
   them into the frame and dispatches by `ret`-ing into **EDI**. EDI must be the
@@ -195,22 +208,32 @@ dx @$osed().rop.slot_call("0x<buf>", "0x1005D060",
 ### Volatility — the real limiter
 Constructing `0x000fc4c4` only works if the stack lands there again next run.
 Under stack ASLR a hardcoded stack address (even one built via arithmetic) is
-fragile. The robust fix is to **derive it from a register at runtime** so it
-tracks wherever the stack actually is:
+fragile. There are two ways out; which is available depends on the corpus.
+
+**(a) Register-relative addressing.** Derive the shellcode address from `ESP` at
+runtime so it tracks wherever the stack lands:
 
 ```
 mov reg, esp ; add reg, <calibrated offset>     ; reg = shellcode address, this run
 ```
 
-The offset (distance from the captured `ESP` to the shellcode) is constant even
-under ASLR, because the whole payload shifts together — you calibrate it once.
-This is what **`rop.slot_call_rel`** (planned — see the command reference) is
-meant to provide. It is a *separate* function from `slot_call` because it needs
-an ESP-capture primitive and changes the preamble; whether your corpus has that
-primitive is corpus-specific.
+This needs a gadget that **reads ESP into a general register** (`mov reg, esp`,
+`lea reg,[esp+N]`, `push esp ; pop reg`, or `xchg reg, esp`). **Mini-stream /
+filter03 does not have one** — every ESP gadget writes *to* ESP (`mov esp, reg`,
+i.e. pivots). So register-relative addressing is *not available* on this target,
+and the planned `rop.slot_call_rel` is **not buildable here**. Verify on any
+target with `rop.query("capability","STACK_COPY")` (and check for `push esp`).
 
-**Rule of thumb:** ASLR off / stable lab stack → construct the fixed address
-with `slot_call`. Stack ASLR on → `slot_call_rel` (register-relative).
+**(b) Stable code-cave destination (the recommended ASLR path here).** Instead
+of returning to the volatile stack, stage the shellcode into a **non-ASLR code
+cave** (see `code_caves("MSA2Mfilter03.dll")`) and jump to that *fixed* address.
+The destination is then hardcodable and reboot-stable. It costs a copy step
+(WriteProcessMemory, or word-by-word writes into the cave) — a separate design,
+worth building when ASLR is actually enabled.
+
+**Rule of thumb:** stable lab stack → construct the fixed address with
+`slot_call`. Stack ASLR on, and the corpus can read ESP → register-relative.
+Stack ASLR on, no ESP-read (filter03) → stage into a stable code cave.
 
 ---
 
@@ -231,14 +254,25 @@ Scratch space where the frame is assembled by writes, then `ESP` pivots onto it.
   `BUF+0x00..0x20`. Pick an address with writable slack on both sides; don't put
   BUF at a section edge or overlap the running ROP chain.
 
-Find one live:
+Find one with **`code_caves`** — the canonical way, since it already filters to
+writable, sized regions:
 
 ```
-!address 0x10000000
+dx @$osed().code_caves("MSA2Mfilter03.dll")
 ```
 
-Pick a `MEM_COMMIT` / `PAGE_READWRITE` region in filter03 and use an address well
-inside it.
+Pick a large `.data` cave that is `R W` (not `X`) and use an address a little
+inside it (leaving slack above for the frame and below for the API's call-time
+stack). On Mini-stream the biggest is a ~72 KB cave at `0x10075A4B`. Confirm any
+candidate is writable before relying on it:
+
+```
+dd 0x<buf> L1
+ed 0x<buf> 0x41414141
+dd 0x<buf> L1        ; value changed -> writable
+```
+
+(`!address 0x10000000` also works but shows unfiltered regions.)
 
 ### `SHELLCODE` — your shellcode's runtime stack address
 Both `SHELLCODE` slots take the address where your payload bytes sit at
@@ -281,15 +315,15 @@ dx @$osed().rop.slot_call("0x00420000", "0x1005D060",
 - `buf` — writable, stable, badchar-free staging address.
 - Warns if any deref-preamble gadget is at a relocating address.
 
-### `rop.slot_call_rel(buf, iatSlot, "…", badchars?)` — ASLR-proof + stack-relative *(planned)*
+### `rop.slot_call_rel(…)` — stack-relative *(planned; not buildable on filter03)*
 
-Like `slot_call`, but frame words may be **register-relative** (e.g. an
-ESP-derived, once-calibrated offset) so you never hardcode a volatile stack
-address. Intended for full-ASLR targets. It needs an ESP-capture primitive in
-the corpus; the design is being finalized against what filter03 actually
-exposes, and the command reports honestly when the primitive is absent. **Not
-yet implemented** — use `slot_call` with a constructed fixed address until this
-ships.
+Would make frame words **register-relative** (ESP-derived, once-calibrated) so a
+volatile stack address is never hardcoded. It requires a gadget that reads ESP
+into a general register — which **Mini-stream/filter03 does not have** (see
+[Volatility](#volatility--the-real-limiter)). Not implemented, and not feasible
+on this corpus; for ASLR here use the **stable code-cave destination** approach
+instead. On other targets, confirm feasibility with
+`rop.query("capability","STACK_COPY")`.
 
 ### `rop.chain_va / chain_vp / chain_wpm(targetAddr, …)` — PUSHAD, needs the target
 

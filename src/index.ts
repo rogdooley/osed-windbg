@@ -1899,17 +1899,19 @@ function bindApi(): OsedApi {
 
     const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
 
-    out.section("ROP Slot Call (deref IAT slot + jmp eax dispatch)");
+    out.section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
     if (plan.success) {
       const d = plan.dispatch;
-      out.info(`Deref preamble: pop eax ${d.popEax !== undefined ? hex32(d.popEax) : "?"} -> [${hex32(BigInt(d.slot))}] via mov eax,[eax] ${d.deref !== undefined ? hex32(d.deref) : "?"} -> jmp eax ${d.jmpEax !== undefined ? hex32(d.jmpEax) : "?"}`);
+      const pr = d.ptrReg ?? "reg";
+      const vr = d.valReg ?? "reg";
+      out.info(`Deref preamble: pop ${pr} ${d.popPtr !== undefined ? hex32(d.popPtr) : "?"} -> [${hex32(BigInt(d.slot))}] via mov ${vr},[${pr}] ${d.deref !== undefined ? hex32(d.deref) : "?"} -> jmp ${vr} ${d.jmp !== undefined ? hex32(d.jmp) : "?"}`);
       if (d.unstable.length > 0) out.warn(`Preamble gadget(s) at a NON-stable address (will break if the module relocates): ${d.unstable.join(", ")}`);
       out.info(`Stack: ${plan.stackBytes} bytes${plan.placeholders.length > 0 ? ` | Define before use: ${plan.placeholders.join(", ")}` : ""}`);
       out.info("Frame layout (built in BUF, then ESP pivots onto it):");
-      out.print(`  BUF+0x00 = ${hex32(BigInt(Number(d.popEax)))}  (pop eax ; ret)`);
-      out.print(`  BUF+0x04 = ${hex32(BigInt(d.slot))}  (IAT slot -> popped into eax)`);
-      out.print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov eax,[eax] ; ret -> eax = live API)`);
-      out.print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmpEax)))}  (jmp eax -> dispatch)`);
+      out.print(`  BUF+0x00 = ${hex32(BigInt(Number(d.popPtr)))}  (pop ${pr} ; ret)`);
+      out.print(`  BUF+0x04 = ${hex32(BigInt(d.slot))}  (IAT slot -> popped into ${pr})`);
+      out.print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov ${vr},[${pr}] ; ret -> ${vr} = live API)`);
+      out.print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmp)))}  (jmp ${vr} -> dispatch)`);
       frame.forEach((w, i) => {
         const shown = w.derefSlot !== undefined ? `*${hex32(w.derefSlot)}` : w.placeholder ?? hex32(w.value!);
         const role = i === 0 ? "API return target — MUST be executable" : `arg${i}`;
