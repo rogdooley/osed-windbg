@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, type FrameWord, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1795,6 +1795,9 @@ function bindApi(): OsedApi {
 
   const parseFrameWordToken = (token: string): FrameWord => {
     const t = token.trim();
+    // [0xSLOT] -> dereference the IAT slot at runtime (ASLR-proof API address).
+    const deref = /^\[\s*(0x[0-9a-fA-F]+)\s*\]$/.exec(t);
+    if (deref) return { derefSlot: parseInt(deref[1], 16) >>> 0, comment: `*${deref[1]}` };
     if (/^0x[0-9a-fA-F]+$/.test(t)) return { value: parseInt(t, 16) >>> 0, comment: t };
     if (/^[0-9]+$/.test(t)) return { value: Number(t) >>> 0, comment: t };
     return { placeholder: t.toUpperCase(), comment: t };
@@ -1835,7 +1838,10 @@ function bindApi(): OsedApi {
       out.info(`Store: ${g.store !== undefined ? hex32(g.store) : "?"} | Advance: ${g.advance !== undefined ? hex32(g.advance) : "n/a"} | Pivot: ${g.pivot !== undefined ? hex32(g.pivot) : "?"} | Stack: ${plan.stackBytes} bytes`);
       if (plan.placeholders.length > 0) out.info(`Define before use: ${plan.placeholders.join(", ")}`);
       out.info("Frame layout (built in BUF, then ESP pivots onto it):");
-      words.forEach((w, i) => out.print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${w.placeholder ?? hex32(w.value!)}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target — MUST be executable" : `arg${i - 1}`})`));
+      words.forEach((w, i) => {
+        const shown = w.derefSlot !== undefined ? `*${hex32(w.derefSlot)}` : w.placeholder ?? hex32(w.value!);
+        out.print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${shown}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target — MUST be executable" : `arg${i - 1}`})`);
+      });
       const python = formatChainPython({ steps: plan.steps });
       for (const line of python) out.print(line);
     }
@@ -1858,6 +1864,79 @@ function bindApi(): OsedApi {
       errors: [],
     });
     return toDxResult("ROP Write Frame", rows);
+  };
+
+  const executeRopSlotCall = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.slot_call");
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Slot Call", rows);
+      setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP Slot Call", rows);
+    }
+    const stale = staleCorpusGuard("ROP Slot Call", "rop.slot_call");
+    if (stale) return stale;
+
+    const bufToken = typeof args[0] === "string" ? args[0].trim() : undefined;
+    const slotToken = typeof args[1] === "string" ? args[1].trim() : undefined;
+    const frameSpec = typeof args[2] === "string" ? args[2] : undefined;
+    const badchars = Array.isArray(parseHexByteList(args[3])) ? parseHexByteList(args[3]) as number[] : [];
+    const slot = slotToken && /^(0x)?[0-9a-fA-F]+$/.test(slotToken)
+      ? parseInt(slotToken, 16) >>> 0
+      : undefined;
+    const frame = (frameSpec ?? "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
+    if (!bufToken || slot === undefined || frame.length === 0) {
+      const rows = [{ Error: 'rop.slot_call requires a buffer, an IAT slot, and a frame (retaddr + args), e.g. rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")' }];
+      renderRows("ROP Slot Call", rows);
+      setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: ["Missing buffer, slot, or frame words."] });
+      return toDxResult("ROP Slot Call", rows);
+    }
+    const buf = /^0x[0-9a-fA-F]+$/.test(bufToken)
+      ? { value: parseInt(bufToken, 16) >>> 0 }
+      : { placeholder: bufToken.toUpperCase() };
+
+    const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
+
+    out.section("ROP Slot Call (deref IAT slot + jmp eax dispatch)");
+    if (plan.success) {
+      const d = plan.dispatch;
+      out.info(`Deref preamble: pop eax ${d.popEax !== undefined ? hex32(d.popEax) : "?"} -> [${hex32(BigInt(d.slot))}] via mov eax,[eax] ${d.deref !== undefined ? hex32(d.deref) : "?"} -> jmp eax ${d.jmpEax !== undefined ? hex32(d.jmpEax) : "?"}`);
+      if (d.unstable.length > 0) out.warn(`Preamble gadget(s) at a NON-stable address (will break if the module relocates): ${d.unstable.join(", ")}`);
+      out.info(`Stack: ${plan.stackBytes} bytes${plan.placeholders.length > 0 ? ` | Define before use: ${plan.placeholders.join(", ")}` : ""}`);
+      out.info("Frame layout (built in BUF, then ESP pivots onto it):");
+      out.print(`  BUF+0x00 = ${hex32(BigInt(Number(d.popEax)))}  (pop eax ; ret)`);
+      out.print(`  BUF+0x04 = ${hex32(BigInt(d.slot))}  (IAT slot -> popped into eax)`);
+      out.print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov eax,[eax] ; ret -> eax = live API)`);
+      out.print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmpEax)))}  (jmp eax -> dispatch)`);
+      frame.forEach((w, i) => {
+        const shown = w.derefSlot !== undefined ? `*${hex32(w.derefSlot)}` : w.placeholder ?? hex32(w.value!);
+        const role = i === 0 ? "API return target — MUST be executable" : `arg${i}`;
+        out.print(`  BUF+0x${((i + 4) * 4).toString(16).padStart(2, "0")} = ${shown}  (${role})`);
+      });
+      const python = formatChainPython({ steps: plan.steps });
+      for (const line of python) out.print(line);
+    }
+    for (const u of plan.unsatisfied) out.warn(u);
+    if (!plan.success && plan.unsatisfied.length === 0) out.warn("No chain produced.");
+
+    const rows: Array<Record<string, string>> = plan.steps.map((step) => ({
+      Type: step.kind,
+      Value: step.address !== undefined ? hex32(step.address) : step.value !== undefined ? hex32(step.value) : step.placeholder ?? "",
+      Meaning: step.comment,
+    }));
+    if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: plan.unsatisfied[0] ?? "no chain" });
+    renderRows("ROP Slot Call", rows);
+    setResult({
+      command: "rop.slot_call",
+      args: { buf: bufToken, slot: hex32(BigInt(slot)), frame: frame.length, badchars },
+      success: plan.success,
+      findings: [{ steps: plan.steps, dispatch: plan.dispatch, placeholders: plan.placeholders }],
+      warnings: [...plan.unsatisfied, ...plan.dispatch.unstable.map((u) => `non-stable preamble gadget: ${u}`)],
+      errors: [],
+    });
+    return toDxResult("ROP Slot Call", rows);
   };
 
   for (const command of registry.getAll()) {
@@ -1892,6 +1971,7 @@ function bindApi(): OsedApi {
     frame_wpm: executeRopFrameWpm,
     frame_va: executeRopFrameVa,
     frame_write: executeRopFrameWrite,
+    slot_call: executeRopSlotCall,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 

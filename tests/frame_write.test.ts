@@ -96,6 +96,30 @@ describe("write-based frame", () => {
     expect(plan.steps).toHaveLength(0);
   });
 
+  it("dereferences an IAT slot at runtime for an ASLR'd API", () => {
+    const derefIdx = index([
+      g([insn("pop", ["eax"]), insn("ret", [])], 0x11110001),
+      g([insn("pop", ["ebx"]), insn("ret", [])], 0x11110002),
+      g([insn("pop", ["edx"]), insn("ret", [])], 0x11110003),
+      g([insn("mov", ["edx", "[ebx]"]), insn("ret", [])], 0x11110009), // mov edx, [ebx]
+      g([insn("mov", ["dword ptr [eax]", "edx"]), insn("ret", [])], 0x1111000a), // store edx
+      g([insn("add", ["eax", "0x4"]), insn("ret", [])], 0x11110004),
+      g([insn("xchg", ["eax", "esp"]), insn("ret", [])], 0x11110005),
+    ]);
+    const plan = planWriteFrame(
+      derefIdx,
+      { placeholder: "BUF" },
+      [{ derefSlot: 0x1005d060, comment: "VirtualAlloc IAT" }, { value: 0x43434343, comment: "post" }],
+      [],
+    );
+    expect(plan.success).toBe(true);
+    const comments = plan.steps.map((s) => s.comment);
+    // pointer set to the slot, then loaded, then stored — no raw API address placed
+    expect(plan.steps.some((s) => s.value === 0x1005d060)).toBe(true);
+    expect(comments.some((c) => c.includes("mov edx, [ebx]"))).toBe(true);
+    expect(comments.some((c) => c.startsWith("mov [eax], edx"))).toBe(true);
+  });
+
   it("synthesises a null/badchar word in ecx instead of placing it raw", () => {
     // 0 is null-heavy; build via two-add using edx as scratch (not eax).
     const withArith = [

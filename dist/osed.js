@@ -137,8 +137,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex2 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return BigInt(hex2);
+      const hex3 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return BigInt(hex3);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -375,13 +375,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex2 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex2.length % 2 !== 0) {
+    const hex3 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex3.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex2.length; i += 2) {
-      chars.push(parseInt(hex2.slice(i, i + 2), 16));
+    for (let i = 0; i < hex3.length; i += 2) {
+      chars.push(parseInt(hex3.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -2054,18 +2054,18 @@ var osed_bundle = (() => {
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c = formatByteArray(expected, "c");
-        const hex2 = formatByteArray(expected, "hex");
+        const hex3 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c}`);
-        print(`Hex:    ${hex2}`);
+        print(`Hex:    ${hex3}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
           "badchar_array",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
-          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex2 } }],
+          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex3 } }],
           warnings
         );
       }
@@ -4546,8 +4546,8 @@ var osed_bundle = (() => {
       const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
       scratchSteps.splice(1, 0, valueStep(decomp.b, `${scratch} = ${hex32(decomp.b)}`));
       steps.push(...scratchSteps);
-      const op2 = mode === "add" ? "add" : "sub";
-      steps.push(...emitGadgetWithSideEffects(binGadget, `${op2} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      const op3 = mode === "add" ? "add" : "sub";
+      steps.push(...emitGadgetWithSideEffects(binGadget, `${op3} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
       const recipe = {
         steps,
         recipe: mode === "add" ? "two-add" : "two-sub",
@@ -4973,6 +4973,18 @@ var osed_bundle = (() => {
   function findCleanPop(index, reg) {
     return pickBest(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op(g, 0, 0) === reg && lastIsRet(g)));
   }
+  function findMemLoads(index, valRegs) {
+    const out = [];
+    for (const g of index.gadgets) {
+      if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
+      const dst = op(g, 0, 0);
+      if (!valRegs.includes(dst) || dst === "eax") continue;
+      const m = /\[(eax|ebx|ecx|edx|esi|edi|ebp)\]$/.exec(op(g, 0, 1));
+      if (!m || m[1] === "eax") continue;
+      out.push({ gadget: g, valReg: dst, ptrReg: m[1] });
+    }
+    return out.sort((a, b) => (isAddressStable(firstKnownAddress(a.gadget)) ? 0 : 1) - (isAddressStable(firstKnownAddress(b.gadget)) ? 0 : 1));
+  }
   function gadgetStep2(g, comment) {
     return { kind: "gadget", address: firstKnownAddress(g), comment };
   }
@@ -4986,7 +4998,7 @@ var osed_bundle = (() => {
     }
   }
   function planWriteFrameInner(index, bufAddress, words, badchars) {
-    var _a, _b;
+    var _a, _b, _c;
     const bc = new Set(badchars.map((b) => b & 255));
     const unsatisfied = [];
     const placeholders = /* @__PURE__ */ new Set();
@@ -5006,9 +5018,24 @@ var osed_bundle = (() => {
     if (unsatisfied.length > 0) {
       return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
     }
+    const valRegs = stores.map((s) => s.reg);
+    const memLoads = findMemLoads(index, valRegs);
     const resolved = [];
     for (const word of words) {
-      if (word.placeholder || word.value !== void 0 && isBadcharFree3(word.value, bc)) {
+      if (word.derefSlot !== void 0) {
+        let done = false;
+        for (const load of memLoads) {
+          const store = stores.find((s) => s.reg === load.valReg);
+          if (!store) continue;
+          const ptrPop = isBadcharFree3(word.derefSlot, bc) ? popFor(load.ptrReg) : void 0;
+          const ptrRecipe = ptrPop ? void 0 : (_a = solveValue(index, load.ptrReg, word.derefSlot, badchars, ["eax"])) != null ? _a : void 0;
+          if (!ptrPop && !ptrRecipe) continue;
+          resolved.push({ word, store, reg: load.valReg, deref: { memLoad: load.gadget, ptrReg: load.ptrReg, ptrPop, ptrRecipe, slot: word.derefSlot } });
+          done = true;
+          break;
+        }
+        if (!done) unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex(word.derefSlot)} for ${word.comment}`);
+      } else if (word.placeholder || word.value !== void 0 && isBadcharFree3(word.value, bc)) {
         const store = stores.find((s) => popFor(s.reg) !== void 0);
         if (!store) {
           unsatisfied.push(`no store+pop for ${word.comment}`);
@@ -5042,7 +5069,7 @@ var osed_bundle = (() => {
       }
       steps.push(...retImmPadding(retImmBytes(popEax)));
     };
-    setEax(bufAddress, `eax = BUF ${(_a = bufAddress.placeholder) != null ? _a : hex(bufAddress.value)}`);
+    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex(bufAddress.value)}`);
     resolved.forEach((r, i) => {
       if (i > 0) {
         steps.push(gadgetStep2(advance.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
@@ -5051,7 +5078,17 @@ var osed_bundle = (() => {
         }
         steps.push(...retImmPadding(retImmBytes(advance.gadget)));
       }
-      if (r.recipe) {
+      if (r.deref) {
+        if (r.deref.ptrPop) {
+          steps.push(gadgetStep2(r.deref.ptrPop, `pop ${r.deref.ptrReg}`));
+          steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex(r.deref.slot)} (IAT slot of ${r.word.comment})` });
+          steps.push(...retImmPadding(retImmBytes(r.deref.ptrPop)));
+        } else {
+          steps.push(...r.deref.ptrRecipe.steps);
+        }
+        steps.push(gadgetStep2(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex(r.deref.slot)} (${r.word.comment})`));
+        steps.push(...retImmPadding(retImmBytes(r.deref.memLoad)));
+      } else if (r.recipe) {
         steps.push(...r.recipe.steps);
       } else {
         steps.push(gadgetStep2(r.pop, `pop ${r.reg}`));
@@ -5066,7 +5103,7 @@ var osed_bundle = (() => {
       steps.push(gadgetStep2(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
       steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
     });
-    setEax(bufAddress, `eax = BUF ${(_b = bufAddress.placeholder) != null ? _b : hex(bufAddress.value)} (for pivot)`);
+    setEax(bufAddress, `eax = BUF ${(_c = bufAddress.placeholder) != null ? _c : hex(bufAddress.value)} (for pivot)`);
     steps.push(gadgetStep2(pivot, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
     steps.push(...retImmPadding(retImmBytes(pivot)));
     return {
@@ -5084,6 +5121,94 @@ var osed_bundle = (() => {
     };
   }
   function hex(value) {
+    return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+
+  // src/rop/slot_dispatch.ts
+  function op2(g, i, n) {
+    var _a, _b;
+    return ((_b = (_a = g.instructions[i]) == null ? void 0 : _a.operands[n]) != null ? _b : "").trim().toLowerCase();
+  }
+  function lastIsRet2(g) {
+    var _a;
+    return ((_a = g.instructions[g.instructions.length - 1]) == null ? void 0 : _a.mnemonic) === "ret";
+  }
+  function pickBest2(cands) {
+    return [...cands].filter((g) => firstKnownAddress(g) !== void 0).sort((a, b) => {
+      const sa = isAddressStable(firstKnownAddress(a)) ? 0 : 1;
+      const sb = isAddressStable(firstKnownAddress(b)) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      if (a.instructions.length !== b.instructions.length) return a.instructions.length - b.instructions.length;
+      if (retImmBytes(a) !== retImmBytes(b)) return retImmBytes(a) - retImmBytes(b);
+      return b.score - a.score;
+    })[0];
+  }
+  function findPopEax(index) {
+    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "pop" && op2(g, 0, 0) === "eax" && lastIsRet2(g)));
+  }
+  function findDerefEax(index) {
+    return pickBest2(index.gadgets.filter((g) => g.instructions.length === 2 && g.instructions[0].mnemonic === "mov" && lastIsRet2(g) && op2(g, 0, 0) === "eax" && /\[eax\]$/.test(op2(g, 0, 1))));
+  }
+  function findJmpEax(index) {
+    return pickBest2(index.gadgets.filter((g) => {
+      var _a;
+      return ((_a = g.instructions[0]) == null ? void 0 : _a.mnemonic) === "jmp" && op2(g, 0, 0) === "eax";
+    }));
+  }
+  var FAIL = (unsatisfied) => ({
+    steps: [],
+    unsatisfied,
+    gadgets: {},
+    placeholders: [],
+    stackBytes: 0,
+    success: false,
+    dispatch: { slot: 0, unstable: [] }
+  });
+  function planSlotDispatch(index, bufAddress, slot, frame, badchars = [], preferStable) {
+    const prevHint = getStableAddressHint();
+    setStableAddressHint(preferStable != null ? preferStable : prevHint);
+    try {
+      return planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
+    } finally {
+      setStableAddressHint(prevHint);
+    }
+  }
+  function planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable) {
+    const popEax = findPopEax(index);
+    const deref = findDerefEax(index);
+    const jmpEax = findJmpEax(index);
+    const missing = [];
+    if (!popEax) missing.push("no `pop eax ; ret` to load the IAT slot pointer");
+    if (!deref) missing.push("no `mov eax, [eax] ; ret` to dereference the IAT slot");
+    if (!jmpEax) missing.push("no `jmp eax` to dispatch the dereferenced pointer");
+    if (frame.length === 0) missing.push("no frame words (need at least a return target)");
+    if (missing.length > 0) return FAIL(missing);
+    const popEaxAddr = firstKnownAddress(popEax);
+    const derefAddr = firstKnownAddress(deref);
+    const jmpEaxAddr = firstKnownAddress(jmpEax);
+    const unstable = [];
+    if (!isAddressStable(popEaxAddr)) unstable.push(`pop eax @ ${hex2(Number(popEaxAddr))}`);
+    if (!isAddressStable(derefAddr)) unstable.push(`mov eax,[eax] @ ${hex2(Number(derefAddr))}`);
+    if (!isAddressStable(jmpEaxAddr)) unstable.push(`jmp eax @ ${hex2(Number(jmpEaxAddr))}`);
+    const words = [
+      { value: Number(popEaxAddr) >>> 0, comment: "pop eax ; ret (deref preamble)" },
+      { value: slot >>> 0, comment: `IAT slot ${hex2(slot)}` },
+      { value: Number(derefAddr) >>> 0, comment: "mov eax,[eax] ; ret (deref -> live API)" },
+      { value: Number(jmpEaxAddr) >>> 0, comment: "jmp eax (dispatch)" },
+      ...frame
+    ];
+    const plan = planWriteFrame(index, bufAddress, words, badchars, preferStable);
+    return __spreadProps(__spreadValues({}, plan), {
+      dispatch: {
+        popEax: popEaxAddr,
+        deref: derefAddr,
+        jmpEax: jmpEaxAddr,
+        slot: slot >>> 0,
+        unstable
+      }
+    });
+  }
+  function hex2(value) {
     return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
 
@@ -6031,8 +6156,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex2 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex2, 16);
+      const hex3 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex3, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -7825,7 +7950,19 @@ var osed_bundle = (() => {
       usage: 'dx @$osed().rop.frame_write(buf, "word0 word1 arg1 arg2 ...", badchars?)',
       examples: [
         'dx @$osed().rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
-        'dx @$osed().rop.frame_write("0x00420000", "0x10030000 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")'
+        'dx @$osed().rop.frame_write("0x00420000", "[0x1005D060] 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")'
+      ]
+      // A word written as [0xSLOT] dereferences that IAT slot at runtime (mov reg, [slot]) —
+      // use it for an ASLR'd imported API (pass its non-ASLR IAT slot, not the resolved address).
+    },
+    {
+      name: "rop.slot_call",
+      description: "ASLR-proof stdcall call through a non-ASLR IAT slot, using a deref preamble dispatched by `jmp eax` (no `push eax`/store-out-of-eax needed). Emits, as data in a write-built frame: `pop eax` (=slot), `mov eax,[eax]` (eax = live API address), `jmp eax` (dispatch), then the fake stdcall frame \u2014 arg0 = the API's return target (must be executable, e.g. shellcode / jmp esp), then the stdcall args. The API's real (ASLR'd) address is NEVER placed in the payload; it is read from the fixed IAT slot at runtime. Null/badchar args are synthesised in a register and stored (via the frame_write engine). BUF must be a writable, stable, badchar-free address. Warns if any preamble gadget is at a non-stable (relocating) address.",
+      usage: 'dx @$osed().rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 ...", badchars?)',
+      examples: [
+        // VirtualAlloc(lpAddress, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE) via its IAT slot;
+        // retaddr = arg1 = the shellcode address (re-commit the page RWX in place, then return into it).
+        'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")'
       ]
     },
     {
@@ -9008,13 +9145,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex2 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex2.length % 2 !== 0) {
+    const hex3 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex3.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex2.length; i += 2) {
-      result3.push(parseInt(hex2.slice(i, i + 2), 16));
+    for (let i = 0; i < hex3.length; i += 2) {
+      result3.push(parseInt(hex3.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -10495,18 +10632,18 @@ var osed_bundle = (() => {
       }
       try {
         const first = readMemory(address, 6);
-        const op2 = first[0];
-        if (op2 === 233 && first.length >= 5) {
+        const op3 = first[0];
+        if (op3 === 233 && first.length >= 5) {
           const imm = this.readInt32LE(address + BigInt(1));
           const dest = address + BigInt(5) + BigInt(imm);
           return { target: dest, note: "jmp-rel32" };
         }
-        if (op2 === 235 && first.length >= 2) {
+        if (op3 === 235 && first.length >= 2) {
           const rel8 = first[1] >= 128 ? first[1] - 256 : first[1];
           const dest = address + BigInt(2) + BigInt(rel8);
           return { target: dest, note: "jmp-rel8" };
         }
-        if (this.pointerSize === 4 && op2 === 255 && first[1] === 37) {
+        if (this.pointerSize === 4 && op3 === 255 && first[1] === 37) {
           const memPtr = BigInt(readUint32LE(address + BigInt(2)));
           const dest = readPointer(memPtr, this.pointerSize);
           return { target: dest, note: "jmp-[imm]" };
@@ -11286,8 +11423,8 @@ var osed_bundle = (() => {
     return chars.join("");
   }
   function toDmlAddress(address, command) {
-    const hex2 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command} ${hex2}">${hex2}</link>`;
+    const hex3 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command} ${hex3}">${hex3}</link>`;
   }
   function toDmlModule(name) {
     var _a;
@@ -11507,17 +11644,17 @@ var osed_bundle = (() => {
     if (b0 === 247) {
       const decoded = decodeModRM11(b1);
       if (!decoded) return void 0;
-      const op2 = b1 >> 3 & 7;
-      if (op2 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
-      if (op2 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
+      const op3 = b1 >> 3 & 7;
+      if (op3 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
+      if (op3 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
       return void 0;
     }
     if (b0 === 255) {
       const decoded = decodeModRM11(b1);
       if (!decoded) return void 0;
-      const op2 = b1 >> 3 & 7;
-      if (op2 === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
-      if (op2 === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
+      const op3 = b1 >> 3 & 7;
+      if (op3 === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
+      if (op3 === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
       return void 0;
     }
     if (b0 === 217) {
@@ -11529,10 +11666,10 @@ var osed_bundle = (() => {
       if (offset + 2 >= bytes.length) return void 0;
       const decoded = decodeModRM11(b1);
       if (!decoded) return void 0;
-      const op2 = b1 >> 3 & 7;
+      const op3 = b1 >> 3 & 7;
       const imm8 = bytes[offset + 2];
       const signed = imm8 > 127 ? imm8 - 256 : imm8;
-      const name = GRP1_NAMES[op2];
+      const name = GRP1_NAMES[op3];
       return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
     }
     for (const entry of ALU_EAX_IMM32) {
@@ -11859,8 +11996,8 @@ var osed_bundle = (() => {
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex2 = negative ? text.slice(3) : text.slice(2);
-      const parsed = BigInt(`0x${hex2}`);
+      const hex3 = negative ? text.slice(3) : text.slice(2);
+      const parsed = BigInt(`0x${hex3}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -11881,7 +12018,7 @@ var osed_bundle = (() => {
     const signed = (unsigned & signBit) !== BigInt(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex2 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex3 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(unsigned >> BigInt(i * 8) & BigInt(255));
@@ -11890,11 +12027,11 @@ var osed_bundle = (() => {
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex2,
+      hex: hex3,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex2
+      twosComplement: hex3
     };
   }
 
@@ -11951,10 +12088,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-08-31T11:21:21.503Z" : globalThis[key2];
+        value = true ? "2026-09-01T01:32:34.106Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "41eea8ca7063" : globalThis[key2];
+        value = true ? "525a9abc66d3" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13113,9 +13250,9 @@ var osed_bundle = (() => {
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex2 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex3 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex2} (${posStr})`;
+        return `${hex3} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -14539,6 +14676,8 @@ var osed_bundle = (() => {
     };
     const parseFrameWordToken = (token) => {
       const t = token.trim();
+      const deref = /^\[\s*(0x[0-9a-fA-F]+)\s*\]$/.exec(t);
+      if (deref) return { derefSlot: parseInt(deref[1], 16) >>> 0, comment: `*${deref[1]}` };
       if (/^0x[0-9a-fA-F]+$/.test(t)) return { value: parseInt(t, 16) >>> 0, comment: t };
       if (/^[0-9]+$/.test(t)) return { value: Number(t) >>> 0, comment: t };
       return { placeholder: t.toUpperCase(), comment: t };
@@ -14576,7 +14715,8 @@ var osed_bundle = (() => {
         info("Frame layout (built in BUF, then ESP pivots onto it):");
         words.forEach((w, i) => {
           var _a2;
-          return print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${(_a2 = w.placeholder) != null ? _a2 : hex32(w.value)}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target \u2014 MUST be executable" : `arg${i - 1}`})`);
+          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
+          print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${shown}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target \u2014 MUST be executable" : `arg${i - 1}`})`);
         });
         const python = formatChainPython({ steps: plan.steps });
         for (const line of python) print(line);
@@ -14602,6 +14742,75 @@ var osed_bundle = (() => {
         errors: []
       });
       return toDxResult("ROP Write Frame", rows);
+    };
+    const executeRopSlotCall = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.slot_call");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Slot Call", rows2);
+        setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP Slot Call", rows2);
+      }
+      const stale = staleCorpusGuard("ROP Slot Call", "rop.slot_call");
+      if (stale) return stale;
+      const bufToken = typeof args[0] === "string" ? args[0].trim() : void 0;
+      const slotToken = typeof args[1] === "string" ? args[1].trim() : void 0;
+      const frameSpec = typeof args[2] === "string" ? args[2] : void 0;
+      const badchars = Array.isArray(parseHexByteList(args[3])) ? parseHexByteList(args[3]) : [];
+      const slot = slotToken && /^(0x)?[0-9a-fA-F]+$/.test(slotToken) ? parseInt(slotToken, 16) >>> 0 : void 0;
+      const frame = (frameSpec != null ? frameSpec : "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
+      if (!bufToken || slot === void 0 || frame.length === 0) {
+        const rows2 = [{ Error: 'rop.slot_call requires a buffer, an IAT slot, and a frame (retaddr + args), e.g. rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")' }];
+        renderRows("ROP Slot Call", rows2);
+        setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: ["Missing buffer, slot, or frame words."] });
+        return toDxResult("ROP Slot Call", rows2);
+      }
+      const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
+      const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
+      section("ROP Slot Call (deref IAT slot + jmp eax dispatch)");
+      if (plan.success) {
+        const d = plan.dispatch;
+        info(`Deref preamble: pop eax ${d.popEax !== void 0 ? hex32(d.popEax) : "?"} -> [${hex32(BigInt(d.slot))}] via mov eax,[eax] ${d.deref !== void 0 ? hex32(d.deref) : "?"} -> jmp eax ${d.jmpEax !== void 0 ? hex32(d.jmpEax) : "?"}`);
+        if (d.unstable.length > 0) warn(`Preamble gadget(s) at a NON-stable address (will break if the module relocates): ${d.unstable.join(", ")}`);
+        info(`Stack: ${plan.stackBytes} bytes${plan.placeholders.length > 0 ? ` | Define before use: ${plan.placeholders.join(", ")}` : ""}`);
+        info("Frame layout (built in BUF, then ESP pivots onto it):");
+        print(`  BUF+0x00 = ${hex32(BigInt(Number(d.popEax)))}  (pop eax ; ret)`);
+        print(`  BUF+0x04 = ${hex32(BigInt(d.slot))}  (IAT slot -> popped into eax)`);
+        print(`  BUF+0x08 = ${hex32(BigInt(Number(d.deref)))}  (mov eax,[eax] ; ret -> eax = live API)`);
+        print(`  BUF+0x0c = ${hex32(BigInt(Number(d.jmpEax)))}  (jmp eax -> dispatch)`);
+        frame.forEach((w, i) => {
+          var _a2;
+          const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
+          const role = i === 0 ? "API return target \u2014 MUST be executable" : `arg${i}`;
+          print(`  BUF+0x${((i + 4) * 4).toString(16).padStart(2, "0")} = ${shown}  (${role})`);
+        });
+        const python = formatChainPython({ steps: plan.steps });
+        for (const line of python) print(line);
+      }
+      for (const u of plan.unsatisfied) warn(u);
+      if (!plan.success && plan.unsatisfied.length === 0) warn("No chain produced.");
+      const rows = plan.steps.map((step) => {
+        var _a2;
+        return {
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(step.value) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0) rows.push({ Type: "none", Value: "", Meaning: (_a = plan.unsatisfied[0]) != null ? _a : "no chain" });
+      renderRows("ROP Slot Call", rows);
+      setResult({
+        command: "rop.slot_call",
+        args: { buf: bufToken, slot: hex32(BigInt(slot)), frame: frame.length, badchars },
+        success: plan.success,
+        findings: [{ steps: plan.steps, dispatch: plan.dispatch, placeholders: plan.placeholders }],
+        warnings: [...plan.unsatisfied, ...plan.dispatch.unstable.map((u) => `non-stable preamble gadget: ${u}`)],
+        errors: []
+      });
+      return toDxResult("ROP Slot Call", rows);
     };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {
@@ -14633,7 +14842,8 @@ var osed_bundle = (() => {
       frame_vp: executeRopFrameVp,
       frame_wpm: executeRopFrameWpm,
       frame_va: executeRopFrameVa,
-      frame_write: executeRopFrameWrite
+      frame_write: executeRopFrameWrite,
+      slot_call: executeRopSlotCall
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.exploit = {

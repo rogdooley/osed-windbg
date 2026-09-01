@@ -151,7 +151,19 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     usage: 'dx @$osed().rop.frame_write(buf, "word0 word1 arg1 arg2 ...", badchars?)',
     examples: [
       'dx @$osed().rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
-      'dx @$osed().rop.frame_write("0x00420000", "0x10030000 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
+      'dx @$osed().rop.frame_write("0x00420000", "[0x1005D060] 0x10017260 0x0 0x1000 0x3000 0x40", "00 0A 0D")',
+    ],
+    // A word written as [0xSLOT] dereferences that IAT slot at runtime (mov reg, [slot]) —
+    // use it for an ASLR'd imported API (pass its non-ASLR IAT slot, not the resolved address).
+  },
+  {
+    name: "rop.slot_call",
+    description: "ASLR-proof stdcall call through a non-ASLR IAT slot, using a deref preamble dispatched by `jmp eax` (no `push eax`/store-out-of-eax needed). Emits, as data in a write-built frame: `pop eax` (=slot), `mov eax,[eax]` (eax = live API address), `jmp eax` (dispatch), then the fake stdcall frame — arg0 = the API's return target (must be executable, e.g. shellcode / jmp esp), then the stdcall args. The API's real (ASLR'd) address is NEVER placed in the payload; it is read from the fixed IAT slot at runtime. Null/badchar args are synthesised in a register and stored (via the frame_write engine). BUF must be a writable, stable, badchar-free address. Warns if any preamble gadget is at a non-stable (relocating) address.",
+    usage: 'dx @$osed().rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 ...", badchars?)',
+    examples: [
+      // VirtualAlloc(lpAddress, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE) via its IAT slot;
+      // retaddr = arg1 = the shellcode address (re-commit the page RWX in place, then return into it).
+      'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")',
     ],
   },
   {
