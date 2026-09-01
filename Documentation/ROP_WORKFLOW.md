@@ -190,6 +190,29 @@ with `struct.pack` lines.
 
 ## Alternative paths
 
+> Unsure which of the builders below to use? See
+> **[CHAIN_COMMANDS.md](CHAIN_COMMANDS.md)** — a decision table keyed on the API,
+> whether you have the target address or only an IAT slot (ASLR), and whether a
+> PUSHAD gadget is available.
+
+### ASLR-proof dispatch through an IAT slot
+
+When the API is ASLR'd (e.g. `kernel32!VirtualAlloc`) but a **non-ASLR module's
+IAT slot** points at it, dereference the slot at runtime instead of hardcoding
+the address:
+
+```js
+// 0x1005D060 is the SLOT (stable filter03), not the target address.
+dx @$osed().rop.slot_call("0x00420000", "0x1005D060",
+    "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")
+```
+
+This emits `pop eax=<slot> ; mov eax,[eax] ; jmp eax` (the target is fetched on
+the box) followed by the stdcall frame. It is the **only** builder that is
+reboot-stable under ASLR. Find the slot with `sc.iat_find("VirtualAlloc")` and
+pick the row in a non-relocating module. See the slot-vs-target explanation in
+[CHAIN_COMMANDS.md](CHAIN_COMMANDS.md#slot-vs-target-read-this-first).
+
 ### PUSHAD chains (legacy)
 
 If using the PUSHAD dispatch shape, the legacy chain builders provide a
@@ -201,8 +224,12 @@ dx @$osed().rop.chain_wpm(0x7C802213)
 dx @$osed().rop.chain_va(0x7C809AE1)
 ```
 
-Pass the API address as the first argument. These builders use `pop`/`xor`
-gadgets from the loaded corpus to set up registers for the PUSHAD frame.
+Pass the API's **real address (the target)** as the first argument — *not* an
+IAT slot. These builders dispatch by `ret`-ing into the address with no
+dereference, so a slot would `ret` into data and crash. They are also
+reboot-fragile because the target is ASLR'd; for a stable exploit use
+`rop.slot_call` above. These builders use `pop`/`xor` gadgets from the loaded
+corpus to set up registers for the PUSHAD frame.
 
 For a generic register-setup chain without a specific API layout:
 
