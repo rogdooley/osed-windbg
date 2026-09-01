@@ -24,6 +24,7 @@ This is the canonical guide to the ROP dispatch builders (`slot_call`,
 - [Filling in BUF and SHELLCODE](#filling-in-buf-and-shellcode)
 - [Command reference](#command-reference)
 - [Common mistakes](#common-mistakes)
+- [slot_call — live validation checklist](#slot_call--live-validation-checklist)
 
 ---
 
@@ -374,6 +375,67 @@ Null words are synthesised in a register and stored.
 - **`u`-ing a slot.** It's data. Use `dd <slot> L1`.
 - **Confusing BUF with SHELLCODE.** BUF is filter03 `.data` scratch; SHELLCODE is
   a stack address. `lpAddress` = SHELLCODE (the stack), never BUF.
+
+---
+
+## slot_call — live validation checklist
+
+A generated chain is a *hypothesis*. The planner reasons from the corpus model;
+these steps prove it against the running process. Run them once per chain before
+relying on it. (Addresses below are from the Mini-stream worked example —
+substitute your own.)
+
+### 1. Verify the load-bearing gadgets by disassembly
+The planner annotates each step, but confirm the two kinds that carry alignment
+risk:
+
+- **Every `ret N` gadget.** A `ret N` pops the next address *and then* skips N
+  bytes, so its compensation padding must sit **after** the following gadget, not
+  before it. Disassemble and confirm the N matches the padding count (N/4 words):
+  ```
+  u 0x10029F3E L3      ; e.g. add edx,ebx ; pop ebx ; ret 0x10  -> 1 junk + 4 pad
+  ```
+  Walk the stack: the `ret N` gadget's own address, then its side-effect pop(s)
+  (`junk`), then the *next* gadget address (which `ret N` pops into EIP), then
+  N/4 `padding` words (which `ret N` skips). If EIP would land on `0x41414141`,
+  the padding is misplaced — stop and report it.
+- **The store gadget.** Confirm it's `mov [<cursor>], <reg> ; ret` and note
+  whether its terminator is `ret` or `ret N` (that changes the padding):
+  ```
+  u 0x10010B48 L2      ; mov [eax],edx ; ret   (plain ret -> no padding of its own)
+  ```
+- **Any arithmetic gadget must preserve the write cursor** (`eax` by default).
+  `add edx,ebx ; pop ebx ; ret 0x10` touches edx/ebx/esp but not eax — good. If
+  an arithmetic step writes the cursor register, the frame walk desyncs.
+
+### 2. Confirm the deref resolves (single-step the preamble)
+After the pivot, step through `pop <ptr> → mov <val>,[<ptr>] → jmp <val>`:
+
+- `dd <slot> L1` — the slot holds the live (ASLR'd) API address (the *target*).
+- After `mov <val>,[<ptr>]`, that register equals the slot's contents.
+- `jmp <val>` lands in the API's module (e.g. `KERNEL32!VirtualAllocStub`), not
+  in data and not on `0x41414141`.
+
+### 3. Check BUF placement
+- BUF is **writable, stable, badchar-free**, and sits **inside a code cave** with
+  room both above (the frame) and below (the API's downward call-time stack).
+  Prefer **mid-cave**, not the cave's first byte:
+  ```
+  dd 0x<buf> L1 ; ed 0x<buf> 0x41414141 ; dd 0x<buf> L1   ; write must stick
+  ```
+
+### 4. Check the target page and args (VirtualAlloc/VirtualProtect)
+- `lpAddress & 0xFFFFF000` is the page that gets re-committed RWX. Confirm the
+  **whole** shellcode + NOP sled fits in `dwSize` bytes from that page base; bump
+  `dwSize` (e.g. `0x2000`) if it crosses a page.
+- `retaddr` lands **inside the NOP sled** of the now-RWX page.
+- Re-take `dds esp` **with the full chain in place** — the chain shifts the sled
+  to a higher address than a bare-payload test showed.
+
+### 5. Confirm no badchars in the final bytes
+Every gadget address and literal must avoid the badchar set; null/badchar values
+must be *constructed*, never placed raw. If the planner reports success with your
+badchar set, this holds by construction — but re-check after any manual edit.
 
 ---
 
