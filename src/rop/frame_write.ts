@@ -17,6 +17,9 @@ export interface FrameWord {
   // API — pass its non-ASLR IAT slot and the live pointer is loaded from it.
   derefSlot?: number;
   comment: string;
+  // Set when the token was a bare hex address with no 0x prefix and was assumed
+  // to be hex. Purely advisory (the caller can warn); the engine ignores it.
+  assumedHex?: boolean;
 }
 
 export interface WriteFramePlan {

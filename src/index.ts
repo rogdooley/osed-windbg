@@ -1795,11 +1795,17 @@ function bindApi(): OsedApi {
 
   const parseFrameWordToken = (token: string): FrameWord => {
     const t = token.trim();
-    // [0xSLOT] -> dereference the IAT slot at runtime (ASLR-proof API address).
-    const deref = /^\[\s*(0x[0-9a-fA-F]+)\s*\]$/.exec(t);
-    if (deref) return { derefSlot: parseInt(deref[1], 16) >>> 0, comment: `*${deref[1]}` };
+    // [0xSLOT] / [SLOT] -> dereference the IAT slot at runtime (ASLR-proof API address).
+    const deref = /^\[\s*(0x)?([0-9a-fA-F]+)\s*\]$/.exec(t);
+    if (deref) return { derefSlot: parseInt(deref[2], 16) >>> 0, comment: `*0x${deref[2]}` };
     if (/^0x[0-9a-fA-F]+$/.test(t)) return { value: parseInt(t, 16) >>> 0, comment: t };
     if (/^[0-9]+$/.test(t)) return { value: Number(t) >>> 0, comment: t };
+    // A bare hex-digit token missing its 0x prefix (has a-f, so it can't be a
+    // decimal) is a mistyped address, NOT a symbolic placeholder. Interpret it as
+    // hex — never emit it raw as an undefined symbol.
+    if (/^[0-9a-fA-F]+$/.test(t)) {
+      return { value: parseInt(t, 16) >>> 0, comment: `0x${t} (assumed hex — no 0x prefix)`, assumedHex: true };
+    }
     return { placeholder: t.toUpperCase(), comment: t };
   };
 
@@ -1833,6 +1839,9 @@ function bindApi(): OsedApi {
     const plan = planWriteFrame(currentRopCorpus, buf, words, badchars, buildStableAddressPredicate());
 
     out.section("ROP Write Frame (no PUSHAD)");
+    for (const w of words) {
+      if (w.assumedHex) out.warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix — assumed hex ${hex32(BigInt(w.value!))}. Add 0x to be explicit.`);
+    }
     if (plan.success) {
       const g = plan.gadgets;
       out.info(`Store: ${g.store !== undefined ? hex32(g.store) : "?"} | Advance: ${g.advance !== undefined ? hex32(g.advance) : "n/a"} | Pivot: ${g.pivot !== undefined ? hex32(g.pivot) : "?"} | Stack: ${plan.stackBytes} bytes`);
@@ -1900,6 +1909,9 @@ function bindApi(): OsedApi {
     const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
 
     out.section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
+    for (const w of frame) {
+      if (w.assumedHex) out.warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix — assumed hex ${hex32(BigInt(w.value!))}. Add 0x to be explicit.`);
+    }
     if (plan.success) {
       const d = plan.dispatch;
       const pr = d.ptrReg ?? "reg";

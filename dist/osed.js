@@ -12124,10 +12124,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-09-01T02:22:44.574Z" : globalThis[key2];
+        value = true ? "2026-09-02T02:17:00.158Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "a3ba520d8d98" : globalThis[key2];
+        value = true ? "1a0e5aee8b1b" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14712,10 +14712,13 @@ var osed_bundle = (() => {
     };
     const parseFrameWordToken = (token) => {
       const t = token.trim();
-      const deref = /^\[\s*(0x[0-9a-fA-F]+)\s*\]$/.exec(t);
-      if (deref) return { derefSlot: parseInt(deref[1], 16) >>> 0, comment: `*${deref[1]}` };
+      const deref = /^\[\s*(0x)?([0-9a-fA-F]+)\s*\]$/.exec(t);
+      if (deref) return { derefSlot: parseInt(deref[2], 16) >>> 0, comment: `*0x${deref[2]}` };
       if (/^0x[0-9a-fA-F]+$/.test(t)) return { value: parseInt(t, 16) >>> 0, comment: t };
       if (/^[0-9]+$/.test(t)) return { value: Number(t) >>> 0, comment: t };
+      if (/^[0-9a-fA-F]+$/.test(t)) {
+        return { value: parseInt(t, 16) >>> 0, comment: `0x${t} (assumed hex \u2014 no 0x prefix)`, assumedHex: true };
+      }
       return { placeholder: t.toUpperCase(), comment: t };
     };
     const executeRopFrameWrite = (...args) => {
@@ -14744,6 +14747,9 @@ var osed_bundle = (() => {
       const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
       const plan = planWriteFrame(currentRopCorpus, buf, words, badchars, buildStableAddressPredicate());
       section("ROP Write Frame (no PUSHAD)");
+      for (const w of words) {
+        if (w.assumedHex) warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix \u2014 assumed hex ${hex32(BigInt(w.value))}. Add 0x to be explicit.`);
+      }
       if (plan.success) {
         const g = plan.gadgets;
         info(`Store: ${g.store !== void 0 ? hex32(g.store) : "?"} | Advance: ${g.advance !== void 0 ? hex32(g.advance) : "n/a"} | Pivot: ${g.pivot !== void 0 ? hex32(g.pivot) : "?"} | Stack: ${plan.stackBytes} bytes`);
@@ -14807,6 +14813,9 @@ var osed_bundle = (() => {
       const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
       const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
       section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
+      for (const w of frame) {
+        if (w.assumedHex) warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix \u2014 assumed hex ${hex32(BigInt(w.value))}. Add 0x to be explicit.`);
+      }
       if (plan.success) {
         const d = plan.dispatch;
         const pr = (_a = d.ptrReg) != null ? _a : "reg";
