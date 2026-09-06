@@ -23,6 +23,7 @@ This is the canonical guide to the ROP dispatch builders (`slot_call`,
 - [Addresses: nulls vs volatility](#addresses-nulls-vs-volatility)
 - [Filling in BUF and SHELLCODE](#filling-in-buf-and-shellcode)
 - [Command reference](#command-reference)
+- [Entry alignment (ret N)](#entry-alignment-ret-n)
 - [Common mistakes](#common-mistakes)
 - [slot_call — live validation checklist](#slot_call--live-validation-checklist)
 
@@ -303,17 +304,23 @@ SHELLCODE    = 0x000FC4C4   # runtime shellcode address — verify with dds esp 
 
 Run `dx @$osed().rop.<name>("help")` for live help on any of these.
 
-### `rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 …", badchars?)` — ASLR-proof
+### `rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 …", badchars?, entrySkew?)` — ASLR-proof
 
 ```js
 // VirtualAlloc via its filter03 IAT slot; return into shellcode after re-committing RWX.
 dx @$osed().rop.slot_call("0x00420000", "0x1005D060",
     "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")
+
+// Same, but the vulnerable function returns with `ret 4` -> pass entrySkew = 4:
+dx @$osed().rop.slot_call("0x00420000", "0x1005D060",
+    "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D", 4)
 ```
 - `iatSlot` — the **slot** (`0x1005D060`), *not* the target.
 - frame words = `retaddr` (must be executable) then the stdcall args in order.
   VirtualAlloc: `lpAddress dwSize flAllocationType flProtect`.
 - `buf` — writable, stable, badchar-free staging address.
+- `entrySkew` — bytes the vulnerable function's return adds to ESP past the saved
+  return address (`ret N` → N). See [Entry alignment](#entry-alignment-ret-n).
 - Warns if any deref-preamble gadget is at a relocating address.
 
 ### `rop.slot_call_rel(…)` — stack-relative *(planned; not buildable on filter03)*
@@ -355,6 +362,43 @@ Null words are synthesised in a register and stored.
   value in a register; reports clobbers.
 - `rop.setup("reg=val reg=val …", badchars?)` — pack several register targets.
 - `rop.pivots(register?, minDelta?)` — find/rank stack pivots.
+
+---
+
+## Entry alignment (ret N)
+
+Every builder here assumes a **clean entry**: when control reaches the chain, EIP
+= the first gadget and ESP points at the word right after it. That holds when the
+overwritten return is reached by a plain `ret`.
+
+If the vulnerable function returns with **`ret N`** (stdcall callee cleanup), the
+return pops EIP *and then adds N to ESP* — so on entry ESP is N bytes past the
+saved return address, **skipping the word after the entry gadget**. The first
+`pop` then reads the wrong slot and the whole chain desyncs (a data word gets
+executed as a gadget; symptom: EIP lands on a payload value, or a store faults
+because the write cursor was never set).
+
+Fix it with `slot_call`'s `entrySkew` (bytes):
+
+```js
+dx @$osed().rop.slot_call(buf, slot, "retaddr args…", "00 0A 0D", 4)   // vuln does `ret 4`
+```
+
+It inserts `N/4` filler dwords immediately after the entry gadget (before its
+operand), so ESP lands on BUF. The filler is a spacer — skipped by the `ret N`,
+never executed — so its value is irrelevant. `entrySkew = 0` (default) is the
+plain-`ret` case.
+
+**How to find N** (a one-time, per-target fact):
+
+- Disassemble the vulnerable function's return — read the `ret N` immediate; or
+- Measure it live: at the first ROP gadget, `N = ESP_at_entry − &(first data
+  word of the chain)`. E.g. entry `ESP = 0x000fc480`, chain's first data word at
+  `0x000fc47c` → `N = 4`.
+
+For the other builders (`chain_*` / `frame_*` / `frame_write`), compensate the
+same skew at the harness level by placing `N/4` filler dwords after the value
+that overwrites the saved return address.
 
 ---
 
