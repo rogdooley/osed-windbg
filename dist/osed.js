@@ -5202,11 +5202,22 @@ var osed_bundle = (() => {
     success: false,
     dispatch: { slot: 0, unstable: [] }
   });
-  function planSlotDispatch(index, bufAddress, slot, frame, badchars = [], preferStable) {
+  function planSlotDispatch(index, bufAddress, slot, frame, badchars = [], preferStable, entrySkewBytes = 0) {
     const prevHint = getStableAddressHint();
     setStableAddressHint(preferStable != null ? preferStable : prevHint);
     try {
-      return planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
+      const plan = planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
+      if (plan.success && entrySkewBytes > 0 && plan.steps.length > 0) {
+        const fillers = Math.floor(entrySkewBytes / 4);
+        const fillerSteps = Array.from({ length: fillers }, () => ({
+          kind: "value",
+          value: 1111638594,
+          comment: `entry-skew filler (vuln ret ${entrySkewBytes} compensation)`
+        }));
+        plan.steps = [plan.steps[0], ...fillerSteps, ...plan.steps.slice(1)];
+        plan.stackBytes = plan.steps.length * 4;
+      }
+      return plan;
     } finally {
       setStableAddressHint(prevHint);
     }
@@ -7994,11 +8005,14 @@ var osed_bundle = (() => {
     {
       name: "rop.slot_call",
       description: "ASLR-proof stdcall call through a non-ASLR IAT slot, using a deref preamble dispatched by `jmp <reg>`. The deref/dispatch register is chosen from the loaded corpus (any register, or a two-register `mov <val>,[<ptr>]` split), ranked stable-first \u2014 not assumed to be eax. Emits, as data in a write-built frame: `pop <ptr>` (=slot), `mov <val>,[<ptr>]` (val = live API address), `jmp <val>` (dispatch), then the fake stdcall frame \u2014 arg0 = the API's return target (must be executable, e.g. shellcode / jmp esp), then the stdcall args. The API's real (ASLR'd) address is NEVER placed in the payload; it is read from the fixed IAT slot at runtime. Null/badchar args are synthesised in a register and stored (via the frame_write engine). BUF must be a writable, stable, badchar-free address. Reports honestly when the corpus has no composable deref/dispatch; warns if any preamble gadget is at a non-stable (relocating) address.",
-      usage: 'dx @$osed().rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 ...", badchars?)',
+      usage: 'dx @$osed().rop.slot_call(buf, iatSlot, "retaddr arg1 arg2 ...", badchars?, entrySkew?)',
       examples: [
         // VirtualAlloc(lpAddress, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE) via its IAT slot;
         // retaddr = arg1 = the shellcode address (re-commit the page RWX in place, then return into it).
-        'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")'
+        'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D")',
+        // entrySkew: if the vulnerable function returns with `ret N` (ESP is N bytes high on entry),
+        // pass N so the right filler is inserted after the entry gadget. e.g. `ret 4` -> 4:
+        'dx @$osed().rop.slot_call("0x00420000", "0x1005D060", "SHELLCODE SHELLCODE 0x1000 0x1000 0x40", "00 0A 0D", 4)'
       ]
     },
     {
@@ -12124,10 +12138,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-09-02T02:17:00.158Z" : globalThis[key2];
+        value = true ? "2026-09-06T20:43:12.008Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "1a0e5aee8b1b" : globalThis[key2];
+        value = true ? "18c6d6edaa08" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14802,6 +14816,13 @@ var osed_bundle = (() => {
       const slotToken = typeof args[1] === "string" ? args[1].trim() : void 0;
       const frameSpec = typeof args[2] === "string" ? args[2] : void 0;
       const badchars = Array.isArray(parseHexByteList(args[3])) ? parseHexByteList(args[3]) : [];
+      const entrySkew = args[4] !== void 0 ? Number(args[4]) : 0;
+      if (!Number.isFinite(entrySkew) || entrySkew < 0 || entrySkew % 4 !== 0) {
+        const rows2 = [{ Error: `entrySkew must be a non-negative multiple of 4 (bytes the vuln's ret adds to ESP; e.g. 4 for 'ret 4'). Got: ${String(args[4])}` }];
+        renderRows("ROP Slot Call", rows2);
+        setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: ["Invalid entrySkew."] });
+        return toDxResult("ROP Slot Call", rows2);
+      }
       const slot = slotToken && /^(0x)?[0-9a-fA-F]+$/.test(slotToken) ? parseInt(slotToken, 16) >>> 0 : void 0;
       const frame = (frameSpec != null ? frameSpec : "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
       if (!bufToken || slot === void 0 || frame.length === 0) {
@@ -14811,8 +14832,9 @@ var osed_bundle = (() => {
         return toDxResult("ROP Slot Call", rows2);
       }
       const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
-      const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
+      const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate(), entrySkew);
       section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
+      if (entrySkew > 0) info(`Entry skew: ${entrySkew} bytes (vuln ret ${entrySkew}) -> ${entrySkew / 4} filler dword(s) after the entry gadget.`);
       for (const w of frame) {
         if (w.assumedHex) warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix \u2014 assumed hex ${hex32(BigInt(w.value))}. Add 0x to be explicit.`);
       }

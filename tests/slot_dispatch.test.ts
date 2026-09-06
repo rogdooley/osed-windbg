@@ -125,6 +125,23 @@ describe("slot dispatch (deref IAT + jmp eax)", () => {
     expect(literals).not.toContain(0x00000040);
   });
 
+  it("inserts entry-skew filler after the entry gadget for a ret N vuln", () => {
+    const base = planSlotDispatch(index(core), { value: 0x00420000 }, 0x1005d060,
+      [{ placeholder: "SC", comment: "ret" }, { value: 0x11111111, comment: "a1" }], []);
+    const skewed = planSlotDispatch(index(core), { value: 0x00420000 }, 0x1005d060,
+      [{ placeholder: "SC", comment: "ret" }, { value: 0x11111111, comment: "a1" }], [], undefined, 4);
+    expect(base.success && skewed.success).toBe(true);
+    // one extra filler word vs the un-skewed chain
+    expect(skewed.steps.length).toBe(base.steps.length + 1);
+    // the entry gadget is still first; the filler sits immediately after it
+    expect(skewed.steps[0]).toEqual(base.steps[0]);
+    expect(skewed.steps[1].kind).toBe("value");
+    expect(skewed.steps[1].value).toBe(0x42424242);
+    expect(skewed.steps[1].comment).toContain("entry-skew filler");
+    // and the original second step (the entry gadget's operand) is now third
+    expect(skewed.steps[2]).toEqual(base.steps[1]);
+  });
+
   it("reports the missing dispatch primitive instead of half a chain", () => {
     const noJmp = core.filter((x) => x.canonicalId !== "mock_268661225"); // drop jmp eax (0x100371e9)
     const plan = planSlotDispatch(index(noJmp), { value: 0x00420000 }, 0x1005d060, [{ placeholder: "SC", comment: "ret" }], []);

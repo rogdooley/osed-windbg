@@ -1892,6 +1892,13 @@ function bindApi(): OsedApi {
     const slotToken = typeof args[1] === "string" ? args[1].trim() : undefined;
     const frameSpec = typeof args[2] === "string" ? args[2] : undefined;
     const badchars = Array.isArray(parseHexByteList(args[3])) ? parseHexByteList(args[3]) as number[] : [];
+    const entrySkew = args[4] !== undefined ? Number(args[4]) : 0;
+    if (!Number.isFinite(entrySkew) || entrySkew < 0 || entrySkew % 4 !== 0) {
+      const rows = [{ Error: `entrySkew must be a non-negative multiple of 4 (bytes the vuln's ret adds to ESP; e.g. 4 for 'ret 4'). Got: ${String(args[4])}` }];
+      renderRows("ROP Slot Call", rows);
+      setResult({ command: "rop.slot_call", args: {}, success: false, findings: [], warnings: [], errors: ["Invalid entrySkew."] });
+      return toDxResult("ROP Slot Call", rows);
+    }
     const slot = slotToken && /^(0x)?[0-9a-fA-F]+$/.test(slotToken)
       ? parseInt(slotToken, 16) >>> 0
       : undefined;
@@ -1906,9 +1913,10 @@ function bindApi(): OsedApi {
       ? { value: parseInt(bufToken, 16) >>> 0 }
       : { placeholder: bufToken.toUpperCase() };
 
-    const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate());
+    const plan = planSlotDispatch(currentRopCorpus, buf, slot, frame, badchars, buildStableAddressPredicate(), entrySkew);
 
     out.section("ROP Slot Call (deref IAT slot + jmp <reg> dispatch)");
+    if (entrySkew > 0) out.info(`Entry skew: ${entrySkew} bytes (vuln ret ${entrySkew}) -> ${entrySkew / 4} filler dword(s) after the entry gadget.`);
     for (const w of frame) {
       if (w.assumedHex) out.warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix — assumed hex ${hex32(BigInt(w.value!))}. Add 0x to be explicit.`);
     }
