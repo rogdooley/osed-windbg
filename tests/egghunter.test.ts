@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildEgghunter } from "../src/commands/egghunter";
 
 const NO_BADCHARS: number[] = [];
-const DEFAULTS = { badchars: NO_BADCHARS, syscall: null } as const;
+const DEFAULTS = { badchars: NO_BADCHARS, os: "win10" as const, syscall: null } as const;
 
 describe("NtAccess egghunter", () => {
   test("generates 34-byte stub with tag embedded", () => {
@@ -36,12 +36,25 @@ describe("NtAccess egghunter", () => {
   });
 
   test("custom syscall number is patched in", () => {
-    const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: NO_BADCHARS, syscall: 0x02 });
+    const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: NO_BADCHARS, os: "win10", syscall: 0x02 });
     expect(result.syscallUsed).toBe(0x02);
     expect(result.bytes[8]).toBe(0x02);
     expect(result.bytes[9]).toBe(0x00);
     expect(result.bytes[10]).toBe(0x00);
     expect(result.bytes[11]).toBe(0x00);
+  });
+
+  test("win7 preset uses syscall 0x02", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: NO_BADCHARS, os: "win7", syscall: null });
+    expect(result.syscallUsed).toBe(0x02);
+    expect(result.bytes[8]).toBe(0x02);
+  });
+
+  test("syscall parameter overrides os preset", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: NO_BADCHARS, os: "win7", syscall: 0x1c9 });
+    expect(result.syscallUsed).toBe(0x1c9);
+    expect(result.bytes[8]).toBe(0xc9);
+    expect(result.bytes[9]).toBe(0x01);
   });
 
   test("WoW64 variant uses inc ecx (0x41) instead of inc edx (0x42)", () => {
@@ -67,14 +80,14 @@ describe("NtAccess egghunter", () => {
   test("reports badchar violations in stub bytes", () => {
     const result = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, ...DEFAULTS });
     // Stub contains 0x0f and 0xcd — test those as badchars
-    const withBad = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: [0x0f, 0xcd], syscall: null });
+    const withBad = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, badchars: [0x0f, 0xcd], os: "win10", syscall: null });
     expect(withBad.badcharHits.length).toBeGreaterThan(0);
     expect(withBad.badcharHits.some((h) => h.includes("0x0F"))).toBe(true);
     expect(withBad.badcharHits.some((h) => h.includes("0xCD"))).toBe(true);
   });
 
   test("reports badchars in the tag itself", () => {
-    const result = buildEgghunter({ tag: "A\x00BC", mode: "ntaccess", wow64: false, badchars: [0], syscall: null });
+    const result = buildEgghunter({ tag: "A\x00BC", mode: "ntaccess", wow64: false, badchars: [0], os: "win10", syscall: null });
     expect(result.badcharHits.some((h) => h.includes("0x00"))).toBe(true);
   });
 });
@@ -105,7 +118,7 @@ describe("SEH egghunter", () => {
   });
 
   test("contains null bytes and reports them as badchars", () => {
-    const result = buildEgghunter({ tag: "W00T", mode: "seh", wow64: false, badchars: [0], syscall: null });
+    const result = buildEgghunter({ tag: "W00T", mode: "seh", wow64: false, badchars: [0], os: "win10", syscall: null });
     expect(result.badcharHits.length).toBeGreaterThan(0);
     expect(result.badcharHits.some((h) => h.includes("0x00"))).toBe(true);
   });

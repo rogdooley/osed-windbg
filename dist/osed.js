@@ -2175,6 +2175,10 @@ var osed_bundle = (() => {
   }
 
   // src/commands/egghunter.ts
+  var SYSCALL_TABLE = {
+    win7: 2,
+    win10: 457
+  };
   var NTACCESS_X86 = [
     102,
     129,
@@ -2433,7 +2437,7 @@ var osed_bundle = (() => {
     template.splice(tagOffset, 4, ...tag);
     let syscallUsed = null;
     if (syscallOffset !== null) {
-      const sysnum = (_a = options.syscall) != null ? _a : 457;
+      const sysnum = (_a = options.syscall) != null ? _a : SYSCALL_TABLE[options.os];
       template.splice(syscallOffset, 4, ...dwordLE(sysnum));
       syscallUsed = sysnum;
     }
@@ -2450,33 +2454,36 @@ var osed_bundle = (() => {
     return {
       name: "egghunter",
       description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
-      usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, syscall?)",
+      usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)",
       examples: [
         'dx @$osed().egghunter("W00T")',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")',
         'dx @$osed().egghunter("B33F", "seh")',
         'dx @$osed().egghunter("W00T", "ntaccess", true)',
         'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
-        'dx @$osed().egghunter("W00T", "ntaccess", false, "", 0x1c9)'
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win10", 0x1c9)'
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
         mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
         wow64: { type: "boolean", default: false },
         badchars: { type: "array", default: [] },
+        os: { type: "string", enum: ["win7", "win10"], default: "win10" },
         syscall: { type: "number", default: null }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f;
         const opts = {
           tag: (_a = options.tag) != null ? _a : "W00T",
           mode: (_b = options.mode) != null ? _b : "ntaccess",
           wow64: (_c = options.wow64) != null ? _c : false,
           badchars: (_d = options.badchars) != null ? _d : [],
-          syscall: (_e = options.syscall) != null ? _e : null
+          os: (_e = options.os) != null ? _e : "win10",
+          syscall: (_f = options.syscall) != null ? _f : null
         };
         const result3 = buildEgghunter(opts);
         section("Egghunter");
-        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: 0x${result3.syscallUsed.toString(16).toUpperCase()}` : "";
+        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: 0x${result3.syscallUsed.toString(16).toUpperCase()} (${opts.os})` : "";
         info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes${sysLabel}`);
         print(bytesToHex(result3.bytes));
         print(bytesToPython(result3.bytes));
@@ -12176,10 +12183,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-09-17T01:47:09.433Z" : globalThis[key2];
+        value = true ? "2026-09-17T02:18:09.532Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c7e7d8e2700d" : globalThis[key2];
+        value = true ? "0dcd911c444f" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

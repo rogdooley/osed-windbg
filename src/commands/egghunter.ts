@@ -2,12 +2,19 @@ import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 
 type EggMode = "ntaccess" | "seh";
+type EggOS = "win7" | "win10";
+
+const SYSCALL_TABLE: Record<EggOS, number> = {
+  win7: 0x02,
+  win10: 0x1c9,
+};
 
 type EggOptions = {
   tag: string;
   mode: EggMode;
   wow64: boolean;
   badchars: number[];
+  os: EggOS;
   syscall: number | null;
 };
 
@@ -172,7 +179,7 @@ export function buildEgghunter(options: EggOptions): { bytes: number[]; size: nu
 
   let syscallUsed: number | null = null;
   if (syscallOffset !== null) {
-    const sysnum = options.syscall ?? 0x1c9;
+    const sysnum = options.syscall ?? SYSCALL_TABLE[options.os];
     template.splice(syscallOffset, 4, ...dwordLE(sysnum));
     syscallUsed = sysnum;
   }
@@ -193,19 +200,21 @@ export function createEgghunterCommand(): Command {
   return {
     name: "egghunter",
     description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
-    usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, syscall?)",
+    usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, os?, syscall?)",
     examples: [
       'dx @$osed().egghunter("W00T")',
+      'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")',
       'dx @$osed().egghunter("B33F", "seh")',
       'dx @$osed().egghunter("W00T", "ntaccess", true)',
       'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
-      'dx @$osed().egghunter("W00T", "ntaccess", false, "", 0x1c9)',
+      'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win10", 0x1c9)',
     ],
     schema: {
       tag: { type: "string", default: "W00T" },
       mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
       wow64: { type: "boolean", default: false },
       badchars: { type: "array", default: [] },
+      os: { type: "string", enum: ["win7", "win10"], default: "win10" },
       syscall: { type: "number", default: null },
     },
     execute(options: Record<string, unknown>): CommandResult {
@@ -214,13 +223,14 @@ export function createEgghunterCommand(): Command {
         mode: (options.mode as EggMode) ?? "ntaccess",
         wow64: (options.wow64 as boolean) ?? false,
         badchars: (options.badchars as number[]) ?? [],
+        os: (options.os as EggOS) ?? "win10",
         syscall: (options.syscall as number | null) ?? null,
       };
 
       const result = buildEgghunter(opts);
 
       out.section("Egghunter");
-      const sysLabel = result.syscallUsed !== null ? ` | Syscall: 0x${result.syscallUsed.toString(16).toUpperCase()}` : "";
+      const sysLabel = result.syscallUsed !== null ? ` | Syscall: 0x${result.syscallUsed.toString(16).toUpperCase()} (${opts.os})` : "";
       out.info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result.size} bytes${sysLabel}`);
       out.print(bytesToHex(result.bytes));
       out.print(bytesToPython(result.bytes));
