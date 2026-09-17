@@ -8,6 +8,8 @@ export type ExploitStrategy =
   | "VirtualProtectEx"
   | "VirtualAllocEx"
   | "WinExec"
+  | "LoadLibraryA"
+  | "GetProcAddress"
   | "Stack Pivot";
 
 export type ApiExploitStrategy = Exclude<ExploitStrategy, "Stack Pivot">;
@@ -27,6 +29,8 @@ export const STDCALL_ARG_COUNT: Record<ApiExploitStrategy, number> = {
   VirtualProtectEx: 5,
   VirtualAllocEx: 5,
   WinExec: 2,
+  LoadLibraryA: 1,
+  GetProcAddress: 2,
 };
 
 export type ApiResolutionMode = "direct" | "iat";
@@ -86,6 +90,9 @@ const STRATEGY_NAMES = new Map<string, ExploitStrategy>([
   ["virtualprotectex", "VirtualProtectEx"],
   ["virtualallocex", "VirtualAllocEx"],
   ["winexec", "WinExec"],
+  ["loadlibrarya", "LoadLibraryA"],
+  ["loadlibrary", "LoadLibraryA"],
+  ["getprocaddress", "GetProcAddress"],
   ["stackpivot", "Stack Pivot"],
   ["stack pivot", "Stack Pivot"],
 ]);

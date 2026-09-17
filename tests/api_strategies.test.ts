@@ -23,6 +23,8 @@ const API_STRATEGIES: ApiExploitStrategy[] = [
   "VirtualProtectEx",
   "VirtualAllocEx",
   "WinExec",
+  "LoadLibraryA",
+  "GetProcAddress",
 ];
 
 describe("API strategy registration", () => {
@@ -31,6 +33,11 @@ describe("API strategy registration", () => {
     expect(normalizeExploitStrategy("winexec")).toBe("WinExec");
     expect(normalizeExploitStrategy("virtualprotectex")).toBe("VirtualProtectEx");
     expect(normalizeExploitStrategy("VirtualAllocEx")).toBe("VirtualAllocEx");
+    expect(normalizeExploitStrategy("LoadLibraryA")).toBe("LoadLibraryA");
+    expect(normalizeExploitStrategy("loadlibrarya")).toBe("LoadLibraryA");
+    expect(normalizeExploitStrategy("loadlibrary")).toBe("LoadLibraryA");
+    expect(normalizeExploitStrategy("GetProcAddress")).toBe("GetProcAddress");
+    expect(normalizeExploitStrategy("getprocaddress")).toBe("GetProcAddress");
   });
 
   test("rejects unknown strategy names", () => {
@@ -58,6 +65,25 @@ describe("apiFrameSlots frame layout", () => {
     ]);
     // uCmdShow defaults to SW_SHOWNORMAL.
     expect(slots.find((s) => s.role === "arg2-uCmdShow")?.value).toBe(0x1);
+  });
+
+  test("LoadLibraryA is a one-argument frame", () => {
+    const slots = apiFrameSlots("LoadLibraryA");
+    expect(slots.map((s) => s.role)).toEqual([
+      "api-address",
+      "return-address",
+      "arg1-lpLibFileName",
+    ]);
+  });
+
+  test("GetProcAddress is a two-argument frame", () => {
+    const slots = apiFrameSlots("GetProcAddress");
+    expect(slots.map((s) => s.role)).toEqual([
+      "api-address",
+      "return-address",
+      "arg1-hModule",
+      "arg2-lpProcName",
+    ]);
   });
 
   test("Ex variants add a leading GetCurrentProcess handle", () => {

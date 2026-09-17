@@ -125,27 +125,172 @@ function wpmTemplate(mod: string): void {
   out.print("payload   = b\"A\" * OFFSET + rop_chain + shellcode");
 }
 
+function llaTemplate(mod: string): void {
+  out.section("LoadLibraryA — ROP Chain Skeleton");
+  out.print("Prototype: HMODULE LoadLibraryA(LPCSTR lpLibFileName)");
+  out.print("Goal:      load a DLL at runtime to resolve APIs not in the target's IAT.");
+  out.print("Returns:   HMODULE in EAX (pass to GetProcAddress).");
+
+  out.section("Step 1 — find addresses");
+  out.print(`  LoadLibraryA addr:     dx @$osed().sc.iat_find("LoadLibraryA")`);
+  out.print(`  Gadgets (pop/etc):     dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+
+  out.section("Step 2 — PUSHAD technique register map");
+  out.print("  After PUSHAD ; RET, the stack looks like:");
+  out.print("    [ESP+0]  = EDI  <- consumed by RET (set to LoadLibraryA address)");
+  out.print("    [ESP+4]  = ESI  <- return addr (next chain stage, e.g. GetProcAddress)");
+  out.print("    [ESP+8]  = EBP  <- lpLibFileName (pointer to DLL name string)");
+  out.print("    [ESP+12] = saved_ESP <- (unused by LoadLibraryA)");
+  out.print("    [ESP+16] = EBX  <- (unused)");
+  out.print("    [ESP+20] = EDX  <- (unused)");
+  out.print("    [ESP+24] = ECX  <- (unused)");
+  out.print("    [ESP+28] = EAX  <- (unused)");
+
+  out.section("Step 3 — Python skeleton");
+  out.print("import struct");
+  out.print("def p32(v): return struct.pack('<I', v)");
+  out.print("");
+  out.print("OFFSET       = ???           # bytes from buffer start to EIP control");
+  out.print("LLA          = 0x????????    # LoadLibraryA  dx @$osed().sc.iat_find(\"LoadLibraryA\")");
+  out.print("NEXT_STAGE   = 0x????????    # return addr (e.g. GetProcAddress chain entry)");
+  out.print("DLL_NAME_PTR = 0x????????    # pointer to null-terminated DLL name (e.g. \"ws2_32.dll\")");
+  out.print("");
+  out.print("rop_chain = b\"\"");
+  out.print("");
+  out.print("# ── Register setup (PUSHAD technique) ──");
+  out.print("rop_chain += p32(0x????????)  # pop edi ; ret");
+  out.print("rop_chain += p32(LLA)         # EDI = LoadLibraryA address");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop esi ; ret");
+  out.print("rop_chain += p32(NEXT_STAGE)  # ESI = return addr (next stage)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+  out.print("rop_chain += p32(DLL_NAME_PTR)# EBP = lpLibFileName");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop ebx ; ret  (EBX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop edx ; ret  (EDX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pushad ; ret");
+  out.print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+  out.print("");
+  out.print("# LoadLibraryA returns HMODULE in EAX — chain NEXT_STAGE to");
+  out.print("# a GetProcAddress chain that consumes EAX as hModule.");
+
+  out.section("Step 4 — staging the DLL name string");
+  out.print("  The DLL name (e.g. \"ws2_32.dll\\x00\") must be null-terminated and");
+  out.print("  accessible at DLL_NAME_PTR when LoadLibraryA runs. Options:");
+  out.print("  1. Place it on the stack after the chain and compute its ESP-relative address.");
+  out.print("  2. Write it into a writable .data section via WriteProcessMemory or mov [reg],val gadgets.");
+  out.print("  3. Find it already in memory (e.g. a string table in the target binary).");
+}
+
+function gpaTemplate(mod: string): void {
+  out.section("GetProcAddress — ROP Chain Skeleton");
+  out.print("Prototype: FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName)");
+  out.print("Goal:      resolve a function address from a loaded DLL at runtime.");
+  out.print("Returns:   FARPROC (function pointer) in EAX.");
+
+  out.section("Step 1 — find addresses");
+  out.print(`  GetProcAddress addr:   dx @$osed().sc.iat_find("GetProcAddress")`);
+  out.print(`  Gadgets (pop/etc):     dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+
+  out.section("Step 2 — PUSHAD technique register map");
+  out.print("  After PUSHAD ; RET, the stack looks like:");
+  out.print("    [ESP+0]  = EDI  <- consumed by RET (set to GetProcAddress address)");
+  out.print("    [ESP+4]  = ESI  <- return addr (next chain stage, e.g. call eax)");
+  out.print("    [ESP+8]  = EBP  <- hModule (from LoadLibraryA return value in EAX)");
+  out.print("    [ESP+12] = saved_ESP <- lpProcName (not directly settable)");
+  out.print("    [ESP+16] = EBX  <- (lpProcName alternative — see constraints)");
+  out.print("    [ESP+20] = EDX  <- (unused)");
+  out.print("    [ESP+24] = ECX  <- (unused)");
+  out.print("    [ESP+28] = EAX  <- (unused)");
+
+  out.section("Step 3 — Python skeleton");
+  out.print("import struct");
+  out.print("def p32(v): return struct.pack('<I', v)");
+  out.print("");
+  out.print("OFFSET        = ???           # bytes from buffer start to EIP control");
+  out.print("GPA           = 0x????????    # GetProcAddress  dx @$osed().sc.iat_find(\"GetProcAddress\")");
+  out.print("NEXT_STAGE    = 0x????????    # return addr (e.g. jmp eax / call eax to run resolved func)");
+  out.print("HMODULE       = 0x????????    # hModule from LoadLibraryA (or known module base)");
+  out.print("FUNC_NAME_PTR = 0x????????    # pointer to null-terminated function name string");
+  out.print("");
+  out.print("rop_chain = b\"\"");
+  out.print("");
+  out.print("# ── Register setup (PUSHAD technique) ──");
+  out.print("rop_chain += p32(0x????????)  # pop edi ; ret");
+  out.print("rop_chain += p32(GPA)         # EDI = GetProcAddress address");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop esi ; ret");
+  out.print("rop_chain += p32(NEXT_STAGE)  # ESI = return addr");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+  out.print("rop_chain += p32(HMODULE)     # EBP = hModule");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop ebx ; ret");
+  out.print("rop_chain += p32(FUNC_NAME_PTR)# EBX = lpProcName");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop edx ; ret  (EDX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused)");
+  out.print("rop_chain += p32(0x90909090)");
+  out.print("");
+  out.print("rop_chain += p32(0x????????)  # pushad ; ret");
+  out.print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+  out.print("");
+  out.print("# GetProcAddress returns FARPROC in EAX — dispatch via jmp eax or call eax.");
+
+  out.section("Constraints");
+  out.print("  PUSHAD places saved ESP as the 2nd argument (lpProcName). Since saved ESP");
+  out.print("  is not directly settable, the PUSHAD technique only works if:");
+  out.print("  1. You use a flat stdcall frame (no PUSHAD) and place hModule/lpProcName directly.");
+  out.print("  2. Or you stage lpProcName at a known address and accept saved ESP as junk,");
+  out.print("     rearranging the register map to put lpProcName in EBX (requires a different");
+  out.print("     dispatch shape or a RET-slide variant).");
+  out.print("  3. Or chain from LoadLibraryA where EAX already holds hModule and use gadgets");
+  out.print("     to marshal arguments directly.");
+  out.print("");
+  out.print("  For chained LoadLibraryA -> GetProcAddress resolution, a flat stdcall frame");
+  out.print("  or IAT slot_call dispatch is usually simpler than PUSHAD.");
+}
+
 export function createRopTemplateCommand(): Command {
   return {
     name: "rop_template",
-    description: "Print a commented VirtualProtect or WriteProcessMemory ROP chain skeleton.",
+    description: "Print a commented ROP chain skeleton for a supported API.",
     usage: "dx @$osed().rop_template(api?, module?)",
     examples: [
       'dx @$osed().rop_template("VirtualProtect", "essfunc")',
       'dx @$osed().rop_template("WriteProcessMemory", "essfunc")',
+      'dx @$osed().rop_template("LoadLibraryA", "essfunc")',
+      'dx @$osed().rop_template("GetProcAddress", "essfunc")',
     ],
     schema: {
-      api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory"], default: "VirtualProtect" },
+      api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory", "LoadLibraryA", "GetProcAddress"], default: "VirtualProtect" },
       module: { type: "string", default: "TARGET_MODULE" },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const api = (options.api as string | undefined) ?? "VirtualProtect";
       const mod = (options.module as string | undefined) ?? "TARGET_MODULE";
 
-      if (api === "WriteProcessMemory") {
-        wpmTemplate(mod);
-      } else {
-        vpTemplate(mod);
+      switch (api) {
+        case "WriteProcessMemory": wpmTemplate(mod); break;
+        case "LoadLibraryA": llaTemplate(mod); break;
+        case "GetProcAddress": gpaTemplate(mod); break;
+        default: vpTemplate(mod); break;
       }
 
       return {

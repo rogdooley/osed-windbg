@@ -516,6 +516,19 @@ export function apiFrameSlots(strategy: ExploitStrategy): FrameSlotDef[] {
         { role: "arg1-lpCmdLine", placeholder: "LP_CMDLINE", comment: "lpCmdLine (pointer to command string)" },
         { role: "arg2-uCmdShow", value: 0x1, comment: "uCmdShow = SW_SHOWNORMAL" },
       ];
+    case "LoadLibraryA":
+      return [
+        { role: "api-address", placeholder: "LOADLIBRARYA", comment: "LoadLibraryA" },
+        { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. next stage or GetProcAddress chain)" },
+        { role: "arg1-lpLibFileName", placeholder: "LP_LIBFILENAME", comment: "lpLibFileName (pointer to DLL name string)" },
+      ];
+    case "GetProcAddress":
+      return [
+        { role: "api-address", placeholder: "GETPROCADDRESS", comment: "GetProcAddress" },
+        { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. resolved function or next stage)" },
+        { role: "arg1-hModule", placeholder: "HMODULE", comment: "hModule (from LoadLibraryA return value)" },
+        { role: "arg2-lpProcName", placeholder: "LP_PROCNAME", comment: "lpProcName (pointer to function name string)" },
+      ];
     case "Stack Pivot":
       return [
         { role: "pivot-target", placeholder: "PIVOT_TARGET", comment: "pivot target address" },
