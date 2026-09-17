@@ -139,8 +139,8 @@ dd 0x1005D060  ->  76e25680      (*slot == target)
 | You have… | ASLR? | PUSHAD gadget? | Use | First arg you pass |
 |-----------|-------|----------------|-----|--------------------|
 | a **slot** (want reboot-stable) | yes | — | **`rop.slot_call`** | the **slot** |
-| the **target** address | no / one-shot | yes | `rop.chain_va` / `chain_vp` / `chain_wpm` | the **target** |
-| the **target** address | no / one-shot | no | `rop.frame_va` / `frame_vp` / `frame_wpm` | the **target** |
+| the **target** address | no / one-shot | yes | `rop.chain_va` / `chain_vp` / `chain_wpm` / `chain_lla` / `chain_gpa` | the **target** |
+| the **target** address | no / one-shot | no | `rop.frame_va` / `frame_vp` / `frame_wpm` / `frame_lla` / `frame_gpa` | the **target** |
 | the **target**, want the frame built by gadgets in a buffer | no / one-shot | no | `rop.frame_write` | the **target** (word0) |
 
 > **ASLR-proof ⇒ `slot_call`.** Every other builder dispatches into an address
@@ -333,12 +333,37 @@ on this corpus; for ASLR here use the **stable code-cave destination** approach
 instead. On other targets, confirm feasibility with
 `rop.query("capability","STACK_COPY")`.
 
+### `rop.chain_lla / chain_gpa(targetAddr, …)` — PUSHAD, needs the target
+
+```js
+dx @$osed().rop.chain_lla(0x76E10000)   // LoadLibraryA address
+dx @$osed().rop.chain_gpa(0x76E20000)   // GetProcAddress address
+```
+PUSHAD register-setup chains for runtime API resolution. `chain_lla` loads the
+registers for `LoadLibraryA(lpLibFileName)` — the return address should chain to a
+stage that consumes `EAX` (the returned HMODULE). `chain_gpa` loads for
+`GetProcAddress(hModule, lpProcName)` — note the PUSHAD constraint: saved `ESP`
+becomes `lpProcName`, so this only works if `ESP` happens to point at the function
+name string (prefer flat frames for chained resolution).
+
 ### `rop.chain_va / chain_vp / chain_wpm(targetAddr, …)` — PUSHAD, needs the target
 
 ```js
 dx @$osed().rop.chain_va(0x76E25680)   // pass the TARGET, not the slot
 ```
 Reboot-fragile (target is ASLR'd). Requires a `pushad ; ret` gadget.
+
+### `rop.frame_lla / frame_gpa(targetAddr, …, badchars)` — flat, needs the target
+
+```js
+dx @$osed().rop.frame_lla(0x76E10000, 0x625011AF, 0x10060000, "00 0A 0D")
+//                        LoadLibraryA  retaddr     lpLibFileName
+dx @$osed().rop.frame_gpa(0x76E20000, 0x625011AF, 0x76D00000, 0x10060040, "00 0A 0D")
+//                        GetProcAddress retaddr    hModule     lpProcName
+```
+Flat stdcall frames for runtime API resolution. No corpus or PUSHAD required.
+All values must be badchar-free literals. For chained resolution, point
+`frame_lla`'s `retaddr` at the start of the `frame_gpa` sequence.
 
 ### `rop.frame_va / frame_vp / frame_wpm(targetAddr, …, badchars)` — flat, needs the target
 

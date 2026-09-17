@@ -36,7 +36,7 @@ Use `dx @$osed().last_result()` to inspect the full structured `CommandResult`.
 | `seh_ppr` | `dx @$osed().seh_ppr(module?, exclude?, maxResults?, executableOnly?, mode?)` | `dx @$osed().seh_ppr("libspp.dll", "00 0A 0D")` | Finds and ranks `pop ; pop ; ret` gadgets. |
 | `encode` | `dx @$osed().encode(shellcode, exclude?, key?)` | `dx @$osed().encode("FC E8 ...", "00 0A 0D")` | XOR-encodes shellcode to avoid bad characters. |
 | `nop` | `dx @$osed().nop(length, byte?)` | `dx @$osed().nop(16)` | Generates a NOP sled. |
-| `rop_template` | `dx @$osed().rop_template(api?, module?)` | `dx @$osed().rop_template("VirtualProtect", "essfunc")` | Prints a commented ROP chain skeleton. |
+| `rop_template` | `dx @$osed().rop_template(api?, module?)` | `dx @$osed().rop_template("VirtualProtect", "essfunc")` | Prints a commented ROP chain skeleton. Supports VirtualProtect, WriteProcessMemory, LoadLibraryA, GetProcAddress. |
 
 ### Help Model
 

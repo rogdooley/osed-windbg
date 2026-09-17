@@ -6,8 +6,8 @@ have to leave the debugger to dig through notes.
 
 The PUSHAD tables here mirror the tool's own templates in
 [`src/rop/chain.ts`](../src/rop/chain.ts) (`planVirtualProtect`,
-`planVirtualAlloc`, `planWriteProcessMemory`), so what you read here is what the
-tool emits. See also [ROP_WORKFLOW.md](ROP_WORKFLOW.md) and
+`planVirtualAlloc`, `planWriteProcessMemory`, `planLoadLibraryA`,
+`planGetProcAddress`), so what you read here is what the tool emits. See also [ROP_WORKFLOW.md](ROP_WORKFLOW.md) and
 [GADGET_DISCOVERY.md](GADGET_DISCOVERY.md).
 
 ## x86 (32-bit) register set
@@ -94,6 +94,17 @@ LPVOID VirtualAllocEx (HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize,
 UINT WinExec(
     LPCSTR lpCmdLine,        // pointer to "calc" / "cmd /c ..."
     UINT   uCmdShow          // 0x1  SW_SHOWNORMAL
+);
+
+// Runtime DLL loading — returns HMODULE in EAX.
+HMODULE LoadLibraryA(
+    LPCSTR lpLibFileName     // pointer to "ws2_32.dll" / "user32.dll"
+);
+
+// Runtime function resolution — returns FARPROC in EAX.
+FARPROC GetProcAddress(
+    HMODULE hModule,         // from LoadLibraryA return value
+    LPCSTR  lpProcName       // pointer to "connect" / "MessageBoxA"
 );
 ```
 
@@ -199,6 +210,67 @@ address (dummy out-param), `0x90909090` = junk filler.
 | `EDX` | nSize | shellcode byte count |
 | `ECX` | `WRITABLE` | lpNumberOfBytesWritten |
 | `EAX` | `0x90909090` | unused |
+
+### LoadLibraryA — direct
+
+| Reg | Value | Role |
+|---|---|---|
+| `EDI` | &LoadLibraryA | RET dispatches here |
+| `ESI` | retaddr | return after LLA (e.g. GetProcAddress chain) |
+| `EBP` | lpLibFileName | pointer to null-terminated DLL name string |
+| `ESP` | *(saved)* | unused by LoadLibraryA |
+| `EBX` | `0x90909090` | unused |
+| `EDX` | `0x90909090` | unused |
+| `ECX` | `0x90909090` | unused |
+| `EAX` | `0x90909090` | unused (overwritten by return value: HMODULE) |
+
+> LoadLibraryA returns `HMODULE` in `EAX`. Chain `retaddr` to a stage that
+> consumes `EAX` as the module handle (e.g. a GetProcAddress chain or a gadget
+> that stores `EAX` for later use).
+
+### GetProcAddress — direct
+
+| Reg | Value | Role |
+|---|---|---|
+| `EDI` | &GetProcAddress | RET dispatches here |
+| `ESI` | retaddr | return after GPA (e.g. `jmp eax` / `call eax`) |
+| `EBP` | hModule | from LoadLibraryA return value |
+| `ESP` | *(saved)* | lpProcName — **not directly settable** (see constraints) |
+| `EBX` | lpProcName | pointer to function name string (alternative slot) |
+| `EDX` | `0x90909090` | unused |
+| `ECX` | `0x90909090` | unused |
+| `EAX` | `0x90909090` | unused (overwritten by return value: FARPROC) |
+
+> **PUSHAD constraint:** the saved `ESP` becomes the 2nd argument (`lpProcName`),
+> but `ESP` is not directly settable. In direct mode, `EBP` = hModule and `ESP`
+> must happen to point at the function name string — unlikely without careful
+> arrangement. For chained `LoadLibraryA → GetProcAddress` resolution, prefer a
+> **flat stdcall frame** (`frame_lla` / `frame_gpa`) or **`slot_call`** dispatch,
+> which place arguments explicitly without relying on the saved `ESP` position.
+>
+> GetProcAddress returns `FARPROC` in `EAX`. Dispatch the resolved function via
+> `jmp eax`, `call eax`, or chain to a stage that uses the return value.
+
+### Chaining LoadLibraryA → GetProcAddress
+
+A common pattern: load a DLL, resolve one of its exports, then call it — all via
+ROP. The challenge is that `LoadLibraryA` returns `HMODULE` in `EAX`, and
+`GetProcAddress` needs it as its first argument. Two approaches:
+
+1. **Flat stdcall frames** — lay both calls on the stack sequentially. The
+   `retaddr` of the `LoadLibraryA` frame points at a gadget that captures `EAX`
+   and sets up the `GetProcAddress` frame. This requires gadgets to marshal `EAX`
+   into the right stack position (e.g. `mov [writable], eax` then reference it).
+
+2. **IAT slot_call** — if both `LoadLibraryA` and `GetProcAddress` are in the
+   target's IAT, use `slot_call` for each. The slot dereference is ASLR-proof and
+   the frame words are explicit, but you still need to capture `EAX` between calls.
+
+Both approaches need a "capture EAX" primitive between the two calls. Look for:
+```js
+dx @$osed().rop.query({reads: ["eax"], capability: "STORE_MEMORY"})
+dx @$osed().rop.query({capability: "STACK_COPY"})   // push eax ; ret
+```
 
 ## Register-setup safety (read before building a frame)
 
