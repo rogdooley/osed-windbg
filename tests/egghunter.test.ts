@@ -92,6 +92,60 @@ describe("NtAccess egghunter", () => {
   });
 });
 
+describe("NtDisplayString egghunter", () => {
+  test("generates 32-byte stub with tag embedded", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    expect(result.size).toBe(32);
+    expect(result.badcharHits).toEqual([]);
+    // Tag at offset 18
+    expect(result.bytes[18]).toBe(0x57); // W
+    expect(result.bytes[19]).toBe(0x30); // 0
+    expect(result.bytes[20]).toBe(0x30); // 0
+    expect(result.bytes[21]).toBe(0x54); // T
+  });
+
+  test("uses push imm8 / pop eax for syscall number", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    // push 0x43 at offset 7-8, pop eax at offset 9
+    expect(result.bytes[7]).toBe(0x6a);  // push imm8
+    expect(result.bytes[8]).toBe(0x43);  // NtDisplayString syscall
+    expect(result.bytes[9]).toBe(0x58);  // pop eax
+    expect(result.syscallUsed).toBe(0x43);
+  });
+
+  test("custom syscall number is patched as single byte", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: NO_BADCHARS, os: "win10", syscall: 0x55 });
+    expect(result.syscallUsed).toBe(0x55);
+    expect(result.bytes[7]).toBe(0x6a);
+    expect(result.bytes[8]).toBe(0x55);
+  });
+
+  test("is null-free with default syscall", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, badchars: [0x00], os: "win10", syscall: null });
+    expect(result.badcharHits).toEqual([]);
+  });
+
+  test("is 2 bytes shorter than ntaccess", () => {
+    const ntaccess = buildEgghunter({ tag: "W00T", mode: "ntaccess", wow64: false, ...DEFAULTS });
+    const ntdisplay = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    expect(ntaccess.size - ntdisplay.size).toBe(2);
+  });
+
+  test("WoW64 variant uses ecx instead of edx", () => {
+    const standard = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    const wow64 = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: true, ...DEFAULTS });
+    expect(standard.bytes[5]).toBe(0x42); // inc edx
+    expect(wow64.bytes[5]).toBe(0x41);    // inc ecx
+    expect(wow64.size).toBe(32);
+  });
+
+  test("ends with jmp edi (FF E7)", () => {
+    const result = buildEgghunter({ tag: "W00T", mode: "ntdisplay", wow64: false, ...DEFAULTS });
+    expect(result.bytes[result.size - 2]).toBe(0xff);
+    expect(result.bytes[result.size - 1]).toBe(0xe7);
+  });
+});
+
 describe("SEH egghunter", () => {
   test("generates 70-byte stub with tag embedded", () => {
     const result = buildEgghunter({ tag: "W00T", mode: "seh", wow64: false, ...DEFAULTS });

