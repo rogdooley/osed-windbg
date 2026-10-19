@@ -170,6 +170,16 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "rop.generate",
+    description: "One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. All discovery is optional — pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).",
+    usage: 'dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})',
+    examples: [
+      'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
+      'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})',
+      'dx @$osed().rop.generate({api: "VirtualAlloc"})',
+    ],
+  },
+  {
     name: "rop.export",
     description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
     usage: "dx @$osed().rop.export(planId, path?)",
