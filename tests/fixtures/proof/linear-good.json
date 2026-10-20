@@ -1,0 +1,79 @@
+{
+  "frames": [
+    {
+      "registers": {
+        "eip": "0x10001000",
+        "esp": "0x0012ff00",
+        "eax": "0x20002000",
+        "ebx": "0x00000000",
+        "ecx": "0x00000000",
+        "edx": "0x00000000",
+        "esi": "0x00000000",
+        "edi": "0x00000000",
+        "ebp": "0x0012fff0"
+      },
+      "memory": {
+        "0x20002000": "78563412",
+        "0x0012ff00": "00200010"
+      },
+      "breakpoints": [],
+      "disassembly": {
+        "0x10001000": {
+          "bytes": "58c3",
+          "instructions": ["pop eax", "ret"]
+        }
+      },
+      "protections": {
+        "0x10001000": {
+          "base": "0x10000000",
+          "size": "0x00010000",
+          "protect": 32,
+          "name": "PAGE_EXECUTE_READ",
+          "executable": true,
+          "writable": false
+        }
+      },
+      "fingerprint": {
+        "processId": "0x1234",
+        "threadId": "0x55",
+        "architecture": "x86",
+        "pointerSize": 4,
+        "targetPath": "C:\\labs\\proof-target.exe",
+        "targetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "modules": [],
+        "gadgets": [],
+        "protections": []
+      }
+    },
+    {
+      "registers": {
+        "eip": "0x10002000",
+        "esp": "0x0012ff08",
+        "eax": "0x41414141",
+        "ebx": "0x00000000",
+        "ecx": "0x00000000",
+        "edx": "0x00000000",
+        "esi": "0x00000000",
+        "edi": "0x00000000",
+        "ebp": "0x0012fff0"
+      },
+      "memory": {},
+      "breakpoints": [],
+      "disassembly": {},
+      "protections": {},
+      "fingerprint": {
+        "processId": "0x1234",
+        "threadId": "0x55",
+        "architecture": "x86",
+        "pointerSize": 4,
+        "targetPath": "C:\\labs\\proof-target.exe",
+        "targetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "modules": [],
+        "gadgets": [],
+        "protections": []
+      }
+    }
+  ]
+}
