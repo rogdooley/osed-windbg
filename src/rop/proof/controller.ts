@@ -3,7 +3,7 @@ import type { ChainStep } from "../chain";
 import type { ProofDebuggerAdapter } from "./adapter";
 import { buildProofPlan } from "./predictor";
 import { ProofSessionMachine } from "./session";
-import { ProofSessionStore } from "./store";
+import { ProofSessionStore, renderProofMarkdown, serializeProofRecord } from "./store";
 import type { OrphanCleanupResult, ProofMode, ProofPlanInput, ProofSession } from "./types";
 
 export interface ProofControllerDependencies {
@@ -11,15 +11,18 @@ export interface ProofControllerDependencies {
   store: ProofSessionStore;
   getDefaultInput(): ProofPlanInput | undefined;
   getCorpus?(): CapabilityIndex | undefined;
+  writeText?(path: string, content: string): void;
 }
 
 export interface ProofCommandOptions {
-  action?: "status" | "cancel" | "history";
+  action?: "status" | "cancel" | "history" | "export";
   mode?: ProofMode;
   chain?: string | ChainStep[];
   api?: string;
   postcondition?: boolean;
   orphans?: boolean;
+  path?: string;
+  format?: "json" | "markdown";
 }
 
 export interface ProofCommandOutcome {
@@ -28,6 +31,8 @@ export interface ProofCommandOutcome {
   history?: readonly ProofSession[];
   orphanResults?: OrphanCleanupResult[];
   error?: string;
+  exportedPath?: string;
+  content?: string;
 }
 
 export class ProofController {
@@ -57,6 +62,22 @@ export class ProofController {
         const session = this.machine.cancel();
         const orphanResults = options.orphans ? this.machine.cancelOrphans() : undefined;
         return { success: false, session, orphanResults };
+      }
+      if (options.action === "export") {
+        const session = this.dependencies.store.latest();
+        if (!session) return { success: false, error: "No proof session has been recorded." };
+        if (!options.path) return { success: false, error: "Proof export requires an explicit path." };
+        const record = serializeProofRecord(session);
+        const markdown = options.format === "markdown" || /\.md$/i.test(options.path);
+        const content = markdown ? renderProofMarkdown(record) : `${JSON.stringify(record, null, 2)}\n`;
+        if (!this.dependencies.writeText) return { success: false, error: "Proof export is unavailable in this host." };
+        this.dependencies.writeText(options.path, content);
+        return {
+          success: session.executionStatus === "VERIFIED" && session.objectiveStatus === "VERIFIED",
+          session,
+          exportedPath: options.path,
+          content,
+        };
       }
       if (this.dependencies.store.active()) {
         return { success: false, error: "A ROP proof session is already active; inspect status or cancel it first." };

@@ -308,6 +308,21 @@ function publishOsed(): void {
   }
 }
 
+function writeProofText(path: string, content: string): void {
+  const hostAny = host as unknown as {
+    namespace?: { Debugger?: { Utility?: { FileSystem?: { CreateFile?: (path: string, disposition: string) => unknown } } } };
+  };
+  const raw = hostAny.namespace?.Debugger?.Utility?.FileSystem?.CreateFile?.(path, "CreateAlways");
+  if (!raw) throw new Error("WinDbg host filesystem is unavailable.");
+  const file = raw as { WriteLine?: (line: string) => void; Close?: () => void };
+  if (typeof file.WriteLine !== "function") throw new Error("WinDbg host file does not support WriteLine.");
+  try {
+    for (const line of content.replace(/\r\n/g, "\n").split("\n")) file.WriteLine(line);
+  } finally {
+    file.Close?.();
+  }
+}
+
 function registerAll(): void {
   const commands: Command[] = [
     ...createPatternCommands(),
@@ -2414,6 +2429,7 @@ function bindApi(): OsedApi {
       store: proofSessionStore,
       getDefaultInput: () => lastGeneratedProofInput,
       getCorpus: () => currentRopCorpus,
+      writeText: writeProofText,
     });
     const options = args.length === 0 ? undefined : isPlainObject(args[0]) ? args[0] : {};
     const outcome = controller.execute(options);

@@ -192,13 +192,14 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.prove",
     description: "Guided debugger-backed ROP proof. Predicts one checkpoint at a time, optionally owns one one-shot breakpoint, and never resumes execution. Reports gadget execution separately from the DEP objective.",
-    usage: 'dx @$osed().rop.prove({mode?, chain?, api?, postcondition?} | {action:"status"|"cancel"|"history", orphans?})',
+    usage: 'dx @$osed().rop.prove({mode?, chain?, api?, postcondition?} | {action:"status"|"cancel"|"history"|"export", orphans?, path?})',
     examples: [
       'dx @$osed().rop.prove({mode:"guided"})',
       'dx @$osed().rop.prove({mode:"observe"})',
       'dx @$osed().rop.prove()',
       'dx @$osed().rop.prove({action:"status"})',
       'dx @$osed().rop.prove({action:"cancel", orphans:true})',
+      'dx @$osed().rop.prove({action:"export", path:"C:\\\\notes\\\\proof.json"})',
     ],
   },
   {
