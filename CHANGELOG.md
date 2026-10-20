@@ -7,6 +7,12 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-10-19 - Guided ROP proof workflow
+
+- Added `rop.prove()` guided and observation-only modes with incremental semantic checkpoints, one extension-owned one-shot breakpoint, manual execution control, and first-divergence diagnostics.
+- Added scoped target fingerprints, dynamic pivot and IAT target resolution, runtime stdcall-frame capture, and separate `executionStatus`/`objectiveStatus` outcomes.
+- Added append-only in-memory evidence, JSON/Markdown export, deterministic replay acceptance tests, and a PE32 manual validation target. Live Windows x86 validation remains a required release gate.
+
 ### 2026-08-26 - Arithmetic value solver and backward scanner
 
 - Added `rop.construct(register, value, badchars?)` to find short gadget sequences

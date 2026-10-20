@@ -168,11 +168,11 @@ var osed_bundle = (() => {
     constructor() {
       this.commands = /* @__PURE__ */ new Map();
     }
-    register(command) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(command.name)) {
-        throw new Error(`Invalid command name '${command.name}'.`);
+    register(command2) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(command2.name)) {
+        throw new Error(`Invalid command name '${command2.name}'.`);
       }
-      this.commands.set(command.name, command);
+      this.commands.set(command2.name, command2);
     }
     getAll() {
       return [...this.commands.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -202,11 +202,11 @@ var osed_bundle = (() => {
       };
     }
     execute(name, options) {
-      const command = this.commands.get(name);
-      if (!command) {
+      const command2 = this.commands.get(name);
+      if (!command2) {
         return this.failure(name, {}, `Unknown command '${name}'.`);
       }
-      const checked = validateOptions(options != null ? options : {}, command.schema);
+      const checked = validateOptions(options != null ? options : {}, command2.schema);
       if (!checked.success || !checked.value) {
         const errors = checked.errors.map((issue) => `${issue.path}: ${issue.message}`);
         return {
@@ -216,11 +216,11 @@ var osed_bundle = (() => {
           findings: [],
           warnings: checked.warnings,
           errors,
-          schema: command.schema
+          schema: command2.schema
         };
       }
       try {
-        const result3 = command.execute(checked.value);
+        const result3 = command2.execute(checked.value);
         result3.warnings = [...checked.warnings, ...result3.warnings];
         return result3;
       } catch (caught) {
@@ -387,8 +387,8 @@ var osed_bundle = (() => {
   }
 
   // src/commands/pattern.ts
-  function success(command, args, findings) {
-    return { command, args, success: true, findings, warnings: [], errors: [] };
+  function success(command2, args, findings) {
+    return { command: command2, args, success: true, findings, warnings: [], errors: [] };
   }
   function createPatternCommands() {
     const patternCreate = {
@@ -498,7 +498,7 @@ var osed_bundle = (() => {
   function readPointer(address, pointerSize) {
     return pointerSize === 8 ? readUint64LE(address) : BigInt(readUint32LE(address));
   }
-  function executeDebuggerCommand(command) {
+  function executeDebuggerCommand(command2) {
     var _a, _b, _c, _d, _e, _f, _g;
     const hostAny = host;
     const exec = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.Control) == null ? void 0 : _d.ExecuteCommand;
@@ -506,7 +506,7 @@ var osed_bundle = (() => {
       throw new Error("WinDbg command execution is unavailable in this host.");
     }
     const control = (_g = (_f = (_e = hostAny.namespace) == null ? void 0 : _e.Debugger) == null ? void 0 : _f.Utility) == null ? void 0 : _g.Control;
-    const result3 = exec.call(control, command);
+    const result3 = exec.call(control, command2);
     if (Array.isArray(result3)) {
       return result3.map((line) => String(line));
     }
@@ -1956,8 +1956,8 @@ var osed_bundle = (() => {
   }
 
   // src/commands/badchars.ts
-  function result(command, args, findings, warnings = []) {
-    return { command, args, success: true, findings, warnings, errors: [] };
+  function result(command2, args, findings, warnings = []) {
+    return { command: command2, args, success: true, findings, warnings, errors: [] };
   }
   function readLargestWindow(start, maxLength) {
     let low = 1;
@@ -3174,9 +3174,9 @@ var osed_bundle = (() => {
   var ARITHMETIC_MNEMONICS = /* @__PURE__ */ new Set(["add", "sub", "inc", "dec", "neg", "xor", "adc", "sbb", "or", "and", "not"]);
   function zeroedRegisters(semantic) {
     const zeroed = [];
-    for (const [register, expr] of Object.entries(semantic.summary.registerTransforms)) {
+    for (const [register2, expr] of Object.entries(semantic.summary.registerTransforms)) {
       if (expr.kind === "constant" && expr.value === 0) {
-        zeroed.push(register);
+        zeroed.push(register2);
       }
     }
     return zeroed;
@@ -3190,8 +3190,8 @@ var osed_bundle = (() => {
       return void 0;
     }
     if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
-      const register = step.instruction.operands[0].trim().toLowerCase();
-      return register === "esp" ? void 0 : register;
+      const register2 = step.instruction.operands[0].trim().toLowerCase();
+      return register2 === "esp" ? void 0 : register2;
     }
     if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
       const left = step.instruction.operands[0].trim().toLowerCase();
@@ -3364,7 +3364,7 @@ var osed_bundle = (() => {
 
   // src/rop/query.ts
   function normalizeRegisters(registers) {
-    return (registers != null ? registers : []).map((register) => register.trim().toLowerCase()).filter((register) => register.length > 0);
+    return (registers != null ? registers : []).map((register2) => register2.trim().toLowerCase()).filter((register2) => register2.length > 0);
   }
   function normalizeKinds(values) {
     if (values === void 0) {
@@ -3452,7 +3452,7 @@ var osed_bundle = (() => {
         expanded.add(upper);
       }
     }
-    return gadget.capabilities.some((capability) => expanded.has(capability.kind));
+    return gadget.capabilities.some((capability2) => expanded.has(capability2.kind));
   }
   function matchesTerminator(gadget, expected) {
     if (expected.length === 0) {
@@ -3463,15 +3463,15 @@ var osed_bundle = (() => {
   function matchesExecutableOnly(gadget) {
     return gadget.locations.some((location) => location.executable !== "UNKNOWN");
   }
-  function isIdentityTransform(register, expr) {
-    return !!expr && expr.kind === "affine" && expr.base === register && expr.offset.kind === "constant" && expr.offset.value === 0;
+  function isIdentityTransform(register2, expr) {
+    return !!expr && expr.kind === "affine" && expr.base === register2 && expr.offset.kind === "constant" && expr.offset.value === 0;
   }
   function matchesPreserves(gadget, registers) {
     if (registers.length === 0) {
       return true;
     }
     const transforms = gadget.semanticSummary.summary.registerTransforms;
-    return registers.every((register) => isIdentityTransform(register, transforms[register]));
+    return registers.every((register2) => isIdentityTransform(register2, transforms[register2]));
   }
   function normalizeTransformQuery(query) {
     var _a, _b;
@@ -3579,12 +3579,12 @@ var osed_bundle = (() => {
     var _a, _b, _c, _d, _e;
     const counts = /* @__PURE__ */ new Map();
     for (const gadget of index.gadgets) {
-      for (const capability of gadget.capabilities) {
-        const key2 = [capability.kind, (_a = capability.register) != null ? _a : "", (_b = capability.targetRegister) != null ? _b : ""].join(":");
+      for (const capability2 of gadget.capabilities) {
+        const key2 = [capability2.kind, (_a = capability2.register) != null ? _a : "", (_b = capability2.targetRegister) != null ? _b : ""].join(":");
         const existing = (_e = counts.get(key2)) != null ? _e : {
-          kind: capability.kind,
-          register: (_c = capability.register) != null ? _c : "",
-          targetRegister: (_d = capability.targetRegister) != null ? _d : "",
+          kind: capability2.kind,
+          register: (_c = capability2.register) != null ? _c : "",
+          targetRegister: (_d = capability2.targetRegister) != null ? _d : "",
           count: 0
         };
         existing.count += 1;
@@ -3608,12 +3608,12 @@ var osed_bundle = (() => {
   }
 
   // src/rop/capabilities.ts
-  function key(kind, register, targetRegister) {
-    return [kind, register != null ? register : "", targetRegister != null ? targetRegister : ""].join(":");
+  function key(kind, register2, targetRegister) {
+    return [kind, register2 != null ? register2 : "", targetRegister != null ? targetRegister : ""].join(":");
   }
-  function push(map, capability, gadget) {
+  function push(map, capability2, gadget) {
     var _a;
-    const k = key(capability.kind, capability.register, capability.targetRegister);
+    const k = key(capability2.kind, capability2.register, capability2.targetRegister);
     const existing = (_a = map.get(k)) != null ? _a : [];
     existing.push(gadget);
     map.set(k, existing);
@@ -3621,19 +3621,19 @@ var osed_bundle = (() => {
   function buildCapabilities(gadgets) {
     const capabilityMap = /* @__PURE__ */ new Map();
     for (const gadget of gadgets) {
-      for (const capability of gadget.capabilities) {
-        push(capabilityMap, capability, gadget);
-        if (capability.kind === "MOVE_REGISTER" && capability.targetRegister) {
-          push(capabilityMap, __spreadProps(__spreadValues({}, capability), { register: void 0 }), gadget);
+      for (const capability2 of gadget.capabilities) {
+        push(capabilityMap, capability2, gadget);
+        if (capability2.kind === "MOVE_REGISTER" && capability2.targetRegister) {
+          push(capabilityMap, __spreadProps(__spreadValues({}, capability2), { register: void 0 }), gadget);
         }
-        if (capability.kind === "EXCHANGE_REGISTER" && capability.register) {
-          push(capabilityMap, __spreadProps(__spreadValues({}, capability), { targetRegister: void 0 }), gadget);
-          if (capability.targetRegister) {
+        if (capability2.kind === "EXCHANGE_REGISTER" && capability2.register) {
+          push(capabilityMap, __spreadProps(__spreadValues({}, capability2), { targetRegister: void 0 }), gadget);
+          if (capability2.targetRegister) {
             push(capabilityMap, {
-              kind: capability.kind,
-              register: capability.targetRegister,
-              targetRegister: capability.register,
-              evidence: capability.evidence
+              kind: capability2.kind,
+              register: capability2.targetRegister,
+              targetRegister: capability2.register,
+              evidence: capability2.evidence
             }, gadget);
           }
         }
@@ -3642,21 +3642,21 @@ var osed_bundle = (() => {
     return {
       gadgets,
       capabilityMap,
-      loadRegister(register) {
+      loadRegister(register2) {
         var _a;
-        return (_a = capabilityMap.get(key("LOAD_REGISTER", register))) != null ? _a : [];
+        return (_a = capabilityMap.get(key("LOAD_REGISTER", register2))) != null ? _a : [];
       },
-      zeroRegister(register) {
+      zeroRegister(register2) {
         var _a;
-        return (_a = capabilityMap.get(key("ZERO_REGISTER", register))) != null ? _a : [];
+        return (_a = capabilityMap.get(key("ZERO_REGISTER", register2))) != null ? _a : [];
       },
-      moveIntoRegister(register) {
+      moveIntoRegister(register2) {
         var _a;
-        return (_a = capabilityMap.get(key("MOVE_REGISTER", void 0, register))) != null ? _a : [];
+        return (_a = capabilityMap.get(key("MOVE_REGISTER", void 0, register2))) != null ? _a : [];
       },
-      exchangeWithRegister(register) {
+      exchangeWithRegister(register2) {
         var _a;
-        return (_a = capabilityMap.get(key("EXCHANGE_REGISTER", register))) != null ? _a : [];
+        return (_a = capabilityMap.get(key("EXCHANGE_REGISTER", register2))) != null ? _a : [];
       },
       stackPivotCandidates() {
         var _a;
@@ -3677,10 +3677,10 @@ var osed_bundle = (() => {
   }
   function deriveCapabilities(semantic, categories) {
     const capabilities = [];
-    const add = (capability) => {
-      const duplicate = capabilities.some((existing) => existing.kind === capability.kind && existing.register === capability.register && existing.targetRegister === capability.targetRegister);
+    const add = (capability2) => {
+      const duplicate = capabilities.some((existing) => existing.kind === capability2.kind && existing.register === capability2.register && existing.targetRegister === capability2.targetRegister);
       if (!duplicate) {
-        capabilities.push(capability);
+        capabilities.push(capability2);
       }
     };
     for (const step of semantic.instructionSemantics) {
@@ -3841,13 +3841,13 @@ var osed_bundle = (() => {
     }
     return out;
   }
-  function isSinglePopRetLike(gadget, register) {
+  function isSinglePopRetLike(gadget, register2) {
     if (gadget.instructions.length !== 2) return false;
     const [pop, ret] = gadget.instructions;
-    return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register && ret.mnemonic === "ret";
+    return pop.mnemonic === "pop" && pop.operands.length === 1 && pop.operands[0].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
   }
-  function selectPopGadget(index, register) {
-    const candidates2 = index.loadRegister(register).filter((g) => isSinglePopRetLike(g, register) && firstKnownAddress(g) !== void 0);
+  function selectPopGadget(index, register2) {
+    const candidates2 = index.loadRegister(register2).filter((g) => isSinglePopRetLike(g, register2) && firstKnownAddress(g) !== void 0);
     const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => gadgetStability(a) - gadgetStability(b) || b.score - a.score)[0];
     if (plainRet) return { gadget: plainRet, retImm: 0 };
     const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
@@ -3859,13 +3859,13 @@ var osed_bundle = (() => {
     if (withImm) return { gadget: withImm, retImm: retImmBytes(withImm) };
     return void 0;
   }
-  function isZeroRetLike(gadget, register) {
+  function isZeroRetLike(gadget, register2) {
     if (gadget.instructions.length !== 2) return false;
     const [xor, ret] = gadget.instructions;
-    return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register && xor.operands[1].trim().toLowerCase() === register && ret.mnemonic === "ret";
+    return xor.mnemonic === "xor" && xor.operands.length === 2 && xor.operands[0].trim().toLowerCase() === register2 && xor.operands[1].trim().toLowerCase() === register2 && ret.mnemonic === "ret";
   }
-  function selectZeroGadget(index, register) {
-    const candidates2 = index.zeroRegister(register).filter((g) => isZeroRetLike(g, register) && firstKnownAddress(g) !== void 0);
+  function selectZeroGadget(index, register2) {
+    const candidates2 = index.zeroRegister(register2).filter((g) => isZeroRetLike(g, register2) && firstKnownAddress(g) !== void 0);
     const plainRet = candidates2.filter((g) => retImmBytes(g) === 0).sort((a, b) => b.score - a.score)[0];
     if (plainRet) return { gadget: plainRet, retImm: 0 };
     const withImm = candidates2.filter((g) => retImmBytes(g) > 0).sort((a, b) => {
@@ -3888,8 +3888,8 @@ var osed_bundle = (() => {
     }
     return { registers, retImm: imm };
   }
-  function valueComment(register, value) {
-    return `${register} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  function valueComment(register2, value) {
+    return `${register2} = 0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
   }
   function planRegisterSetup(index, targets, badchars = [], valueSolver) {
     const steps = [];
@@ -3898,23 +3898,23 @@ var osed_bundle = (() => {
     const remaining = /* @__PURE__ */ new Map();
     const order = [];
     for (const target of targets) {
-      const register = target.register.trim().toLowerCase();
-      if (!remaining.has(register)) {
-        order.push(register);
+      const register2 = target.register.trim().toLowerCase();
+      if (!remaining.has(register2)) {
+        order.push(register2);
       }
-      remaining.set(register, target.value >>> 0);
+      remaining.set(register2, target.value >>> 0);
     }
-    for (const register of order) {
-      if (remaining.get(register) !== 0) {
+    for (const register2 of order) {
+      if (remaining.get(register2) !== 0) {
         continue;
       }
-      const selection = selectZeroGadget(index, register);
+      const selection = selectZeroGadget(index, register2);
       if (selection) {
         const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
-        steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `xor ${register}, ${register} ; ret${retSuffix} (${register} = 0)` });
+        steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `xor ${register2}, ${register2} ; ret${retSuffix} (${register2} = 0)` });
         steps.push(...retImmPadding(selection.retImm));
-        satisfied.push(register);
-        remaining.delete(register);
+        satisfied.push(register2);
+        remaining.delete(register2);
       }
     }
     const popSequences = index.gadgets.map((gadget) => ({ gadget, info: popSequenceInfo(gadget) })).filter((entry) => entry.info !== void 0 && entry.info.registers.length >= 2 && firstKnownAddress(entry.gadget) !== void 0);
@@ -3925,7 +3925,7 @@ var osed_bundle = (() => {
       for (const candidate of popSequences) {
         const { registers } = candidate.info;
         const distinct = new Set(registers).size === registers.length;
-        if (!distinct || !registers.every((register) => remaining.has(register))) {
+        if (!distinct || !registers.every((register2) => remaining.has(register2))) {
           continue;
         }
         if (!best || candidate.info.retImm < best.info.retImm || candidate.info.retImm === best.info.retImm && registers.length > best.info.registers.length || candidate.info.retImm === best.info.retImm && registers.length === best.info.registers.length && candidate.gadget.score > best.gadget.score) {
@@ -3934,46 +3934,46 @@ var osed_bundle = (() => {
       }
       if (best) {
         const retSuffix = best.info.retImm > 0 ? ` ${best.info.retImm}` : "";
-        steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget), comment: `${best.info.registers.map((register) => `pop ${register}`).join(" ; ")} ; ret${retSuffix}` });
-        for (const register of best.info.registers) {
-          const value = remaining.get(register) >>> 0;
-          steps.push({ kind: "value", value, comment: valueComment(register, value) });
-          satisfied.push(register);
-          remaining.delete(register);
+        steps.push({ kind: "gadget", address: firstKnownAddress(best.gadget), comment: `${best.info.registers.map((register2) => `pop ${register2}`).join(" ; ")} ; ret${retSuffix}` });
+        for (const register2 of best.info.registers) {
+          const value = remaining.get(register2) >>> 0;
+          steps.push({ kind: "value", value, comment: valueComment(register2, value) });
+          satisfied.push(register2);
+          remaining.delete(register2);
         }
         steps.push(...retImmPadding(best.info.retImm));
         progressed = true;
       }
     }
-    for (const register of order) {
-      if (!remaining.has(register)) {
+    for (const register2 of order) {
+      if (!remaining.has(register2)) {
         continue;
       }
-      const selection = selectPopGadget(index, register);
+      const selection = selectPopGadget(index, register2);
       if (!selection) {
-        const reason = index.loadRegister(register).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
-        unsatisfied.push({ register, reason });
-        remaining.delete(register);
+        const reason = index.loadRegister(register2).length > 0 ? "only multi-pop or address-less load gadgets available" : "no pop gadget found for register";
+        unsatisfied.push({ register: register2, reason });
+        remaining.delete(register2);
         continue;
       }
-      const value = remaining.get(register) >>> 0;
+      const value = remaining.get(register2) >>> 0;
       const retSuffix = selection.retImm > 0 ? ` ${selection.retImm}` : "";
-      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `pop ${register} ; ret${retSuffix}` });
-      steps.push({ kind: "value", value, comment: valueComment(register, value) });
+      steps.push({ kind: "gadget", address: firstKnownAddress(selection.gadget), comment: `pop ${register2} ; ret${retSuffix}` });
+      steps.push({ kind: "value", value, comment: valueComment(register2, value) });
       steps.push(...retImmPadding(selection.retImm));
-      satisfied.push(register);
-      remaining.delete(register);
+      satisfied.push(register2);
+      remaining.delete(register2);
     }
     if (valueSolver && unsatisfied.length > 0) {
       const resolved = [];
       for (let i = 0; i < unsatisfied.length; i++) {
-        const { register } = unsatisfied[i];
-        const target = targets.find((t) => t.register.toLowerCase() === register.toLowerCase());
+        const { register: register2 } = unsatisfied[i];
+        const target = targets.find((t) => t.register.toLowerCase() === register2.toLowerCase());
         if (!target) continue;
-        const recipe = valueSolver(index, register, target.value, badchars);
+        const recipe = valueSolver(index, register2, target.value, badchars);
         if (recipe) {
           steps.push(...recipe.steps);
-          satisfied.push(register);
+          satisfied.push(register2);
           resolved.push(i);
         }
       }
@@ -4183,8 +4183,8 @@ var osed_bundle = (() => {
     }
     if (Object.keys(taintedTargets).length > 0) {
       if (!setupSolver) {
-        for (const [register, value] of Object.entries(taintedTargets)) {
-          unsatisfied.push({ register, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
+        for (const [register2, value] of Object.entries(taintedTargets)) {
+          unsatisfied.push({ register: register2, reason: `value ${hex32(value)} contains badchars and no value solver is available to construct it` });
         }
       } else {
         const setup = setupSolver(index, taintedTargets, badchars, preferStable);
@@ -4567,8 +4567,8 @@ var osed_bundle = (() => {
   function extraPopSteps(gadget) {
     return gadgetEffects(gadget).fillers;
   }
-  function capKey(kind, register, targetRegister) {
-    return [kind, register != null ? register : "", targetRegister != null ? targetRegister : ""].join(":");
+  function capKey(kind, register2, targetRegister) {
+    return [kind, register2 != null ? register2 : "", targetRegister != null ? targetRegister : ""].join(":");
   }
   function findPopGadget(index, reg, preserve) {
     var _a;
@@ -4789,9 +4789,9 @@ var osed_bundle = (() => {
     }
     return void 0;
   }
-  function solveValue(index, register, value, badchars, preserveRegisters = [], preferStable) {
+  function solveValue(index, register2, value, badchars, preserveRegisters = [], preferStable) {
     var _a, _b, _c, _d, _e, _f;
-    const reg = register.trim().toLowerCase();
+    const reg = register2.trim().toLowerCase();
     const v = value >>> 0;
     const bc = new Set(badchars.map((b) => b & 255));
     const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
@@ -5556,7 +5556,7 @@ var osed_bundle = (() => {
     return STRATEGY_NAMES.get(value.trim().toLowerCase());
   }
   function availableCapabilityKinds(index) {
-    return unique(index.gadgets.flatMap((gadget) => gadget.capabilities.map((capability) => capability.kind))).sort();
+    return unique(index.gadgets.flatMap((gadget) => gadget.capabilities.map((capability2) => capability2.kind))).sort();
   }
   function planExploitStrategy(index, request, planId = 1) {
     var _a;
@@ -5569,8 +5569,8 @@ var osed_bundle = (() => {
         ...definition.required,
         ...apiResolution === "iat" && !definition.iatExempt ? ["LOAD_MEMORY"] : []
       ]);
-      const satisfied = required.filter((capability) => availableSet.has(capability));
-      const missing = required.filter((capability) => !availableSet.has(capability));
+      const satisfied = required.filter((capability2) => availableSet.has(capability2));
+      const missing = required.filter((capability2) => !availableSet.has(capability2));
       const hasPreconditions = definition.preconditions.length > 0;
       return {
         id: offset + 1,
@@ -5670,15 +5670,15 @@ var osed_bundle = (() => {
       }
       const gadgets = [];
       const missing = [];
-      for (const capability of strategy.required) {
-        const selected = rankCandidates(index.query({ capability }))[0];
+      for (const capability2 of strategy.required) {
+        const selected = rankCandidates(index.query({ capability: capability2 }))[0];
         const location = selected ? knownAddress(selected) : void 0;
         if (!selected || !location) {
-          missing.push(capability);
+          missing.push(capability2);
           continue;
         }
         gadgets.push({
-          capability,
+          capability: capability2,
           canonicalId: selected.canonicalId,
           address: location.address,
           module: location.module,
@@ -6784,6 +6784,9 @@ var osed_bundle = (() => {
     });
   }
 
+  // src/rop/proof/types.ts
+  var PROOF_RECORD_SCHEMA_VERSION = "v1";
+
   // src/semantics/types.ts
   var SEMANTIC_SCHEMA_VERSION = "v1";
 
@@ -6834,8 +6837,8 @@ var osed_bundle = (() => {
     if (!match) {
       return void 0;
     }
-    const register = match[1];
-    return REGISTERS.includes(register) ? register : void 0;
+    const register2 = match[1];
+    return REGISTERS.includes(register2) ? register2 : void 0;
   }
   function isRegisterOperand(operand) {
     return operand.kind === "register" && operand.register !== void 0;
@@ -6893,8 +6896,8 @@ var osed_bundle = (() => {
   function selfPlus(value) {
     return { kind: "affine", base: "self", offset: constantOffset(value) };
   }
-  function registerExpr(register, offset = 0) {
-    return { kind: "affine", base: register, offset: constantOffset(offset) };
+  function registerExpr(register2, offset = 0) {
+    return { kind: "affine", base: register2, offset: constantOffset(offset) };
   }
   function constantExpr(value) {
     return { kind: "constant", value };
@@ -6910,8 +6913,8 @@ var osed_bundle = (() => {
     if (!match) {
       return void 0;
     }
-    const register = match[1];
-    if (!REGISTERS.includes(register)) {
+    const register2 = match[1];
+    if (!REGISTERS.includes(register2)) {
       return void 0;
     }
     const rawOffset = match[3] === void 0 ? 0 : parseImmediateValue(match[3]);
@@ -6919,10 +6922,10 @@ var osed_bundle = (() => {
       return void 0;
     }
     const offset = match[2] === "-" ? -rawOffset : rawOffset;
-    return registerExpr(register, offset);
+    return registerExpr(register2, offset);
   }
-  function stackDeltaForRegisterImmediate(register, delta) {
-    return register === "esp" && delta !== void 0 ? { exact: [delta] } : void 0;
+  function stackDeltaForRegisterImmediate(register2, delta) {
+    return register2 === "esp" && delta !== void 0 ? { exact: [delta] } : void 0;
   }
   function unsupported(instruction) {
     const text = canonicalizeInstruction(instruction);
@@ -7519,11 +7522,11 @@ var osed_bundle = (() => {
   function emptyField() {
     return makeField2();
   }
-  function registerIdentity(register) {
-    return { kind: "affine", base: register, offset: { kind: "constant", value: 0 } };
+  function registerIdentity(register2) {
+    return { kind: "affine", base: register2, offset: { kind: "constant", value: 0 } };
   }
   function initialRegisterTransforms() {
-    return Object.fromEntries(REGISTERS2.map((register) => [register, registerIdentity(register)]));
+    return Object.fromEntries(REGISTERS2.map((register2) => [register2, registerIdentity(register2)]));
   }
   function unknownExpr2() {
     return { kind: "unknown" };
@@ -7581,12 +7584,12 @@ var osed_bundle = (() => {
     let state = initialRegisterTransforms();
     for (const step of instructionSemantics) {
       if (step.registerEffectsUnknown) {
-        state = Object.fromEntries(REGISTERS2.map((register) => [register, unknownExpr2()]));
+        state = Object.fromEntries(REGISTERS2.map((register2) => [register2, unknownExpr2()]));
         continue;
       }
       const nextState = __spreadValues({}, state);
-      for (const [register, effect] of Object.entries(step.registerEffects)) {
-        nextState[register] = substituteExpr(effect, state, register);
+      for (const [register2, effect] of Object.entries(step.registerEffects)) {
+        nextState[register2] = substituteExpr(effect, state, register2);
       }
       state = nextState;
     }
@@ -7676,6 +7679,1458 @@ var osed_bundle = (() => {
     return canonicalizeInstructionSequence(sequence);
   }
 
+  // src/semantics/live-provider.ts
+  function sequenceFromLiveHit(hit) {
+    const parts = hit.mnemonic.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
+    const instructions = parts.map((part) => parseInstruction(part));
+    const canonical = canonicalizeTextSequence(parts.join(" ; "));
+    const addressNumber = Number(hit.address);
+    return {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `live:${hit.address.toString(16)}:${canonical}`,
+      source: { kind: "source-adapter", name: "live", format: "windbg-memory", version: "v1" },
+      originalText: `0x${hit.address.toString(16)}: ${parts.join(" ; ")} ;`,
+      instructions,
+      provenance: {
+        module: hit.module,
+        // The full address survives in id/originalText; the numeric field is exact
+        // for realistic user-space addresses (< 2^53).
+        virtualAddress: Number.isSafeInteger(addressNumber) ? addressNumber : void 0,
+        // Discovered by scanning executable sections, so executability is proven.
+        executable: "EXACT",
+        writable: "UNKNOWN",
+        aslr: "UNKNOWN",
+        rebaseable: "UNKNOWN"
+      }
+    };
+  }
+  function sequencesFromLiveHits(hits) {
+    return [...hits].map(sequenceFromLiveHit);
+  }
+
+  // src/rop/proof/predictor.ts
+  var DWORD_MODULUS = BigInt(4294967296);
+  function uint32Add(value, delta) {
+    const sum = (value + BigInt(delta)) % DWORD_MODULUS;
+    return sum >= BigInt(0) ? sum : sum + DWORD_MODULUS;
+  }
+  function addressKey(address) {
+    return address.toString(16);
+  }
+  function gadgetsAt(corpus, address) {
+    if (!corpus) return [];
+    return corpus.gadgets.filter((gadget) => gadget.locations.some((location) => location.virtualAddress !== void 0 && BigInt(location.virtualAddress) === address));
+  }
+  function descriptorFromGadget(gadget, address) {
+    const location = gadget.locations.find((entry) => entry.virtualAddress !== void 0 && BigInt(entry.virtualAddress) === address);
+    return {
+      address,
+      semantic: gadget.semanticSummary,
+      capabilities: gadget.capabilities,
+      module: location == null ? void 0 : location.module,
+      instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText)
+    };
+  }
+  function descriptorFromLive(address, instructions) {
+    const sequence = sequenceFromLiveHit({ address, mnemonic: instructions.join(" ; ") });
+    const semantic = composeSemanticSequence(sequence);
+    return {
+      address,
+      semantic,
+      capabilities: deriveCapabilities(semantic, []),
+      instructions: sequence.instructions.map((instruction) => instruction.normalizedText || instruction.originalText)
+    };
+  }
+  function hasExactFlow2(semantic) {
+    const flow = semantic.summary.flowEffects.values;
+    return !flow.unknown && flow.conservative.size === 0 && flow.exact.size > 0;
+  }
+  function normalizeChain(input, adapter) {
+    if (Array.isArray(input.chain)) {
+      return { steps: input.chain.map((step) => __spreadValues({}, step)), live: /* @__PURE__ */ new Map(), incompleteReasons: [] };
+    }
+    const parsed = parseManualChain(input.chain);
+    const live = /* @__PURE__ */ new Map();
+    const incompleteReasons = [];
+    const steps = parsed.map((step, index) => {
+      if (step.value === void 0) return step;
+      const address = BigInt(step.value >>> 0);
+      const matches = gadgetsAt(input.corpus, address);
+      if (matches.length === 1) {
+        return { kind: "gadget", address, comment: `manual gadget ${index}` };
+      }
+      if (matches.length > 1) {
+        incompleteReasons.push(`manual DWORD ${index} at 0x${address.toString(16)} is ambiguous in the corpus`);
+        return step;
+      }
+      const disassembly = adapter.disassemble(address, 16);
+      if (disassembly.ok && disassembly.value.instructions.length > 0) {
+        const descriptor = descriptorFromLive(address, disassembly.value.instructions);
+        if (hasExactFlow2(descriptor.semantic)) {
+          live.set(addressKey(address), descriptor);
+          return { kind: "gadget", address, comment: `manual live gadget ${index}` };
+        }
+      }
+      return step;
+    });
+    return { steps, live, incompleteReasons };
+  }
+  function descriptorFor(step, corpus, live) {
+    if (step.kind !== "gadget" || step.address === void 0) return void 0;
+    const matches = gadgetsAt(corpus, step.address);
+    if (matches.length === 1) return descriptorFromGadget(matches[0], step.address);
+    return live.get(addressKey(step.address));
+  }
+  function proofExpression(expr, targetRegister) {
+    if (expr.kind === "unknown") return { kind: "unknown", reason: `unknown ${targetRegister} transform` };
+    if (expr.kind === "constant") return { kind: "constant", value: BigInt(expr.value >>> 0) };
+    if (expr.kind === "memory") {
+      return { kind: "memory-dword", address: proofExpression(expr.address, targetRegister) };
+    }
+    if (expr.offset.kind !== "constant") {
+      return { kind: "unknown", reason: `${targetRegister} has a register-dependent offset` };
+    }
+    if (expr.base === "none") {
+      return { kind: "constant", value: uint32Add(BigInt(0), expr.offset.value) };
+    }
+    const register2 = expr.base === "self" ? targetRegister : expr.base;
+    return expr.offset.value === 0 ? { kind: "register", register: register2, checkpoint: "before" } : { kind: "register-offset", register: register2, checkpoint: "before", offset: expr.offset.value };
+  }
+  function isIdentityExpression(expression, register2) {
+    return expression.kind === "register" && expression.register === register2 && expression.checkpoint === "before";
+  }
+  function transitionAssertions(semantic) {
+    const assertions = [];
+    for (const [register2, transform] of Object.entries(semantic.summary.registerTransforms)) {
+      const expected = proofExpression(transform, register2);
+      if (isIdentityExpression(expected, register2)) continue;
+      const exact = expected.kind !== "unknown";
+      assertions.push({
+        subject: register2.toUpperCase(),
+        expected,
+        confidence: exact ? "EXACT" : "UNKNOWN",
+        evidence: semantic.instructionSemantics.flatMap((entry) => entry.evidence),
+        required: register2 === "esp" || exact
+      });
+    }
+    return assertions.sort((left, right) => {
+      if (left.subject === "ESP") return -1;
+      if (right.subject === "ESP") return 1;
+      return left.subject.localeCompare(right.subject);
+    });
+  }
+  function provenance(...descriptors) {
+    return descriptors.map((descriptor) => ({
+      address: descriptor.address,
+      module: descriptor.module,
+      instructions: descriptor.instructions
+    }));
+  }
+  function capability(descriptor, kind) {
+    return descriptor.capabilities.find((entry) => entry.kind === kind);
+  }
+  function combineSemantics(first, second) {
+    const sequence = __spreadProps(__spreadValues({}, first.semantic.instructionSequence), {
+      id: `${first.semantic.instructionSequence.id}+${second.semantic.instructionSequence.id}`,
+      originalText: `${first.semantic.instructionSequence.originalText} ; ${second.semantic.instructionSequence.originalText}`,
+      instructions: [
+        ...first.semantic.instructionSequence.instructions,
+        ...second.semantic.instructionSequence.instructions
+      ]
+    });
+    return composeSemanticSequence(sequence);
+  }
+  function memoryReadTarget(descriptor, register2) {
+    const transform = descriptor.semantic.summary.registerTransforms[register2];
+    if (!transform || transform.kind !== "memory") return void 0;
+    const address = proofExpression(transform.address, register2);
+    return address.kind === "unknown" ? void 0 : { kind: "memory-dword", address };
+  }
+  function pivotTarget(descriptor) {
+    const flow = descriptor.semantic.summary.flowEffects.values;
+    if (flow.unknown || !flow.exact.has("RETURN")) return void 0;
+    const espTransform = descriptor.semantic.summary.registerTransforms.esp;
+    const finalEsp = proofExpression(espTransform, "esp");
+    if (finalEsp.kind !== "register" && finalEsp.kind !== "register-offset") return void 0;
+    if (finalEsp.register === "esp") return void 0;
+    const last = descriptor.semantic.instructionSemantics[descriptor.semantic.instructionSemantics.length - 1];
+    if (!last || last.stackDelta.values.unknown || last.stackDelta.values.exact.size !== 1) return void 0;
+    const returnDelta = [...last.stackDelta.values.exact][0];
+    const targetAddress = finalEsp.kind === "register" ? { kind: "register-offset", register: finalEsp.register, checkpoint: "before", offset: -returnDelta } : finalEsp.offset === returnDelta ? { kind: "register", register: finalEsp.register, checkpoint: "before" } : { kind: "register-offset", register: finalEsp.register, checkpoint: "before", offset: finalEsp.offset - returnDelta };
+    return {
+      target: { kind: "memory-dword", address: targetAddress },
+      assertions: transitionAssertions(descriptor.semantic)
+    };
+  }
+  function semanticIncomplete(descriptor) {
+    return descriptor.semantic.summary.flowEffects.values.unknown || descriptor.semantic.summary.stackDelta.values.unknown || descriptor.semantic.instructionSemantics.some((entry) => !entry.supported);
+  }
+  function buildProofPlan(input, adapter) {
+    var _a, _b;
+    const normalized = normalizeChain(input, adapter);
+    const incompleteReasons = [...normalized.incompleteReasons];
+    const descriptors = normalized.steps.map((step, stepIndex) => ({ stepIndex, descriptor: descriptorFor(step, input.corpus, normalized.live) })).filter((entry) => entry.descriptor !== void 0);
+    const checkpoints = [];
+    let incoming = [];
+    let targetOverride;
+    for (let position = 0; position < descriptors.length; position += 1) {
+      const current = descriptors[position];
+      const descriptor = current.descriptor;
+      checkpoints.push({
+        id: checkpoints.length,
+        stepIndex: current.stepIndex,
+        label: normalized.steps[current.stepIndex].comment,
+        target: targetOverride != null ? targetOverride : { kind: "constant", value: descriptor.address },
+        assertions: incoming,
+        provenance: provenance(descriptor),
+        dynamic: targetOverride !== void 0
+      });
+      targetOverride = void 0;
+      incoming = [];
+      if (semanticIncomplete(descriptor)) {
+        incompleteReasons.push(`gadget at 0x${descriptor.address.toString(16)} has unknown semantics`);
+      }
+      const next = descriptors[position + 1];
+      const memoryRead = (_a = capability(descriptor, "MEMORY_READ")) != null ? _a : capability(descriptor, "LOAD_MEMORY");
+      const dispatch = next ? capability(next.descriptor, "DISPATCH_JMP_REGISTER") : void 0;
+      if (next && (memoryRead == null ? void 0 : memoryRead.register) && (dispatch == null ? void 0 : dispatch.register) === memoryRead.register) {
+        const target = memoryReadTarget(descriptor, memoryRead.register);
+        if (!target) {
+          incompleteReasons.push(`IAT dispatch at 0x${descriptor.address.toString(16)} has an unresolved memory target`);
+          break;
+        }
+        const combined = combineSemantics(descriptor, next.descriptor);
+        checkpoints.push({
+          id: checkpoints.length,
+          stepIndex: next.stepIndex,
+          label: `${(_b = input.api) != null ? _b : "resolved"} API entry`,
+          target,
+          assertions: transitionAssertions(combined),
+          provenance: provenance(descriptor, next.descriptor),
+          dynamic: true
+        });
+        position += 1;
+        continue;
+      }
+      const pivot = pivotTarget(descriptor);
+      if (pivot) {
+        if (next) {
+          targetOverride = pivot.target;
+          incoming = pivot.assertions;
+        } else {
+          checkpoints.push({
+            id: checkpoints.length,
+            stepIndex: current.stepIndex,
+            label: "pivot target",
+            target: pivot.target,
+            assertions: pivot.assertions,
+            provenance: provenance(descriptor),
+            dynamic: true
+          });
+        }
+        continue;
+      }
+      incoming = transitionAssertions(descriptor.semantic);
+    }
+    return {
+      steps: normalized.steps,
+      checkpoints,
+      api: input.api,
+      incompleteReasons
+    };
+  }
+
+  // src/rop/proof/comparator.ts
+  function resolveProofExpression(expression, before, after, adapter) {
+    return evaluate(expression, { before, after, adapter });
+  }
+  function registerValue(snapshot, register2) {
+    const normalized = register2.toLowerCase();
+    if (normalized === "eip") return snapshot.eip;
+    if (normalized === "esp") return snapshot.esp;
+    return snapshot.registers[normalized];
+  }
+  function dwordLittleEndian(bytes) {
+    return BigInt(bytes[0]) | BigInt(bytes[1]) << BigInt(8) | BigInt(bytes[2]) << BigInt(16) | BigInt(bytes[3]) << BigInt(24);
+  }
+  function evaluate(expression, context) {
+    switch (expression.kind) {
+      case "constant":
+        return { ok: true, value: BigInt.asUintN(32, expression.value) };
+      case "register": {
+        const snapshot = expression.checkpoint === "before" ? context.before : context.after;
+        const value = registerValue(snapshot, expression.register);
+        return value === void 0 ? { ok: false, reason: `register ${expression.register} is unavailable` } : { ok: true, value: BigInt.asUintN(32, value) };
+      }
+      case "register-offset": {
+        const value = registerValue(context.before, expression.register);
+        return value === void 0 ? { ok: false, reason: `register ${expression.register} is unavailable` } : { ok: true, value: uint32Add(value, expression.offset) };
+      }
+      case "memory-dword": {
+        const address = evaluate(expression.address, context);
+        if (!address.ok) return address;
+        const bytes = context.adapter.readMemory(address.value, 4);
+        if (!bytes.ok) return { ok: false, reason: bytes.error.message };
+        if (bytes.value.length !== 4) {
+          return { ok: false, reason: `expected 4 memory bytes, observed ${bytes.value.length}` };
+        }
+        return { ok: true, value: dwordLittleEndian(bytes.value) };
+      }
+      case "sum": {
+        let value = BigInt(0);
+        for (const term of expression.terms) {
+          const evaluated = evaluate(term, context);
+          if (!evaluated.ok) return evaluated;
+          value = BigInt.asUintN(32, value + evaluated.value);
+        }
+        return { ok: true, value };
+      }
+      case "deferred":
+      case "unknown":
+        return { ok: false, reason: expression.reason };
+    }
+  }
+  function formatExpression(expression) {
+    switch (expression.kind) {
+      case "constant":
+        return `0x${BigInt.asUintN(32, expression.value).toString(16).padStart(8, "0")}`;
+      case "register":
+        return `${expression.register.toUpperCase()}@${expression.checkpoint}`;
+      case "register-offset":
+        return `${expression.register.toUpperCase()}@before${expression.offset >= 0 ? "+" : ""}${expression.offset}`;
+      case "memory-dword":
+        return `DWORD[${formatExpression(expression.address)}]`;
+      case "sum":
+        return expression.terms.map(formatExpression).join(" + ");
+      case "deferred":
+        return `deferred: ${expression.reason}`;
+      case "unknown":
+        return `unknown: ${expression.reason}`;
+    }
+  }
+  function observedExpression(subject) {
+    return { kind: "register", register: subject.toLowerCase(), checkpoint: "after" };
+  }
+  function signedDifference(observed, expected) {
+    return Number(BigInt.asIntN(32, observed - expected));
+  }
+  function compareCheckpoint(input, adapter) {
+    var _a;
+    const current = adapter.readRegisters();
+    const context = { before: input.previous, after: current, adapter };
+    const assertions = [];
+    const target = input.resolvedTarget === void 0 ? evaluate(input.checkpoint.target, context) : { ok: true, value: BigInt.asUintN(32, input.resolvedTarget) };
+    if (!target.ok) {
+      assertions.push({
+        subject: "EIP",
+        expectedExpression: formatExpression(input.checkpoint.target),
+        observedValue: current.eip,
+        status: "UNVERIFIED",
+        confidence: "UNKNOWN",
+        evidence: [],
+        reason: target.reason
+      });
+      return {
+        checkpointId: input.checkpoint.id,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        outcome: "UNVERIFIED",
+        registers: current,
+        assertions,
+        reason: `Checkpoint target could not be resolved: ${target.reason}`
+      };
+    }
+    const expectedEip = BigInt.asUintN(32, target.value);
+    const observedEip = BigInt.asUintN(32, current.eip);
+    if (expectedEip !== observedEip) {
+      assertions.push({
+        subject: "EIP",
+        expectedExpression: formatExpression(input.checkpoint.target),
+        expectedValue: expectedEip,
+        observedValue: observedEip,
+        status: "FAILED",
+        confidence: "EXACT",
+        evidence: input.checkpoint.provenance.flatMap((entry) => entry.instructions),
+        reason: "execution stopped at an unexpected address"
+      });
+      return {
+        checkpointId: input.checkpoint.id,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        outcome: "UNEXPECTED_STOP",
+        registers: current,
+        assertions,
+        reason: `Expected EIP 0x${expectedEip.toString(16)}, observed 0x${observedEip.toString(16)}; checkpoint not advanced.`
+      };
+    }
+    assertions.push({
+      subject: "EIP",
+      expectedExpression: formatExpression(input.checkpoint.target),
+      expectedValue: expectedEip,
+      observedValue: observedEip,
+      status: "VERIFIED",
+      confidence: "EXACT",
+      evidence: input.checkpoint.provenance.flatMap((entry) => entry.instructions),
+      reason: "stop address matched the checkpoint target"
+    });
+    let unverified = false;
+    for (const template of input.checkpoint.assertions) {
+      const expected = evaluate(template.expected, context);
+      const observed = evaluate((_a = template.observed) != null ? _a : observedExpression(template.subject), context);
+      const cannotVerify = template.confidence !== "EXACT" || !expected.ok || !observed.ok;
+      if (cannotVerify) {
+        const reason = template.confidence !== "EXACT" ? `assertion confidence is ${template.confidence}` : !expected.ok ? expected.reason : !observed.ok ? observed.reason : "assertion is not exact";
+        assertions.push({
+          subject: template.subject,
+          expectedExpression: formatExpression(template.expected),
+          expectedValue: expected.ok ? expected.value : void 0,
+          observedValue: observed.ok ? observed.value : void 0,
+          status: "UNVERIFIED",
+          confidence: template.confidence,
+          evidence: [...template.evidence],
+          reason
+        });
+        unverified = true;
+        continue;
+      }
+      if (expected.value !== observed.value) {
+        const differenceBytes = template.subject.toUpperCase() === "ESP" ? signedDifference(observed.value, expected.value) : void 0;
+        assertions.push({
+          subject: template.subject,
+          expectedExpression: formatExpression(template.expected),
+          expectedValue: expected.value,
+          observedValue: observed.value,
+          status: "FAILED",
+          confidence: template.confidence,
+          evidence: [...template.evidence],
+          reason: differenceBytes === void 0 ? "observed value differs from prediction" : `ESP differs by ${differenceBytes >= 0 ? "+" : ""}${differenceBytes} bytes`,
+          differenceBytes
+        });
+        return {
+          checkpointId: input.checkpoint.id,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          outcome: "FAILED",
+          registers: current,
+          assertions,
+          reason: assertions[assertions.length - 1].reason
+        };
+      }
+      assertions.push({
+        subject: template.subject,
+        expectedExpression: formatExpression(template.expected),
+        expectedValue: expected.value,
+        observedValue: observed.value,
+        status: "VERIFIED",
+        confidence: template.confidence,
+        evidence: [...template.evidence],
+        reason: "observed value matched the prediction"
+      });
+    }
+    return {
+      checkpointId: input.checkpoint.id,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      outcome: unverified ? "UNVERIFIED" : "VERIFIED",
+      registers: current,
+      assertions,
+      reason: unverified ? "Checkpoint reached, but one or more assertions could not be verified." : "Checkpoint and all exact assertions matched."
+    };
+  }
+
+  // src/rop/proof/fingerprint.ts
+  var INITIAL = Uint32Array.from([
+    1779033703,
+    3144134277,
+    1013904242,
+    2773480762,
+    1359893119,
+    2600822924,
+    528734635,
+    1541459225
+  ]);
+  var ROUND = Uint32Array.from([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  function rotateRight(value, bits) {
+    return value >>> bits | value << 32 - bits;
+  }
+  var Sha256 = class {
+    constructor() {
+      this.state = Uint32Array.from(INITIAL);
+      this.pending = [];
+      this.length = BigInt(0);
+      this.finished = false;
+    }
+    update(bytes) {
+      if (this.finished) throw new Error("SHA-256 digest already finalized.");
+      this.length += BigInt(bytes.length);
+      for (const byte of bytes) {
+        this.pending.push(byte);
+        if (this.pending.length === 64) {
+          this.compress(Uint8Array.from(this.pending));
+          this.pending = [];
+        }
+      }
+      return this;
+    }
+    digestHex() {
+      if (this.finished) throw new Error("SHA-256 digest already finalized.");
+      this.finished = true;
+      const bitLength = this.length * BigInt(8);
+      this.pending.push(128);
+      while (this.pending.length % 64 !== 56) this.pending.push(0);
+      for (let shift = 56; shift >= 0; shift -= 8) {
+        this.pending.push(Number(bitLength >> BigInt(shift) & BigInt(255)));
+      }
+      for (let offset = 0; offset < this.pending.length; offset += 64) {
+        this.compress(Uint8Array.from(this.pending.slice(offset, offset + 64)));
+      }
+      return Array.from(this.state, (word) => word.toString(16).padStart(8, "0")).join("");
+    }
+    compress(block) {
+      const words = new Uint32Array(64);
+      for (let index = 0; index < 16; index += 1) {
+        const offset = index * 4;
+        words[index] = (block[offset] << 24 | block[offset + 1] << 16 | block[offset + 2] << 8 | block[offset + 3]) >>> 0;
+      }
+      for (let index = 16; index < 64; index += 1) {
+        const left = words[index - 15];
+        const right = words[index - 2];
+        const s0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ left >>> 3;
+        const s1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ right >>> 10;
+        words[index] = words[index - 16] + s0 + words[index - 7] + s1 >>> 0;
+      }
+      let [a, b, c, d, e, f, g, h] = Array.from(this.state);
+      for (let index = 0; index < 64; index += 1) {
+        const s1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+        const choice = e & f ^ ~e & g;
+        const temp1 = h + s1 + choice + ROUND[index] + words[index] >>> 0;
+        const s0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+        const majority = a & b ^ a & c ^ b & c;
+        const temp2 = s0 + majority >>> 0;
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1 >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2 >>> 0;
+      }
+      this.state[0] = this.state[0] + a >>> 0;
+      this.state[1] = this.state[1] + b >>> 0;
+      this.state[2] = this.state[2] + c >>> 0;
+      this.state[3] = this.state[3] + d >>> 0;
+      this.state[4] = this.state[4] + e >>> 0;
+      this.state[5] = this.state[5] + f >>> 0;
+      this.state[6] = this.state[6] + g >>> 0;
+      this.state[7] = this.state[7] + h >>> 0;
+    }
+  };
+  function captureProofFingerprint(scope, adapter) {
+    const captured = adapter.getFingerprint(scope);
+    if (captured.ok) return captured.value;
+    const registers = adapter.readRegisters();
+    return {
+      processId: BigInt(0),
+      threadId: BigInt(0),
+      architecture: "unknown",
+      pointerSize: 4,
+      targetPath: "",
+      complete: false,
+      incompleteReasons: [captured.error.message],
+      modules: [],
+      gadgets: [],
+      protections: []
+    };
+  }
+  function sameBytes2(left, right) {
+    return left.length === right.length && left.every((byte, index) => byte === right[index]);
+  }
+  function gadgetBytesMatch(address, baseline, current, ownedBreakpoint) {
+    if (sameBytes2(baseline, current)) return true;
+    if (!ownedBreakpoint || ownedBreakpoint.address !== address || !ownedBreakpoint.enabled) return false;
+    if (baseline.length !== current.length || baseline.length === 0 || current[0] !== 204) return false;
+    return baseline.slice(1).every((byte, index) => byte === current[index + 1]);
+  }
+  function compareProofFingerprint(baseline, current, options = {}) {
+    if (!baseline.complete || !current.complete || !baseline.targetSha256 || !current.targetSha256) {
+      const reasons2 = [...baseline.incompleteReasons, ...current.incompleteReasons];
+      if (!baseline.targetSha256 || !current.targetSha256) reasons2.push("target SHA-256 is incomplete");
+      return { status: "INCOMPLETE", reasons: [...new Set(reasons2)] };
+    }
+    const reasons = [];
+    if (baseline.processId !== current.processId) reasons.push("process identity changed");
+    if (baseline.threadId !== current.threadId) reasons.push("thread identity changed");
+    if (baseline.architecture !== current.architecture || baseline.pointerSize !== current.pointerSize) {
+      reasons.push("target architecture changed");
+    }
+    if (baseline.targetPath !== current.targetPath) reasons.push("target path changed");
+    if (baseline.targetSha256 !== current.targetSha256) reasons.push("target SHA-256 changed");
+    for (const expected of baseline.modules) {
+      const observed = current.modules.find((module) => module.name === expected.name && module.path === expected.path);
+      if (!observed) {
+        reasons.push(`module ${expected.name} is no longer loaded`);
+        continue;
+      }
+      if (observed.base !== expected.base || observed.size !== expected.size) {
+        reasons.push(`module ${expected.name} mapping changed`);
+      }
+    }
+    for (const expected of baseline.gadgets) {
+      const observed = current.gadgets.find((entry) => entry.address === expected.address);
+      if (!observed) {
+        reasons.push(`gadget 0x${expected.address.toString(16)} is unavailable`);
+        continue;
+      }
+      if (observed.module !== expected.module || observed.rva !== expected.rva || !gadgetBytesMatch(expected.address, expected.bytes, observed.bytes, options.ownedBreakpoint)) {
+        reasons.push(`gadget 0x${expected.address.toString(16)} changed`);
+      }
+    }
+    for (const expected of baseline.protections) {
+      const observed = current.protections.find((entry) => entry.address === expected.address);
+      if (!observed || observed.region.base !== expected.region.base || observed.region.size !== expected.region.size || observed.region.protect !== expected.region.protect) {
+        reasons.push(`protection at 0x${expected.address.toString(16)} changed`);
+      }
+    }
+    return reasons.length > 0 ? { status: "STALE_TARGET", reasons } : { status: "CURRENT", reasons: [] };
+  }
+
+  // src/rop/proof/store.ts
+  function hex324(value) {
+    return value === void 0 ? void 0 : `0x${BigInt.asUintN(32, value).toString(16).padStart(8, "0")}`;
+  }
+  function jsonSafe(value) {
+    if (typeof value === "bigint") return hex324(value);
+    if (Array.isArray(value)) return value.map(jsonSafe);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key2, entry]) => [key2, jsonSafe(entry)]));
+    }
+    return value;
+  }
+  function serializeProofRecord(session) {
+    return {
+      schemaVersion: PROOF_RECORD_SCHEMA_VERSION,
+      sessionId: session.id,
+      mode: session.mode,
+      state: session.state,
+      executionStatus: session.executionStatus,
+      objectiveStatus: session.objectiveStatus,
+      objectiveReason: session.objectiveReason,
+      targetPath: session.baselineFingerprint.targetPath,
+      targetSha256: session.baselineFingerprint.targetSha256,
+      observations: session.observations.map((observation2) => ({
+        checkpointId: observation2.checkpointId,
+        timestamp: observation2.timestamp,
+        outcome: observation2.outcome,
+        reason: observation2.reason,
+        assertions: observation2.assertions.map((assertion) => ({
+          subject: assertion.subject,
+          expectedExpression: assertion.expectedExpression,
+          expectedValue: hex324(assertion.expectedValue),
+          observedValue: hex324(assertion.observedValue),
+          status: assertion.status,
+          reason: assertion.reason,
+          differenceBytes: assertion.differenceBytes
+        }))
+      })),
+      events: session.events.map((event) => __spreadProps(__spreadValues({}, event), { detail: jsonSafe(event.detail) }))
+    };
+  }
+  function renderProofMarkdown(record) {
+    var _a, _b, _c;
+    const lines = [
+      `# ROP proof ${record.sessionId}`,
+      "",
+      `- Execution status: **${record.executionStatus}**`,
+      `- Objective status: **${record.objectiveStatus}** \u2014 ${record.objectiveReason}`,
+      `- Session state: ${record.state}`,
+      `- Target: ${record.targetPath || "unavailable"}`,
+      `- SHA-256: ${(_a = record.targetSha256) != null ? _a : "unavailable"}`,
+      "",
+      "## Checkpoints",
+      ""
+    ];
+    for (const observation2 of record.observations) {
+      lines.push(`### Checkpoint ${observation2.checkpointId}: ${observation2.outcome}`, "", observation2.reason, "");
+      for (const assertion of observation2.assertions) {
+        const values = assertion.expectedValue === void 0 && assertion.observedValue === void 0 ? "" : ` (expected ${(_b = assertion.expectedValue) != null ? _b : "unavailable"}, observed ${(_c = assertion.observedValue) != null ? _c : "unavailable"})`;
+        lines.push(`- ${assertion.subject}: **${assertion.status}**${values} \u2014 ${assertion.reason}`);
+      }
+      lines.push("");
+    }
+    lines.push("## Event log", "");
+    for (const event of record.events) lines.push(`- ${event.sequence}: ${event.kind} (${event.timestamp})`);
+    return `${lines.join("\n")}
+`;
+  }
+  var ACTIVE_STATES = /* @__PURE__ */ new Set([
+    "ARMED",
+    "CHECKPOINT_REACHED",
+    "POSTCONDITION_ARMED",
+    "POSTCONDITION_OBSERVED"
+  ]);
+  var ProofSessionStore = class {
+    constructor() {
+      this.sessions = [];
+      this.eventSequence = 0;
+    }
+    add(session) {
+      if (this.active()) throw new Error("A ROP proof session is already active.");
+      this.sessions.push(session);
+      return session;
+    }
+    active() {
+      const session = this.sessions[this.sessions.length - 1];
+      return session && ACTIVE_STATES.has(session.state) ? session : void 0;
+    }
+    latest() {
+      return this.sessions[this.sessions.length - 1];
+    }
+    history() {
+      return this.sessions;
+    }
+    appendEvent(session, kind, detail = {}) {
+      const event = {
+        sequence: this.eventSequence,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        kind,
+        detail
+      };
+      this.eventSequence += 1;
+      session.events.push(event);
+      return event;
+    }
+  };
+
+  // src/rop/proof/postcondition.ts
+  var SUPPORTED_ARGUMENT_COUNTS = {
+    VirtualProtect: 4,
+    VirtualAlloc: 4
+  };
+  var DWORD_LIMIT = BigInt(4294967296);
+  function uint32le(bytes, offset = 0) {
+    return BigInt(bytes[offset]) | BigInt(bytes[offset + 1]) << BigInt(8) | BigInt(bytes[offset + 2]) << BigInt(16) | BigInt(bytes[offset + 3]) << BigInt(24);
+  }
+  function register(snapshot, name) {
+    const normalized = name.toLowerCase();
+    if (normalized === "eip") return snapshot.eip;
+    if (normalized === "esp") return snapshot.esp;
+    return snapshot.registers[normalized];
+  }
+  function captureStdcallFrame(api, esp, adapter) {
+    const argumentCount = SUPPORTED_ARGUMENT_COUNTS[api];
+    if (argumentCount === void 0) {
+      return { status: "UNVERIFIED", api, esp, arguments: [], rawBytes: new Uint8Array(), reason: `unsupported API ${api}` };
+    }
+    const length = (argumentCount + 1) * 4;
+    const read = adapter.readMemory(esp, length);
+    if (!read.ok || read.value.length !== length) {
+      return {
+        status: "UNVERIFIED",
+        api,
+        esp,
+        arguments: [],
+        rawBytes: read.ok ? read.value : new Uint8Array(),
+        reason: read.ok ? `runtime frame read returned ${read.value.length} of ${length} bytes` : read.error.message
+      };
+    }
+    const values = [];
+    for (let offset = 0; offset < length; offset += 4) values.push(uint32le(read.value, offset));
+    return {
+      status: "VERIFIED",
+      api,
+      esp,
+      returnAddress: values[0],
+      arguments: values.slice(1),
+      rawBytes: read.value,
+      reason: "runtime stdcall frame captured"
+    };
+  }
+  function evaluatePostcondition(request, frame, returnObservation, adapter) {
+    const baseResult = {
+      status: "UNVERIFIED",
+      api: request.api,
+      returnAddress: frame.returnAddress,
+      protections: [],
+      reason: "postcondition could not be evaluated"
+    };
+    if (frame.status !== "VERIFIED" || frame.api !== request.api || frame.returnAddress === void 0) {
+      return __spreadProps(__spreadValues({}, baseResult), { reason: frame.reason });
+    }
+    if (returnObservation.eip !== frame.returnAddress) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", reason: "execution stopped somewhere other than the captured API return address" });
+    }
+    if (request.api !== "VirtualProtect" && request.api !== "VirtualAlloc") {
+      return __spreadProps(__spreadValues({}, baseResult), { reason: `unsupported API ${request.api}` });
+    }
+    if (frame.arguments.length < 4) return __spreadProps(__spreadValues({}, baseResult), { reason: "runtime frame is incomplete" });
+    const returnValue = register(returnObservation, "eax");
+    if (returnValue === void 0) return __spreadProps(__spreadValues({}, baseResult), { reason: "EAX return value is unavailable" });
+    if (returnValue === BigInt(0)) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, reason: `${request.api} returned failure` });
+    }
+    const rangeBase = request.api === "VirtualAlloc" ? returnValue : frame.arguments[0];
+    const rangeSize = frame.arguments[1];
+    if (rangeSize === BigInt(0)) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, rangeBase, rangeSize, reason: "protected range has zero size" });
+    }
+    const rangeEnd = rangeBase + rangeSize;
+    if (rangeBase >= DWORD_LIMIT || rangeEnd > DWORD_LIMIT || rangeEnd <= rangeBase) {
+      return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, rangeBase, rangeSize, reason: "protected range overflows x86 address space" });
+    }
+    const protections = [];
+    let cursor = rangeBase;
+    while (cursor < rangeEnd) {
+      const queried = adapter.queryProtection(cursor);
+      if (!queried.ok) {
+        return __spreadProps(__spreadValues({}, baseResult), { returnValue, rangeBase, rangeSize, protections, reason: queried.error.message });
+      }
+      const region = queried.value;
+      const regionEnd = region.base + region.size;
+      if (region.size <= BigInt(0) || region.base > cursor || regionEnd <= cursor) {
+        return __spreadProps(__spreadValues({}, baseResult), { returnValue, rangeBase, rangeSize, protections, reason: "protection query did not advance range coverage" });
+      }
+      protections.push({ address: cursor, region });
+      if (!region.executable) {
+        return __spreadProps(__spreadValues({}, baseResult), { status: "FAILED", returnValue, rangeBase, rangeSize, protections, reason: "runtime range is not fully executable" });
+      }
+      cursor = regionEnd < rangeEnd ? regionEnd : rangeEnd;
+    }
+    return {
+      status: "VERIFIED",
+      api: request.api,
+      returnAddress: frame.returnAddress,
+      returnValue,
+      rangeBase,
+      rangeSize,
+      protections,
+      reason: `${request.api} succeeded and the runtime range is executable`
+    };
+  }
+
+  // src/rop/proof/session.ts
+  var MARKER_PREFIX = "osed-proof:";
+  var MARKER_V1 = /^osed-proof:v1:([A-Za-z0-9-]+):([A-Za-z0-9-]+):(\d+)$/;
+  var MARKER_ANY_VERSION = /^osed-proof:v([^:]+):/;
+  var sessionCounter = 0;
+  function fingerprintScope(plan) {
+    const gadgetAddresses = plan.checkpoints.flatMap((checkpoint) => checkpoint.provenance.flatMap((entry) => entry.address === void 0 ? [] : [entry.address]));
+    const moduleNames = plan.checkpoints.flatMap((checkpoint) => checkpoint.provenance.flatMap((entry) => entry.module === void 0 ? [] : [entry.module]));
+    return {
+      moduleNames: [...new Set(moduleNames)],
+      gadgetAddresses: [...new Set(gadgetAddresses)],
+      protectionAddresses: []
+    };
+  }
+  function ownedFrom(snapshot) {
+    return {
+      id: snapshot.id,
+      address: snapshot.address,
+      enabled: snapshot.enabled,
+      oneShot: snapshot.oneShot,
+      marker: snapshot.marker
+    };
+  }
+  var ProofSessionMachine = class {
+    constructor(adapter, store) {
+      this.adapter = adapter;
+      this.store = store;
+      this.priorRegisters = /* @__PURE__ */ new Map();
+      this.resolvedTargets = /* @__PURE__ */ new Map();
+    }
+    start(input) {
+      var _a, _b;
+      if (this.store.active()) throw new Error("A ROP proof session is already active.");
+      const orphans = this.markerBreakpoints().filter((entry) => MARKER_V1.test(entry.marker));
+      if (orphans.length > 0) {
+        throw new Error(`Found ${orphans.length} orphaned rop.prove breakpoint(s). Run rop.prove({action:"cancel", orphans:true}).`);
+      }
+      const baselineFingerprint = captureProofFingerprint(fingerprintScope(input.plan), this.adapter);
+      if (baselineFingerprint.architecture !== "x86" || baselineFingerprint.pointerSize !== 4) {
+        throw new Error("rop.prove v1 requires an x86 target with a four-byte pointer size.");
+      }
+      if (input.plan.checkpoints.length === 0) throw new Error("The proof plan has no checkpoints.");
+      sessionCounter += 1;
+      const sessionId = (_a = input.sessionId) != null ? _a : `proof-${Date.now().toString(36)}-${sessionCounter}`;
+      const nonce = (_b = input.nonce) != null ? _b : `${Date.now().toString(36)}-${sessionCounter}`;
+      const session = {
+        id: sessionId,
+        mode: input.mode,
+        state: "CHECKPOINT_REACHED",
+        plan: input.plan,
+        checkpointIndex: 0,
+        baselineFingerprint,
+        observations: [],
+        events: [],
+        executionStatus: "UNVERIFIED",
+        objectiveStatus: "UNVERIFIED",
+        objectiveReason: "not requested",
+        postconditionRequested: input.postcondition === true
+      };
+      this.store.add(session);
+      this.store.appendEvent(session, "session-started", { mode: input.mode, nonce });
+      const current = this.adapter.readRegisters();
+      this.priorRegisters.set(session.id, current);
+      const first = input.plan.checkpoints[0];
+      const target = resolveProofExpression(first.target, current, current, this.adapter);
+      if (target.ok && target.value === current.eip) {
+        const observation2 = compareCheckpoint({ checkpoint: first, previous: current, resolvedTarget: target.value }, this.adapter);
+        session.observations.push(observation2);
+        session.checkpointIndex = 1;
+        this.store.appendEvent(session, "checkpoint-observed", { checkpointId: first.id, outcome: observation2.outcome });
+        if (observation2.outcome === "FAILED") {
+          session.state = "FAILED";
+          session.executionStatus = "FAILED";
+          return session;
+        }
+      }
+      return this.armOrComplete(session, nonce);
+    }
+    observeAndAdvance() {
+      var _a, _b;
+      const session = this.store.active();
+      if (!session) throw new Error('No active proof session. Start one with rop.prove({mode:"guided"}).');
+      if (session.state === "POSTCONDITION_ARMED") return this.observePostcondition(session);
+      if (session.checkpointIndex >= session.plan.checkpoints.length) return this.complete(session);
+      const currentFingerprint = captureProofFingerprint(fingerprintScope(session.plan), this.adapter);
+      const fingerprint = compareProofFingerprint(session.baselineFingerprint, currentFingerprint, {
+        ownedBreakpoint: session.ownedBreakpoint
+      });
+      if (fingerprint.status === "STALE_TARGET") {
+        session.state = "STALE_TARGET";
+        session.executionStatus = "UNVERIFIED";
+        this.store.appendEvent(session, "stale-target", { reasons: fingerprint.reasons });
+        return session;
+      }
+      const checkpoint = session.plan.checkpoints[session.checkpointIndex];
+      const previous = (_a = this.priorRegisters.get(session.id)) != null ? _a : this.adapter.readRegisters();
+      const targetKey = `${session.id}:${checkpoint.id}`;
+      const capturedTarget = this.resolvedTargets.get(targetKey);
+      const target = capturedTarget === void 0 ? resolveProofExpression(checkpoint.target, previous, previous, this.adapter) : { ok: true, value: capturedTarget };
+      const observation2 = compareCheckpoint({
+        checkpoint,
+        previous,
+        resolvedTarget: target.ok ? target.value : void 0
+      }, this.adapter);
+      session.observations.push(observation2);
+      this.store.appendEvent(session, "checkpoint-observed", {
+        checkpointId: checkpoint.id,
+        outcome: observation2.outcome,
+        exceptionCode: (_b = observation2.registers.exceptionCode) == null ? void 0 : _b.toString(16)
+      });
+      if (observation2.outcome === "UNEXPECTED_STOP") {
+        session.state = "ARMED";
+        return session;
+      }
+      if (session.ownedBreakpoint) {
+        const deleted = this.adapter.deleteOwned(session.ownedBreakpoint);
+        this.store.appendEvent(session, "breakpoint-consumed", { status: deleted.status, id: session.ownedBreakpoint.id });
+        if (deleted.status === "identity-mismatch") {
+          session.state = "UNVERIFIED";
+          session.executionStatus = "UNVERIFIED";
+          return session;
+        }
+        session.ownedBreakpoint = void 0;
+      }
+      if (observation2.outcome === "FAILED") {
+        session.state = "FAILED";
+        session.executionStatus = "FAILED";
+        return session;
+      }
+      if (observation2.outcome === "UNVERIFIED") session.executionStatus = "UNVERIFIED";
+      session.state = "CHECKPOINT_REACHED";
+      session.checkpointIndex += 1;
+      this.priorRegisters.set(session.id, observation2.registers);
+      const nonce = this.sessionNonce(session);
+      return this.armOrComplete(session, nonce);
+    }
+    status() {
+      return this.store.latest();
+    }
+    cancel() {
+      const session = this.store.active();
+      if (!session) return this.store.latest();
+      if (session.ownedBreakpoint) {
+        const result3 = this.adapter.deleteOwned(session.ownedBreakpoint);
+        this.store.appendEvent(session, "breakpoint-cancelled", { id: session.ownedBreakpoint.id, status: result3.status });
+        if (result3.status === "identity-mismatch") return session;
+        session.ownedBreakpoint = void 0;
+      }
+      session.state = "CANCELLED";
+      this.store.appendEvent(session, "session-cancelled");
+      return session;
+    }
+    cancelOrphans() {
+      const results = [];
+      for (const breakpoint of this.markerBreakpoints()) {
+        const version = MARKER_ANY_VERSION.exec(breakpoint.marker);
+        if (!version) continue;
+        if (!MARKER_V1.test(breakpoint.marker)) {
+          results.push({ status: "unsupported-marker-version", breakpoint });
+          continue;
+        }
+        results.push(this.adapter.deleteOwned(ownedFrom(breakpoint)));
+      }
+      return results;
+    }
+    armOrComplete(session, nonce) {
+      var _a;
+      if (session.checkpointIndex >= session.plan.checkpoints.length) return this.complete(session);
+      const checkpoint = session.plan.checkpoints[session.checkpointIndex];
+      const previous = (_a = this.priorRegisters.get(session.id)) != null ? _a : this.adapter.readRegisters();
+      const resolved = resolveProofExpression(checkpoint.target, previous, previous, this.adapter);
+      if (!resolved.ok) {
+        session.state = "UNVERIFIED";
+        session.executionStatus = "UNVERIFIED";
+        this.store.appendEvent(session, "dynamic-target-unresolved", { checkpointId: checkpoint.id, reason: resolved.reason });
+        return session;
+      }
+      if (checkpoint.dynamic) {
+        this.store.appendEvent(session, "dynamic-target-resolved", {
+          checkpointId: checkpoint.id,
+          target: `0x${resolved.value.toString(16)}`
+        });
+      }
+      this.resolvedTargets.set(`${session.id}:${checkpoint.id}`, resolved.value);
+      if (session.mode === "observe") {
+        session.state = "ARMED";
+        return session;
+      }
+      const marker = `${MARKER_PREFIX}v1:${session.id}:${nonce}:${checkpoint.id}`;
+      const armed = this.adapter.setOneShot(resolved.value, marker);
+      if (!armed.ok) {
+        session.state = "UNVERIFIED";
+        this.store.appendEvent(session, "breakpoint-arm-failed", { reason: armed.error.message });
+        return session;
+      }
+      session.ownedBreakpoint = armed.value;
+      session.state = "ARMED";
+      this.store.appendEvent(session, "breakpoint-armed", { id: armed.value.id, address: `0x${armed.value.address.toString(16)}` });
+      return session;
+    }
+    complete(session) {
+      const incomplete = !session.baselineFingerprint.complete || session.plan.incompleteReasons.length > 0 || session.observations.some((observation2) => observation2.outcome === "UNVERIFIED");
+      session.executionStatus = incomplete ? "UNVERIFIED" : "VERIFIED";
+      this.store.appendEvent(session, "execution-complete", { executionStatus: session.executionStatus });
+      if (session.postconditionRequested && session.plan.api) {
+        const current = this.adapter.readRegisters();
+        const frame = captureStdcallFrame(session.plan.api, current.esp, this.adapter);
+        session.runtimeFrame = frame;
+        session.objectiveReason = frame.reason;
+        if (frame.status !== "VERIFIED" || frame.returnAddress === void 0) {
+          session.state = "EXECUTION_COMPLETE";
+          return session;
+        }
+        const marker = `${MARKER_PREFIX}v1:${session.id}:${this.sessionNonce(session)}:${session.plan.checkpoints.length}`;
+        if (session.mode === "guided") {
+          const armed = this.adapter.setOneShot(frame.returnAddress, marker);
+          if (!armed.ok) {
+            session.state = "EXECUTION_COMPLETE";
+            session.objectiveReason = armed.error.message;
+            return session;
+          }
+          session.ownedBreakpoint = armed.value;
+          this.store.appendEvent(session, "postcondition-breakpoint-armed", {
+            id: armed.value.id,
+            address: `0x${armed.value.address.toString(16)}`
+          });
+        }
+        session.state = "POSTCONDITION_ARMED";
+        return session;
+      }
+      session.state = "EXECUTION_COMPLETE";
+      return session;
+    }
+    observePostcondition(session) {
+      const frame = session.runtimeFrame;
+      if (!frame || !session.plan.api) {
+        session.state = "POSTCONDITION_FAILED";
+        session.objectiveStatus = "UNVERIFIED";
+        session.objectiveReason = "captured runtime frame is unavailable";
+        return session;
+      }
+      const registers = this.adapter.readRegisters();
+      if (frame.returnAddress !== registers.eip) {
+        this.store.appendEvent(session, "postcondition-unexpected-stop", {
+          expected: frame.returnAddress === void 0 ? void 0 : `0x${frame.returnAddress.toString(16)}`,
+          observed: `0x${registers.eip.toString(16)}`
+        });
+        return session;
+      }
+      if (session.ownedBreakpoint) {
+        const deleted = this.adapter.deleteOwned(session.ownedBreakpoint);
+        this.store.appendEvent(session, "postcondition-breakpoint-consumed", { status: deleted.status });
+        if (deleted.status === "identity-mismatch") return session;
+        session.ownedBreakpoint = void 0;
+      }
+      const objective = evaluatePostcondition({ api: session.plan.api }, frame, registers, this.adapter);
+      session.objectiveObservation = objective;
+      session.objectiveStatus = objective.status;
+      session.objectiveReason = objective.reason;
+      session.state = objective.status === "VERIFIED" ? "POSTCONDITION_OBSERVED" : "POSTCONDITION_FAILED";
+      this.store.appendEvent(session, "postcondition-observed", { status: objective.status, reason: objective.reason });
+      return session;
+    }
+    markerBreakpoints() {
+      const listed = this.adapter.listBreakpoints();
+      if (!listed.ok) return [];
+      return listed.value.filter((entry) => entry.marker.startsWith(MARKER_PREFIX));
+    }
+    sessionNonce(session) {
+      const start = session.events.find((event) => event.kind === "session-started");
+      return typeof (start == null ? void 0 : start.detail.nonce) === "string" ? start.detail.nonce : "session";
+    }
+  };
+
+  // src/rop/proof/controller.ts
+  var ProofController = class {
+    constructor(dependencies) {
+      this.dependencies = dependencies;
+      this.machine = new ProofSessionMachine(dependencies.adapter, dependencies.store);
+    }
+    execute(options) {
+      var _a, _b, _c, _d, _e, _f;
+      try {
+        if (options === void 0) {
+          if (!this.dependencies.store.active()) {
+            return { success: false, error: 'No active proof session. Start one with rop.prove({mode:"guided"}).' };
+          }
+          return this.outcome(this.machine.observeAndAdvance());
+        }
+        if (options.action === "status") {
+          const session2 = this.machine.status();
+          return session2 ? this.outcome(session2) : { success: false, error: "No proof session has been recorded." };
+        }
+        if (options.action === "history") {
+          return { success: true, history: this.dependencies.store.history() };
+        }
+        if (options.action === "cancel") {
+          const session2 = this.machine.cancel();
+          const orphanResults = options.orphans ? this.machine.cancelOrphans() : void 0;
+          return { success: false, session: session2, orphanResults };
+        }
+        if (options.action === "export") {
+          const session2 = this.dependencies.store.latest();
+          if (!session2) return { success: false, error: "No proof session has been recorded." };
+          if (!options.path) return { success: false, error: "Proof export requires an explicit path." };
+          const record = serializeProofRecord(session2);
+          const markdown = options.format === "markdown" || /\.md$/i.test(options.path);
+          const content = markdown ? renderProofMarkdown(record) : `${JSON.stringify(record, null, 2)}
+`;
+          if (!this.dependencies.writeText) return { success: false, error: "Proof export is unavailable in this host." };
+          this.dependencies.writeText(options.path, content);
+          return {
+            success: session2.executionStatus === "VERIFIED" && session2.objectiveStatus === "VERIFIED",
+            session: session2,
+            exportedPath: options.path,
+            content
+          };
+        }
+        if (this.dependencies.store.active()) {
+          return { success: false, error: "A ROP proof session is already active; inspect status or cancel it first." };
+        }
+        const inherited = this.dependencies.getDefaultInput();
+        const chain = (_a = options.chain) != null ? _a : inherited == null ? void 0 : inherited.chain;
+        if (chain === void 0) {
+          return { success: false, error: "No chain to prove. Run rop.generate first or pass {chain: ...}." };
+        }
+        const input = {
+          chain,
+          corpus: (_d = (_c = (_b = this.dependencies).getCorpus) == null ? void 0 : _c.call(_b)) != null ? _d : inherited == null ? void 0 : inherited.corpus,
+          api: (_e = options.api) != null ? _e : inherited == null ? void 0 : inherited.api
+        };
+        const plan = buildProofPlan(input, this.dependencies.adapter);
+        const session = this.machine.start({
+          mode: (_f = options.mode) != null ? _f : "guided",
+          plan,
+          postcondition: options.postcondition === true
+        });
+        return this.outcome(session);
+      } catch (error2) {
+        return { success: false, error: error2 instanceof Error ? error2.message : String(error2) };
+      }
+    }
+    outcome(session) {
+      return {
+        success: session.executionStatus === "VERIFIED" && session.objectiveStatus === "VERIFIED",
+        session
+      };
+    }
+  };
+
+  // src/rop/proof/windbg_adapter.ts
+  function ok(value) {
+    return { ok: true, value };
+  }
+  function fail(code, message) {
+    return { ok: false, error: { code, message } };
+  }
+  function bigintValue(value) {
+    var _a, _b;
+    try {
+      if (typeof value === "bigint") return value;
+      if (typeof value === "number") return BigInt(value);
+      if (typeof value === "string") return BigInt(value.replace(/`/g, ""));
+      if (value && typeof value === "object") {
+        const record = value;
+        return bigintValue((_b = (_a = record.value) != null ? _a : record.Value) != null ? _b : String(value));
+      }
+    } catch (e) {
+    }
+    return void 0;
+  }
+  function isAllowedProofCommand(command2) {
+    const trimmed = command2.trim();
+    return trimmed === "bl" || /^r(?:\s+@[a-z][a-z0-9]*)+$/i.test(trimmed) || /^u\s+0x[0-9a-f]+\s+L[1-9][0-9]*$/i.test(trimmed) || /^!vprot\s+0x[0-9a-f]+$/i.test(trimmed) || /^bp\s+\/1\s+0x[0-9a-f]+\s+"\.echo\s+osed-proof:v1:[A-Za-z0-9-]+:[A-Za-z0-9-]+:\d+"$/i.test(trimmed) || /^bc\s+\d+$/i.test(trimmed);
+  }
+  function command(commandText) {
+    if (!isAllowedProofCommand(commandText)) throw new Error(`Proof adapter rejected debugger command: ${commandText}`);
+    return executeDebuggerCommand(commandText);
+  }
+  function iterable(value) {
+    if (Array.isArray(value)) return value;
+    try {
+      return value ? Array.from(value) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function parseBreakpoint(line) {
+    var _a;
+    const marker = (_a = /(osed-proof:v[^\s";]+)/i.exec(line)) == null ? void 0 : _a[1];
+    const match = /^\s*(\d+)\s+\w+\s+([0-9a-f`]+)/i.exec(line);
+    if (!match || !marker) return void 0;
+    return {
+      id: Number(match[1]),
+      address: BigInt(`0x${match[2].replace(/`/g, "")}`),
+      enabled: !/^\s*\d+\s+d/i.test(line),
+      oneShot: /\/1|one.?shot/i.test(line) || marker.startsWith("osed-proof:"),
+      marker,
+      command: line
+    };
+  }
+  function hashFile(path) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    try {
+      const hostAny = host;
+      const fs = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
+      const raw = (_f = (_d = fs == null ? void 0 : fs.OpenFile) == null ? void 0 : _d.call(fs, path)) != null ? _f : (_e = fs == null ? void 0 : fs.CreateFile) == null ? void 0 : _e.call(fs, path, "OpenExisting");
+      if (!raw) return void 0;
+      const file = raw;
+      if (typeof file.ReadBytes !== "function") return void 0;
+      const digest = new Sha256();
+      for (; ; ) {
+        const chunk = Uint8Array.from(iterable(file.ReadBytes(64 * 1024)).map(Number));
+        if (chunk.length === 0) break;
+        digest.update(chunk);
+        if (chunk.length < 64 * 1024) break;
+      }
+      (_g = file.Close) == null ? void 0 : _g.call(file);
+      return digest.digestHex();
+    } catch (e) {
+      return void 0;
+    }
+  }
+  var WinDbgProofAdapter = class {
+    readRegisters() {
+      var _a, _b, _c, _d;
+      const hostAny = host;
+      const thread = (_a = hostAny.currentThread) != null ? _a : {};
+      const registers = (_c = (_b = thread.Registers) == null ? void 0 : _b.User) != null ? _c : {};
+      const parsed = {};
+      for (const name of ["eip", "esp", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"]) {
+        const value = bigintValue((_d = registers[name]) != null ? _d : registers[name.toUpperCase()]);
+        if (value !== void 0) parsed[name] = BigInt.asUintN(32, value);
+      }
+      if (parsed.eip === void 0 || parsed.esp === void 0) throw new Error("Unable to read x86 EIP/ESP from the current thread.");
+      return { eip: parsed.eip, esp: parsed.esp, registers: parsed };
+    }
+    readMemory(address, length) {
+      try {
+        return ok(readMemory(address, length));
+      } catch (error2) {
+        return fail("memory-unreadable", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    listBreakpoints() {
+      try {
+        return ok(command("bl").map(parseBreakpoint).filter((entry) => entry !== void 0));
+      } catch (error2) {
+        return fail("breakpoint-list-failed", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    setOneShot(address, marker) {
+      if (!/^osed-proof:v1:[A-Za-z0-9-]+:[A-Za-z0-9-]+:\d+$/.test(marker)) return fail("invalid-marker", "Invalid proof breakpoint marker.");
+      try {
+        command(`bp /1 0x${address.toString(16)} ".echo ${marker}"`);
+        const listed = this.listBreakpoints();
+        if (!listed.ok) return listed;
+        const found = listed.value.find((entry) => entry.address === address && entry.marker === marker);
+        return found ? ok({ id: found.id, address, enabled: found.enabled, oneShot: found.oneShot, marker }) : fail("breakpoint-unconfirmed", "WinDbg did not report the newly created proof breakpoint.");
+      } catch (error2) {
+        return fail("breakpoint-set-failed", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    deleteOwned(breakpoint) {
+      const listed = this.listBreakpoints();
+      if (!listed.ok) return { status: "not-found", breakpoint };
+      const observed = listed.value.find((entry) => entry.id === breakpoint.id);
+      if (!observed) return this.readRegisters().eip === breakpoint.address ? { status: "already-fired", breakpoint } : { status: "not-found", breakpoint };
+      if (observed.address !== breakpoint.address || observed.marker !== breakpoint.marker || observed.enabled !== breakpoint.enabled || observed.oneShot !== breakpoint.oneShot) {
+        return { status: "identity-mismatch", breakpoint, observed };
+      }
+      command(`bc ${breakpoint.id}`);
+      return { status: "deleted", breakpoint };
+    }
+    disassemble(address, maxInstructions) {
+      try {
+        const lines = command(`u 0x${address.toString(16)} L${Math.max(1, Math.floor(maxInstructions))}`);
+        const instructions = lines.map((line) => {
+          var _a, _b;
+          return (_b = (_a = /^\s*[0-9a-f`]+\s+[0-9a-f]+\s+(.+)$/i.exec(line)) == null ? void 0 : _a[1]) == null ? void 0 : _b.trim();
+        }).filter((line) => Boolean(line));
+        const bytes = readMemory(address, Math.max(1, Math.min(16, maxInstructions * 4)));
+        return ok({ address, bytes, instructions });
+      } catch (error2) {
+        return fail("disassembly-unavailable", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    getFingerprint(scope) {
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+      try {
+        const hostAny = host;
+        const process = (_a = hostAny.currentProcess) != null ? _a : {};
+        const thread = (_b = hostAny.currentThread) != null ? _b : {};
+        const rawModules = iterable(process.Modules);
+        const allModules = rawModules.map((item) => {
+          var _a2, _b2, _c2, _d2, _e2, _f2;
+          const module = item;
+          const base = (_a2 = bigintValue(module.BaseAddress)) != null ? _a2 : BigInt(0);
+          const end = (_b2 = bigintValue(module.EndAddress)) != null ? _b2 : base;
+          return {
+            name: String((_c2 = module.Name) != null ? _c2 : ""),
+            path: String((_e2 = (_d2 = module.Path) != null ? _d2 : module.Name) != null ? _e2 : ""),
+            base,
+            preferredBase: (_f2 = bigintValue(module.PreferredBaseAddress)) != null ? _f2 : base,
+            size: end - base,
+            timestamp: module.TimeDateStamp === void 0 ? void 0 : Number(module.TimeDateStamp),
+            checksum: module.CheckSum === void 0 ? void 0 : Number(module.CheckSum)
+          };
+        });
+        const target = scope.targetPath ? allModules.find((module) => module.path.toLowerCase() === scope.targetPath.toLowerCase()) : allModules[0];
+        const selectedNames = new Set(scope.moduleNames.map((name) => name.toLowerCase()));
+        const modules = allModules.filter((module) => module === target || selectedNames.has(module.name.toLowerCase()));
+        const incompleteReasons = [];
+        const targetSha256 = (target == null ? void 0 : target.path) ? hashFile(target.path) : void 0;
+        if (!target) incompleteReasons.push("target executable identity is unavailable");
+        if (!targetSha256) incompleteReasons.push("target executable could not be read for SHA-256");
+        const gadgets = scope.gadgetAddresses.flatMap((address) => {
+          var _a2;
+          const module = allModules.find((entry) => address >= entry.base && address < entry.base + entry.size);
+          const read = this.readMemory(address, 16);
+          if (!read.ok) {
+            incompleteReasons.push(read.error.message);
+            return [];
+          }
+          return [{ address, module: (_a2 = module == null ? void 0 : module.name) != null ? _a2 : "", rva: module ? address - module.base : address, bytes: read.value, instructions: [] }];
+        });
+        const protections = scope.protectionAddresses.flatMap((address) => {
+          const result3 = this.queryProtection(address);
+          if (!result3.ok) {
+            incompleteReasons.push(result3.error.message);
+            return [];
+          }
+          return [{ address, region: result3.value }];
+        });
+        const is64 = process.Is64Bit === true || String((_c = process.Machine) != null ? _c : "").toLowerCase().includes("64");
+        return ok({
+          processId: (_e = bigintValue((_d = process.Id) != null ? _d : process.ProcessId)) != null ? _e : BigInt(0),
+          threadId: (_g = bigintValue((_f = thread.Id) != null ? _f : thread.ThreadId)) != null ? _g : BigInt(0),
+          architecture: is64 ? "x64" : "x86",
+          pointerSize: is64 ? 8 : 4,
+          targetPath: (_i = (_h = target == null ? void 0 : target.path) != null ? _h : scope.targetPath) != null ? _i : "",
+          targetSha256,
+          complete: incompleteReasons.length === 0,
+          incompleteReasons,
+          modules,
+          gadgets,
+          protections
+        });
+      } catch (error2) {
+        return fail("fingerprint-failed", error2 instanceof Error ? error2.message : String(error2));
+      }
+    }
+    queryProtection(address) {
+      const evidence = memoryRegion(address);
+      if (evidence.baseAddress === void 0 || evidence.regionSize === void 0 || evidence.raw.protection === void 0) {
+        return fail("protection-unavailable", evidence.warnings.join("; ") || "Memory protection is unavailable.");
+      }
+      const decoded = decodeProtectValue(evidence.raw.protection);
+      return ok(__spreadValues({ base: evidence.baseAddress, size: evidence.regionSize, protect: evidence.raw.protection }, decoded));
+    }
+  };
+
   // src/semantics/rpplus-provider.ts
   function defaultSource() {
     return {
@@ -7722,7 +9177,7 @@ var osed_bundle = (() => {
   function parseRpPlusSequences(text, options = {}) {
     const lines = text.split(/\r?\n/);
     const source = __spreadValues(__spreadValues({}, defaultSource()), options.source);
-    const provenance = __spreadValues(__spreadValues({}, defaultProvenance()), options.provenance);
+    const provenance2 = __spreadValues(__spreadValues({}, defaultProvenance()), options.provenance);
     const sequences = [];
     for (const line of lines) {
       if (isBannerLine(line)) {
@@ -7749,7 +9204,7 @@ var osed_bundle = (() => {
         source,
         originalText: line.trim(),
         instructions,
-        provenance: __spreadProps(__spreadValues({}, provenance), {
+        provenance: __spreadProps(__spreadValues({}, provenance2), {
           virtualAddress: address
         })
       });
@@ -7954,7 +9409,7 @@ var osed_bundle = (() => {
   function buildSequenceFromHit(hit) {
     const instructions = hit.pattern.mnemonic.split(" ; ").map((part) => parseInstruction(part));
     const moduleInfo = findModuleByAddress(hit.address);
-    const provenance = {
+    const provenance2 = {
       module: moduleInfo == null ? void 0 : moduleInfo.name,
       section: moduleInfo ? ".text" : void 0,
       virtualAddress: Number(hit.address & BigInt(4294967295)),
@@ -7976,7 +9431,7 @@ var osed_bundle = (() => {
       source,
       originalText: hit.pattern.mnemonic,
       instructions,
-      provenance
+      provenance: provenance2
     };
   }
   function runSemanticRopSuggest(options) {
@@ -8407,7 +9862,7 @@ var osed_bundle = (() => {
   ];
   function buildSequence(address, sequence) {
     const moduleInfo = findModuleByAddress(address);
-    const provenance = {
+    const provenance2 = {
       module: moduleInfo == null ? void 0 : moduleInfo.name,
       section: moduleInfo ? ".text" : void 0,
       virtualAddress: Number(address & BigInt(4294967295)),
@@ -8429,7 +9884,7 @@ var osed_bundle = (() => {
       source,
       originalText: sequence,
       instructions: sequence.split(" ; ").map((part) => parseInstruction(part)),
-      provenance
+      provenance: provenance2
     };
   }
   function createPivotCommand() {
@@ -8706,6 +10161,19 @@ var osed_bundle = (() => {
       ]
     },
     {
+      name: "rop.prove",
+      description: "Guided debugger-backed ROP proof. Predicts one checkpoint at a time, optionally owns one one-shot breakpoint, and never resumes execution. Reports gadget execution separately from the DEP objective.",
+      usage: 'dx @$osed().rop.prove({mode?, chain?, api?, postcondition?} | {action:"status"|"cancel"|"history"|"export", orphans?, path?})',
+      examples: [
+        'dx @$osed().rop.prove({mode:"guided"})',
+        'dx @$osed().rop.prove({mode:"observe"})',
+        "dx @$osed().rop.prove()",
+        'dx @$osed().rop.prove({action:"status"})',
+        'dx @$osed().rop.prove({action:"cancel", orphans:true})',
+        'dx @$osed().rop.prove({action:"export", path:"C:\\\\notes\\\\proof.json"})'
+      ]
+    },
+    {
       name: "rop.export",
       description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
       usage: "dx @$osed().rop.export(planId, path?)",
@@ -8954,7 +10422,7 @@ var osed_bundle = (() => {
         var _a;
         const commandName = options.command;
         if (!commandName) {
-          const commands = registry2.getAll().filter((command2) => command2.name !== "rop");
+          const commands = registry2.getAll().filter((command3) => command3.name !== "rop");
           section("OSED Commands");
           table(
             [
@@ -8962,10 +10430,10 @@ var osed_bundle = (() => {
               { key: "description", header: "Description", width: 40 },
               { key: "example", header: "Example", width: 34 }
             ],
-            commands.map((command2) => ({
-              name: command2.name,
-              description: command2.description,
-              example: firstExample(command2.examples)
+            commands.map((command3) => ({
+              name: command3.name,
+              description: command3.description,
+              example: firstExample(command3.examples)
             }))
           );
           const groups = /* @__PURE__ */ new Map();
@@ -8996,12 +10464,12 @@ var osed_bundle = (() => {
             args: options,
             success: true,
             findings: [
-              ...commands.map((command2) => ({
-                name: command2.name,
-                description: command2.description,
-                usage: command2.usage,
-                examples: command2.examples,
-                schema: command2.schema
+              ...commands.map((command3) => ({
+                name: command3.name,
+                description: command3.description,
+                usage: command3.usage,
+                examples: command3.examples,
+                schema: command3.schema
               })),
               ...NAMESPACE_HELP_ENTRIES
             ],
@@ -9012,9 +10480,9 @@ var osed_bundle = (() => {
             }
           };
         }
-        const command = registry2.get(commandName);
+        const command2 = registry2.get(commandName);
         const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
-        if (!command && !helper) {
+        if (!command2 && !helper) {
           return {
             command: "help",
             args: options,
@@ -9041,7 +10509,7 @@ var osed_bundle = (() => {
             errors: []
           };
         }
-        if (!command) {
+        if (!command2) {
           return {
             command: "help",
             args: options,
@@ -9051,10 +10519,10 @@ var osed_bundle = (() => {
             errors: [`Unknown command '${commandName}'.`]
           };
         }
-        section(`Help: ${command.name}`);
-        info(command.description);
-        info(`Usage: ${command.usage}`);
-        for (const example of command.examples) {
+        section(`Help: ${command2.name}`);
+        info(command2.description);
+        info(`Usage: ${command2.usage}`);
+        for (const example of command2.examples) {
           print(`  ${example}`);
         }
         whyItMatters("Inline help prevents context switching and keeps exploit workflow focused.");
@@ -9064,16 +10532,16 @@ var osed_bundle = (() => {
           success: true,
           findings: [
             {
-              name: command.name,
-              description: command.description,
-              usage: command.usage,
-              examples: command.examples,
-              schema: command.schema
+              name: command2.name,
+              description: command2.description,
+              usage: command2.usage,
+              examples: command2.examples,
+              schema: command2.schema
             }
           ],
           warnings: [],
           errors: [],
-          schema: command.schema
+          schema: command2.schema
         };
       }
     };
@@ -9331,8 +10799,8 @@ var osed_bundle = (() => {
         } else {
           throw new Error(`Unsupported exploit mode: ${String(mode)}`);
         }
-        for (const command of commands) {
-          print(command);
+        for (const command2 of commands) {
+          print(command2);
         }
         return result2(options, commands);
       }
@@ -9398,11 +10866,11 @@ var osed_bundle = (() => {
   }
   function scanRegisters(regs, haystacks, probeBytes) {
     const matches = [];
-    for (const register of regs.all) {
-      const direct = matchRegisterValue(low32(register.value), haystacks);
+    for (const register2 of regs.all) {
+      const direct = matchRegisterValue(low32(register2.value), haystacks);
       if (direct) {
         matches.push({
-          source: register.name.toLowerCase(),
+          source: register2.name.toLowerCase(),
           type: "register",
           kind: direct.kind,
           offset: direct.offset,
@@ -9411,17 +10879,17 @@ var osed_bundle = (() => {
         });
         continue;
       }
-      if (register.value < MIN_POINTER) {
+      if (register2.value < MIN_POINTER) {
         continue;
       }
-      const buffer = tryReadMemory(register.value, probeBytes);
+      const buffer = tryReadMemory(register2.value, probeBytes);
       if (!buffer) {
         continue;
       }
       const located = locatePatternInBuffer(buffer, haystacks);
       if (located) {
         matches.push({
-          source: register.name.toLowerCase(),
+          source: register2.name.toLowerCase(),
           type: "pointer",
           kind: located.kind,
           offset: located.offset,
@@ -9617,8 +11085,8 @@ var osed_bundle = (() => {
     rsi: 6,
     rdi: 7
   };
-  function encodeJumpToRegister(kind, register) {
-    const code = REGISTER_CODE[register.trim().toLowerCase()];
+  function encodeJumpToRegister(kind, register2) {
+    const code = REGISTER_CODE[register2.trim().toLowerCase()];
     if (code === void 0) {
       return void 0;
     }
@@ -9638,12 +11106,12 @@ var osed_bundle = (() => {
     if (parts.length !== 2) {
       return void 0;
     }
-    const [mnemonic, register] = parts;
+    const [mnemonic, register2] = parts;
     if (mnemonic === "jmp" || mnemonic === "call") {
-      return encodeJumpToRegister(mnemonic, register);
+      return encodeJumpToRegister(mnemonic, register2);
     }
     if (mnemonic === "pushret" || mnemonic === "push+ret") {
-      return encodeJumpToRegister("pushret", register);
+      return encodeJumpToRegister("pushret", register2);
     }
     return void 0;
   }
@@ -12305,9 +13773,9 @@ var osed_bundle = (() => {
     }
     return chars.join("");
   }
-  function toDmlAddress(address, command) {
+  function toDmlAddress(address, command2) {
     const hex3 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command} ${hex3}">${hex3}</link>`;
+    return `<link cmd="${command2} ${hex3}">${hex3}</link>`;
   }
   function toDmlModule(name) {
     var _a;
@@ -12330,9 +13798,9 @@ var osed_bundle = (() => {
     }
     return toDmlText(symbol, `x ${moduleToken}!${symbol}`);
   }
-  function toDmlText(label, command) {
+  function toDmlText(label, command2) {
     const escapedLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    return `<link cmd="${command}">${escapedLabel}</link>`;
+    return `<link cmd="${command2}">${escapedLabel}</link>`;
   }
   function machineToString(machine) {
     switch (machine) {
@@ -12730,35 +14198,6 @@ var osed_bundle = (() => {
     };
   }
 
-  // src/semantics/live-provider.ts
-  function sequenceFromLiveHit(hit) {
-    const parts = hit.mnemonic.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
-    const instructions = parts.map((part) => parseInstruction(part));
-    const canonical = canonicalizeTextSequence(parts.join(" ; "));
-    const addressNumber = Number(hit.address);
-    return {
-      schemaVersion: SEMANTIC_SCHEMA_VERSION,
-      id: `live:${hit.address.toString(16)}:${canonical}`,
-      source: { kind: "source-adapter", name: "live", format: "windbg-memory", version: "v1" },
-      originalText: `0x${hit.address.toString(16)}: ${parts.join(" ; ")} ;`,
-      instructions,
-      provenance: {
-        module: hit.module,
-        // The full address survives in id/originalText; the numeric field is exact
-        // for realistic user-space addresses (< 2^53).
-        virtualAddress: Number.isSafeInteger(addressNumber) ? addressNumber : void 0,
-        // Discovered by scanning executable sections, so executability is proven.
-        executable: "EXACT",
-        writable: "UNKNOWN",
-        aslr: "UNKNOWN",
-        rebaseable: "UNKNOWN"
-      }
-    };
-  }
-  function sequencesFromLiveHits(hits) {
-    return [...hits].map(sequenceFromLiveHit);
-  }
-
   // src/commands/memory.ts
   function flag2(value) {
     return value === null ? "unknown" : value ? "yes" : "no";
@@ -12971,10 +14410,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-10-20T00:38:36.989Z" : globalThis[key2];
+        value = true ? "2026-10-20T02:20:35.685Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "b6564412067a" : globalThis[key2];
+        value = true ? "7b2158a97cf0" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -14025,6 +15464,8 @@ var osed_bundle = (() => {
   var corpusModules = [];
   var ropEmitter = new RankedSemanticEmitter();
   var cachedExploitState;
+  var proofSessionStore = new ProofSessionStore();
+  var lastGeneratedProofInput;
   var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
   var NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
   function buildExploitStateFromTriage(findings) {
@@ -14197,6 +15638,19 @@ var osed_bundle = (() => {
       globalObject.osed = osed;
     }
   }
+  function writeProofText(path, content) {
+    var _a, _b, _c, _d, _e, _f;
+    const hostAny = host;
+    const raw = (_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem) == null ? void 0 : _d.CreateFile) == null ? void 0 : _e.call(_d, path, "CreateAlways");
+    if (!raw) throw new Error("WinDbg host filesystem is unavailable.");
+    const file = raw;
+    if (typeof file.WriteLine !== "function") throw new Error("WinDbg host file does not support WriteLine.");
+    try {
+      for (const line of content.replace(/\r\n/g, "\n").split("\n")) file.WriteLine(line);
+    } finally {
+      (_f = file.Close) == null ? void 0 : _f.call(file);
+    }
+  }
   function registerAll() {
     const commands = [
       ...createPatternCommands(),
@@ -14229,8 +15683,8 @@ var osed_bundle = (() => {
       createHelpCommand(registry),
       createReloadCommand(registry)
     ];
-    for (const command of commands) {
-      registry.register(command);
+    for (const command2 of commands) {
+      registry.register(command2);
     }
   }
   function bindApi() {
@@ -14250,9 +15704,9 @@ var osed_bundle = (() => {
         for (const error2 of result3.errors) {
           error(error2);
         }
-        const command = registry.get(commandName);
-        if (command) {
-          info(`Usage: ${command.usage}`);
+        const command2 = registry.get(commandName);
+        if (command2) {
+          info(`Usage: ${command2.usage}`);
         }
       }
       return result3.success;
@@ -14307,7 +15761,7 @@ var osed_bundle = (() => {
           MemoryReads: formatSemanticField(gadget.semanticSummary.summary.memoryReads),
           MemoryWrites: formatSemanticField(gadget.semanticSummary.summary.memoryWrites),
           StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
-          Capabilities: gadget.capabilities.map((capability) => capability.kind).join(", "),
+          Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", "),
           Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; ")
         };
       });
@@ -14332,14 +15786,14 @@ var osed_bundle = (() => {
       });
       return toDxResult(`Help: ${name}`, rows);
     };
-    const staleCorpusGuard = (title, command) => {
+    const staleCorpusGuard = (title, command2) => {
       const stale = corpusStaleModules();
       if (stale.length === 0) return void 0;
       const detail = stale.map((s) => `${s.name} ${hex32(s.was)} -> ${s.now !== void 0 ? hex32(s.now) : "not loaded"}`).join("; ");
       const message = `Corpus is STALE \u2014 module(s) rebased since scan: ${detail}. These non-ASLR modules relocated (e.g. after a target relaunch), so the corpus's gadget addresses now point at the wrong memory. Re-run rop.scan_live(...) for them before building a chain.`;
       const rows = [{ Error: message }];
       renderRows(title, rows);
-      setResult({ command, args: {}, success: false, findings: [], warnings: [], errors: [message] });
+      setResult({ command: command2, args: {}, success: false, findings: [], warnings: [], errors: [message] });
       return toDxResult(title, rows);
     };
     const scanCorpus = (text, options = {}, badchars) => {
@@ -15078,7 +16532,7 @@ var osed_bundle = (() => {
         }).filter((target) => target.register.length > 0);
       }
       if (isPlainObject(spec)) {
-        return Object.entries(spec).map(([register, value]) => ({ register, value: Number(value) }));
+        return Object.entries(spec).map(([register2, value]) => ({ register: register2, value: Number(value) }));
       }
       return [];
     };
@@ -15089,7 +16543,7 @@ var osed_bundle = (() => {
       }
       return parsed.filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255);
     };
-    const renderFlatFrame = (command, title, options, plan) => {
+    const renderFlatFrame = (command2, title, options, plan) => {
       const python = formatChainPython(plan);
       section(title);
       info(`Words: ${plan.steps.length} | Stack: ${plan.stackBytes} bytes`);
@@ -15111,7 +16565,7 @@ var osed_bundle = (() => {
       });
       renderRows(title, rows);
       setResult({
-        command,
+        command: command2,
         args: options,
         success: plan.badcharViolations.length === 0,
         findings: [__spreadProps(__spreadValues({}, plan), { python })],
@@ -15185,31 +16639,31 @@ var osed_bundle = (() => {
       }
       const constructStale = staleCorpusGuard("Value Construction", "rop.construct");
       if (constructStale) return constructStale;
-      const register = typeof args[0] === "string" ? args[0].toLowerCase() : void 0;
+      const register2 = typeof args[0] === "string" ? args[0].toLowerCase() : void 0;
       const rawValue = args[1] !== void 0 ? Number(args[1]) : NaN;
       const value = Number.isFinite(rawValue) ? rawValue >>> 0 : void 0;
       const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
       const preserve = parseRegisterList(args[3]);
-      if (!register || value === void 0) {
+      if (!register2 || value === void 0) {
         const rows2 = [{ Error: 'rop.construct requires register and value, e.g. rop.construct("edx", 0x1000, [0x00])' }];
         renderRows("Value Construction", rows2);
-        setResult({ command: "rop.construct", args: { register, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
+        setResult({ command: "rop.construct", args: { register: register2, value }, success: false, findings: [], warnings: [], errors: ["Missing register or value."] });
         return toDxResult("Value Construction", rows2);
       }
-      const recipe = solveValue(currentRopCorpus, register, value, badchars, preserve, buildStableAddressPredicate());
+      const recipe = solveValue(currentRopCorpus, register2, value, badchars, preserve, buildStableAddressPredicate());
       if (!recipe) {
         const preserveNote = preserve.length > 0 ? ` while preserving ${preserve.join(", ")}` : "";
-        const rows2 = [{ Error: `No arithmetic construction found for ${register} = ${hex32(value)}${preserveNote}` }];
+        const rows2 = [{ Error: `No arithmetic construction found for ${register2} = ${hex32(value)}${preserveNote}` }];
         renderRows("Value Construction", rows2);
-        setResult({ command: "rop.construct", args: { register, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register} = ${hex32(value)}${preserveNote}`] });
+        setResult({ command: "rop.construct", args: { register: register2, value, badchars, preserve }, success: false, findings: [], warnings: [], errors: [`No recipe found for ${register2} = ${hex32(value)}${preserveNote}`] });
         return toDxResult("Value Construction", rows2);
       }
       recipe.steps = fixRetImmPadding(recipe.steps);
-      section(`Value Construction: ${register} = ${hex32(value)}`);
+      section(`Value Construction: ${register2} = ${hex32(value)}`);
       info(`Recipe: ${recipe.recipe} | Stack: ${recipe.stackBytes} bytes${recipe.scratchRegister ? ` | Scratch: ${recipe.scratchRegister}` : ""} | Clobbers: ${recipe.clobbers.join(", ")}`);
-      const collateral = recipe.clobbers.filter((r) => r !== register && r !== recipe.scratchRegister);
+      const collateral = recipe.clobbers.filter((r) => r !== register2 && r !== recipe.scratchRegister);
       if (collateral.length > 0) {
-        warn(`Side effect: this recipe also changes ${collateral.join(", ")} (harmless unless you need ${collateral.length > 1 ? "them" : "it"} preserved). To keep a register live, pass it as the 4th arg, e.g. rop.construct("${register}", ..., "<badchars>", "${collateral[0]}").`);
+        warn(`Side effect: this recipe also changes ${collateral.join(", ")} (harmless unless you need ${collateral.length > 1 ? "them" : "it"} preserved). To keep a register live, pass it as the 4th arg, e.g. rop.construct("${register2}", ..., "<badchars>", "${collateral[0]}").`);
       }
       const python = formatChainPython({ steps: recipe.steps });
       for (const line of python) {
@@ -15226,7 +16680,7 @@ var osed_bundle = (() => {
       renderRows("Value Construction", rows);
       setResult({
         command: "rop.construct",
-        args: { register, value, badchars },
+        args: { register: register2, value, badchars },
         success: true,
         findings: [{ recipe: recipe.recipe, steps: recipe.steps, scratchRegister: recipe.scratchRegister, stackBytes: recipe.stackBytes, clobbers: recipe.clobbers }],
         warnings: [],
@@ -16075,7 +17529,62 @@ var osed_bundle = (() => {
         warnings: allWarnings,
         errors: allErrors
       });
+      if ((chainPlan == null ? void 0 : chainPlan.success) && chainPlan.steps.length > 0) {
+        lastGeneratedProofInput = { chain: chainPlan.steps, corpus: currentRopCorpus, api: strategyName };
+      }
       return toDxResult("Exploit Builder", rows);
+    };
+    const executeRopProve = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help") return helperHelp("rop.prove");
+      const controller = new ProofController({
+        adapter: new WinDbgProofAdapter(),
+        store: proofSessionStore,
+        getDefaultInput: () => lastGeneratedProofInput,
+        getCorpus: () => currentRopCorpus,
+        writeText: writeProofText
+      });
+      const options = args.length === 0 ? void 0 : isPlainObject(args[0]) ? args[0] : {};
+      const outcome = controller.execute(options);
+      const rows = [];
+      if (outcome.error) {
+        rows.push({ Error: outcome.error });
+      } else if (outcome.history) {
+        for (const session of outcome.history) {
+          rows.push({
+            Session: session.id,
+            State: session.state,
+            Execution: session.executionStatus,
+            Objective: session.objectiveStatus,
+            Checkpoint: `${session.checkpointIndex}/${session.plan.checkpoints.length}`
+          });
+        }
+        if (rows.length === 0) rows.push({ Session: "none", State: "IDLE", Execution: "UNVERIFIED", Objective: "UNVERIFIED", Checkpoint: "0/0" });
+      } else if (outcome.session) {
+        const session = outcome.session;
+        rows.push({
+          Session: session.id,
+          State: session.state,
+          Execution: session.executionStatus,
+          Objective: session.objectiveStatus,
+          Checkpoint: `${session.checkpointIndex}/${session.plan.checkpoints.length}`,
+          Next: session.ownedBreakpoint ? `0x${session.ownedBreakpoint.address.toString(16).toUpperCase().padStart(8, "0")}` : "none",
+          Reason: session.objectiveReason
+        });
+      } else if (outcome.orphanResults) {
+        for (const result3 of outcome.orphanResults) rows.push({ Session: "orphan", State: result3.status, Execution: "UNVERIFIED", Objective: "UNVERIFIED", Checkpoint: "n/a" });
+      }
+      renderRows("ROP Proof", rows);
+      const errors = outcome.error ? [outcome.error] : [];
+      setResult({
+        command: "rop.prove",
+        args: options != null ? options : {},
+        success: outcome.success,
+        findings: [outcome],
+        warnings: ((_a = outcome.session) == null ? void 0 : _a.executionStatus) === "UNVERIFIED" ? ["Execution remains UNVERIFIED."] : [],
+        errors
+      });
+      return toDxResult("ROP Proof", rows);
     };
     const executeRopVerify = (...args) => {
       var _a, _b, _c, _d, _e, _f;
@@ -16200,9 +17709,9 @@ var osed_bundle = (() => {
       });
       return toDxResult("Chain Verifier", rows);
     };
-    for (const command of registry.getAll()) {
-      api[command.name] = (...args) => {
-        return invoke(command.name, args);
+    for (const command2 of registry.getAll()) {
+      api[command2.name] = (...args) => {
+        return invoke(command2.name, args);
       };
     }
     api.rop = {
@@ -16233,7 +17742,8 @@ var osed_bundle = (() => {
       frame_write: executeRopFrameWrite,
       slot_call: executeRopSlotCall,
       generate: executeRopGenerate,
-      verify: executeRopVerify
+      verify: executeRopVerify,
+      prove: executeRopProve
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.exploit = {
@@ -16550,11 +18060,15 @@ var osed_bundle = (() => {
     cachedExploitState = void 0;
     invalidateCorpusPlans();
     resetCorpusModules();
+    proofSessionStore = new ProofSessionStore();
+    lastGeneratedProofInput = void 0;
     registry.setReloader(() => {
       currentRopCorpus = void 0;
       cachedExploitState = void 0;
       invalidateCorpusPlans();
       resetCorpusModules();
+      proofSessionStore = new ProofSessionStore();
+      lastGeneratedProofInput = void 0;
       registerAll();
       osed = bindApi();
       publishOsed();

@@ -24,6 +24,10 @@ If you only want to see the built JavaScript do something useful, use this path:
    - `dx @$osed().rop.capabilities()`
 8. Query the loaded corpus:
    - `dx @$osed().rop.query("capability", "LOAD_REGISTER")`
+9. Prove a generated chain one debugger stop at a time:
+   - `dx @$osed().rop.generate(...)`
+   - `dx @$osed().rop.prove({mode:"guided"})`
+   - issue `g` manually, then run bare `dx @$osed().rop.prove()` at each stop
 
 That sequence shows the script’s value without requiring any prior setup beyond a live debug target.
 
@@ -61,6 +65,8 @@ That sequence shows the script’s value without requiring any prior setup beyon
 - `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")`
 - `dx @$osed().rop.query("capability", "STACK_PIVOT", true)`
 - `dx @$osed().rop.capabilities()`
+- `dx @$osed().rop.prove({mode:"guided"})`
+- `dx @$osed().rop.prove({action:"status"})`
 - `dx @$osed().sc.peb()`
 - `dx @$osed().sc.modules()`
 - `dx @$osed().sc.module_pages("kernel32")`
@@ -84,6 +90,8 @@ That sequence shows the script’s value without requiring any prior setup beyon
 For the full command matrix, see `Documentation/COMMANDS.md`.
 
 For the normative dependency and evidence rules governing `src/analysis/`, see `Documentation/ANALYSIS_ARCHITECTURE.md`.
+
+For the replay/live evidence boundary and required Windows x86 gates, see `Documentation/ROP_PROVE_WINDOWS_VALIDATION.md`. Automated tests do not substitute for those live gates.
 
 ## Troubleshooting
 

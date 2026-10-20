@@ -8,6 +8,21 @@ Companion references: [GADGET_DISCOVERY.md](GADGET_DISCOVERY.md) for finding
 specific gadgets, and [ROP_API_REFERENCE.md](ROP_API_REFERENCE.md) for API
 prototypes, constant values, and the PUSHAD register maps.
 
+## Prove the generated chain
+
+Static generation and `rop.verify()` remain hypotheses. Compare predictions with the stopped x86 target after generation:
+
+```text
+dx @$osed().rop.generate({api:"VirtualProtect", ...})
+dx @$osed().rop.prove({mode:"guided", postcondition:true})
+```
+
+The extension arms one checkpoint and stops. You issue `g` manually, then call bare `rop.prove()` to examine the stop. An unexpected breakpoint or exception is recorded without consuming the expected checkpoint. Observe mode follows the same next-checkpoint rule without installing breakpoints.
+
+At the IAT boundary the extension reads exactly four bytes from the address held in the slot register and uses the little-endian DWORD as the API-entry target. After API entry, an optional postcondition captures the real stdcall frame and waits separately for the API return. This preserves the distinction between reaching an API and observing the requested protection change.
+
+Use `status`, `history`, `cancel`, and explicit-path `export` actions to preserve evidence. Run the live gates in [ROP_PROVE_WINDOWS_VALIDATION.md](ROP_PROVE_WINDOWS_VALIDATION.md) before relying on the workflow during an exam.
+
 ## Prerequisites
 
 - WinDbg Preview with `osed.js` loaded

@@ -1,5 +1,21 @@
 # ROP API & Register Reference
 
+## Debugger-backed proof
+
+`rop.prove()` consumes the same chain representation as `rop.generate()` and predicts one meaningful transition at a time. Guided mode installs one extension-owned one-shot breakpoint; observe mode installs none. Neither mode executes `g`, `p`, or `t`.
+
+```text
+dx @$osed().rop.prove({mode:"guided"})
+g
+dx @$osed().rop.prove()
+dx @$osed().rop.prove({action:"status"})
+dx @$osed().rop.prove({action:"cancel"})
+```
+
+Bare `rop.prove()` advances only an active session. A matching EIP is checked before ESP, register, stack, and memory assertions. The first exact mismatch halts. Unknown semantics remain `UNVERIFIED`; they are never counted as matches.
+
+`executionStatus` describes the gadget path through API entry. `objectiveStatus` describes an optional post-return protection check. They are independent: verified dispatch is not a verified DEP bypass. See [ROP_PROVE_WINDOWS_VALIDATION.md](ROP_PROVE_WINDOWS_VALIDATION.md) for the live acceptance gates.
+
 A one-stop reference for the DEP-bypass / payload APIs, their C prototypes, the
 constant values you plug in, and the PUSHAD register mappings — so you do not
 have to leave the debugger to dig through notes.
