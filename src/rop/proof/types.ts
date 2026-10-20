@@ -1,4 +1,5 @@
 import type { ChainStep } from "../chain";
+import type { CapabilityIndex } from "../capabilities";
 
 export const PROOF_RECORD_SCHEMA_VERSION = "v1" as const;
 
@@ -171,6 +172,12 @@ export interface ProofPlan {
   checkpoints: ProofCheckpoint[];
   api?: string;
   incompleteReasons: string[];
+}
+
+export interface ProofPlanInput {
+  chain: string | ChainStep[];
+  corpus?: CapabilityIndex;
+  api?: string;
 }
 
 export interface ProofEvent {
