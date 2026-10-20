@@ -131,6 +131,7 @@ export type ProofValueExpression =
 export interface ProofAssertionTemplate {
   subject: string;
   expected: ProofValueExpression;
+  observed?: ProofValueExpression;
   confidence: "EXACT" | "CONSERVATIVE" | "UNKNOWN";
   evidence: string[];
   required: boolean;

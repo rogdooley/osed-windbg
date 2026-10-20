@@ -1,0 +1,64 @@
+{
+  "frames": [
+    {
+      "registers": {
+        "eip": "0x10001000",
+        "esp": "0x0012ff00",
+        "eax": "0x11111111",
+        "ebx": "0x00000000",
+        "ecx": "0x00000000",
+        "edx": "0x00000000",
+        "esi": "0x00000000",
+        "edi": "0x00000000",
+        "ebp": "0x0012fff0"
+      },
+      "memory": {},
+      "breakpoints": [],
+      "disassembly": {},
+      "protections": {},
+      "fingerprint": {
+        "processId": "0x1234",
+        "threadId": "0x55",
+        "architecture": "x86",
+        "pointerSize": 4,
+        "targetPath": "C:\\labs\\proof-target.exe",
+        "targetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "modules": [],
+        "gadgets": [],
+        "protections": []
+      }
+    },
+    {
+      "registers": {
+        "eip": "0x10002000",
+        "esp": "0x0012ff0c",
+        "eax": "0x22222222",
+        "ebx": "0x00000000",
+        "ecx": "0x00000000",
+        "edx": "0x00000000",
+        "esi": "0x00000000",
+        "edi": "0x00000000",
+        "ebp": "0x0012fff0"
+      },
+      "memory": {
+        "0x30000000": "78563412"
+      },
+      "breakpoints": [],
+      "disassembly": {},
+      "protections": {},
+      "fingerprint": {
+        "processId": "0x1234",
+        "threadId": "0x55",
+        "architecture": "x86",
+        "pointerSize": 4,
+        "targetPath": "C:\\labs\\proof-target.exe",
+        "targetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "complete": true,
+        "modules": [],
+        "gadgets": [],
+        "protections": []
+      }
+    }
+  ]
+}
