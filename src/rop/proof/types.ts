@@ -208,6 +208,10 @@ export interface ProofSession {
   objectiveReason: string;
 }
 
+export type OrphanCleanupResult =
+  | DeleteOwnedResult
+  | { status: "unsupported-marker-version"; breakpoint: BreakpointSnapshot };
+
 export interface SerializedProofAssertion {
   subject: string;
   expectedExpression: string;

@@ -24,6 +24,15 @@ interface EvaluationContext {
   adapter: ProofDebuggerAdapter;
 }
 
+export function resolveProofExpression(
+  expression: ProofValueExpression,
+  before: ProofRegisterSnapshot,
+  after: ProofRegisterSnapshot,
+  adapter: ProofDebuggerAdapter,
+): EvaluatedValue {
+  return evaluate(expression, { before, after, adapter });
+}
+
 function registerValue(snapshot: ProofRegisterSnapshot, register: string): bigint | undefined {
   const normalized = register.toLowerCase();
   if (normalized === "eip") return snapshot.eip;

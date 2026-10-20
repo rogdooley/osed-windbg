@@ -1,0 +1,15 @@
+{
+  "frames": [
+    {
+      "registers": {"eip":"0x10001000","esp":"0x0012ff00","eax":"0x20002000","ebx":"0x0","ecx":"0x0","edx":"0x0","esi":"0x0","edi":"0x0","ebp":"0x0012fff0"},
+      "memory": {"0x20002000":"78563412"},
+      "breakpoints": [], "disassembly": {}, "protections": {},
+      "fingerprint": {"processId":"0x1234","threadId":"0x55","architecture":"x86","pointerSize":4,"targetPath":"C:\\labs\\proof-target.exe","targetSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","complete":true,"modules":[],"gadgets":[],"protections":[]}
+    },
+    {
+      "registers": {"eip":"0x77777777","esp":"0x0012ff08","eax":"0x41414141","ebx":"0x0","ecx":"0x0","edx":"0x0","esi":"0x0","edi":"0x0","ebp":"0x0012fff0","exceptionCode":"0x80000003"},
+      "memory": {}, "breakpoints": [{"id":99,"address":"0x77777777","enabled":true,"oneShot":false,"command":"user-breakpoint"}], "disassembly": {}, "protections": {},
+      "fingerprint": {"processId":"0x1234","threadId":"0x55","architecture":"x86","pointerSize":4,"targetPath":"C:\\labs\\proof-target.exe","targetSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","complete":true,"modules":[],"gadgets":[],"protections":[]}
+    }
+  ]
+}
