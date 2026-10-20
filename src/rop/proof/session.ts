@@ -2,6 +2,7 @@ import type { ProofDebuggerAdapter } from "./adapter";
 import { compareCheckpoint, resolveProofExpression } from "./comparator";
 import { captureProofFingerprint, compareProofFingerprint } from "./fingerprint";
 import { ProofSessionStore } from "./store";
+import { captureStdcallFrame, evaluatePostcondition } from "./postcondition";
 import type {
   BreakpointSnapshot,
   FingerprintScope,
@@ -23,6 +24,7 @@ export interface StartProofSessionInput {
   plan: ProofPlan;
   sessionId?: string;
   nonce?: string;
+  postcondition?: boolean;
 }
 
 function fingerprintScope(plan: ProofPlan): FingerprintScope {
@@ -49,6 +51,7 @@ function ownedFrom(snapshot: BreakpointSnapshot): OwnedBreakpoint {
 
 export class ProofSessionMachine {
   private readonly priorRegisters = new Map<string, ProofRegisterSnapshot>();
+  private readonly resolvedTargets = new Map<string, bigint>();
 
   constructor(
     private readonly adapter: ProofDebuggerAdapter,
@@ -83,6 +86,7 @@ export class ProofSessionMachine {
       executionStatus: "UNVERIFIED",
       objectiveStatus: "UNVERIFIED",
       objectiveReason: "not requested",
+      postconditionRequested: input.postcondition === true,
     };
     this.store.add(session);
     this.store.appendEvent(session, "session-started", { mode: input.mode, nonce });
@@ -108,6 +112,7 @@ export class ProofSessionMachine {
   observeAndAdvance(): ProofSession {
     const session = this.store.active();
     if (!session) throw new Error("No active proof session. Start one with rop.prove({mode:\"guided\"}).");
+    if (session.state === "POSTCONDITION_ARMED") return this.observePostcondition(session);
     if (session.checkpointIndex >= session.plan.checkpoints.length) return this.complete(session);
 
     const currentFingerprint = captureProofFingerprint(fingerprintScope(session.plan), this.adapter);
@@ -123,7 +128,11 @@ export class ProofSessionMachine {
 
     const checkpoint = session.plan.checkpoints[session.checkpointIndex];
     const previous = this.priorRegisters.get(session.id) ?? this.adapter.readRegisters();
-    const target = resolveProofExpression(checkpoint.target, previous, previous, this.adapter);
+    const targetKey = `${session.id}:${checkpoint.id}`;
+    const capturedTarget = this.resolvedTargets.get(targetKey);
+    const target = capturedTarget === undefined
+      ? resolveProofExpression(checkpoint.target, previous, previous, this.adapter)
+      : { ok: true as const, value: capturedTarget };
     const observation = compareCheckpoint({
       checkpoint,
       previous,
@@ -213,6 +222,7 @@ export class ProofSessionMachine {
         target: `0x${resolved.value.toString(16)}`,
       });
     }
+    this.resolvedTargets.set(`${session.id}:${checkpoint.id}`, resolved.value);
     if (session.mode === "observe") {
       session.state = "ARMED";
       return session;
@@ -231,11 +241,68 @@ export class ProofSessionMachine {
   }
 
   private complete(session: ProofSession): ProofSession {
-    session.state = "EXECUTION_COMPLETE";
     const incomplete = !session.baselineFingerprint.complete || session.plan.incompleteReasons.length > 0 ||
       session.observations.some((observation) => observation.outcome === "UNVERIFIED");
     session.executionStatus = incomplete ? "UNVERIFIED" : "VERIFIED";
     this.store.appendEvent(session, "execution-complete", { executionStatus: session.executionStatus });
+    if (session.postconditionRequested && session.plan.api) {
+      const current = this.adapter.readRegisters();
+      const frame = captureStdcallFrame(session.plan.api, current.esp, this.adapter);
+      session.runtimeFrame = frame;
+      session.objectiveReason = frame.reason;
+      if (frame.status !== "VERIFIED" || frame.returnAddress === undefined) {
+        session.state = "EXECUTION_COMPLETE";
+        return session;
+      }
+      const marker = `${MARKER_PREFIX}v1:${session.id}:${this.sessionNonce(session)}:${session.plan.checkpoints.length}`;
+      if (session.mode === "guided") {
+        const armed = this.adapter.setOneShot(frame.returnAddress, marker);
+        if (!armed.ok) {
+          session.state = "EXECUTION_COMPLETE";
+          session.objectiveReason = armed.error.message;
+          return session;
+        }
+        session.ownedBreakpoint = armed.value;
+        this.store.appendEvent(session, "postcondition-breakpoint-armed", {
+          id: armed.value.id,
+          address: `0x${armed.value.address.toString(16)}`,
+        });
+      }
+      session.state = "POSTCONDITION_ARMED";
+      return session;
+    }
+    session.state = "EXECUTION_COMPLETE";
+    return session;
+  }
+
+  private observePostcondition(session: ProofSession): ProofSession {
+    const frame = session.runtimeFrame;
+    if (!frame || !session.plan.api) {
+      session.state = "POSTCONDITION_FAILED";
+      session.objectiveStatus = "UNVERIFIED";
+      session.objectiveReason = "captured runtime frame is unavailable";
+      return session;
+    }
+    const registers = this.adapter.readRegisters();
+    if (frame.returnAddress !== registers.eip) {
+      this.store.appendEvent(session, "postcondition-unexpected-stop", {
+        expected: frame.returnAddress === undefined ? undefined : `0x${frame.returnAddress.toString(16)}`,
+        observed: `0x${registers.eip.toString(16)}`,
+      });
+      return session;
+    }
+    if (session.ownedBreakpoint) {
+      const deleted = this.adapter.deleteOwned(session.ownedBreakpoint);
+      this.store.appendEvent(session, "postcondition-breakpoint-consumed", { status: deleted.status });
+      if (deleted.status === "identity-mismatch") return session;
+      session.ownedBreakpoint = undefined;
+    }
+    const objective = evaluatePostcondition({ api: session.plan.api }, frame, registers, this.adapter);
+    session.objectiveObservation = objective;
+    session.objectiveStatus = objective.status;
+    session.objectiveReason = objective.reason;
+    session.state = objective.status === "VERIFIED" ? "POSTCONDITION_OBSERVED" : "POSTCONDITION_FAILED";
+    this.store.appendEvent(session, "postcondition-observed", { status: objective.status, reason: objective.reason });
     return session;
   }
 

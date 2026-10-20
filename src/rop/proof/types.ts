@@ -206,11 +206,48 @@ export interface ProofSession {
   executionStatus: ProofOutcomeStatus;
   objectiveStatus: ProofOutcomeStatus;
   objectiveReason: string;
+  postconditionRequested?: boolean;
+  runtimeFrame?: RuntimeApiFrame;
+  objectiveObservation?: ObjectiveObservation;
 }
 
 export type OrphanCleanupResult =
   | DeleteOwnedResult
   | { status: "unsupported-marker-version"; breakpoint: BreakpointSnapshot };
+
+export interface DynamicDispatchResult {
+  status: ProofAssertionStatus;
+  slotAddress?: bigint;
+  target?: bigint;
+  expectedEsp?: bigint;
+  rawBytes?: Uint8Array;
+  reason: string;
+}
+
+export interface RuntimeApiFrame {
+  status: ProofAssertionStatus;
+  api: string;
+  esp: bigint;
+  returnAddress?: bigint;
+  arguments: bigint[];
+  rawBytes: Uint8Array;
+  reason: string;
+}
+
+export interface PostconditionRequest {
+  api: string;
+}
+
+export interface ObjectiveObservation {
+  status: ProofOutcomeStatus;
+  api: string;
+  returnAddress?: bigint;
+  returnValue?: bigint;
+  rangeBase?: bigint;
+  rangeSize?: bigint;
+  protections: FingerprintProtection[];
+  reason: string;
+}
 
 export interface SerializedProofAssertion {
   subject: string;
