@@ -119,6 +119,11 @@ export interface TargetFingerprint {
   protections: FingerprintProtection[];
 }
 
+export interface FingerprintComparison {
+  status: "CURRENT" | "INCOMPLETE" | "STALE_TARGET";
+  reasons: string[];
+}
+
 export type ProofValueExpression =
   | { kind: "constant"; value: bigint }
   | { kind: "register"; register: string; checkpoint: "before" | "after" }
