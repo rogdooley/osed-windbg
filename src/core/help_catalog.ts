@@ -171,12 +171,22 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "rop.generate",
-    description: "One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. All discovery is optional — pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).",
+    description: "One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. Use api: \"auto\" to enumerate all candidates and select the best. All discovery is optional — pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).",
     usage: 'dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})',
     examples: [
+      'dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
       'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
       'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})',
-      'dx @$osed().rop.generate({api: "VirtualAlloc"})',
+    ],
+  },
+  {
+    name: "rop.verify",
+    description: "Chain verifier. Inspects a generated or manually supplied ROP chain for bad characters, unresolved placeholders, stack consumption, and register side effects. Reports static validity separately from a DWORD-by-DWORD runtime trace with ESP movement and register state. Never modifies the chain — read-only analysis.",
+    usage: 'dx @$osed().rop.verify({chain?, badchars?, api?})',
+    examples: [
+      'dx @$osed().rop.verify()                                          // verify last rop.generate result',
+      'dx @$osed().rop.verify({badchars: "00 0A 0D"})                    // verify last result with explicit badchars',
+      'dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF", badchars: "00 0A 0D"})',
     ],
   },
   {

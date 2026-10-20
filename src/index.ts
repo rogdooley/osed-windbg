@@ -47,6 +47,7 @@ import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
 import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
+import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
 import { listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
@@ -1988,22 +1989,130 @@ function bindApi(): OsedApi {
       ? args[0]
       : { api: args[0], shellcode: args[1], badchars: args[2] };
 
-    const strategyName = normalizeExploitStrategy(String(options.api ?? "VirtualAlloc"));
-    if (
-      !strategyName ||
-      strategyName === "Stack Pivot" ||
-      strategyName === "LoadLibraryA" ||
-      strategyName === "GetProcAddress"
-    ) {
-      const rows = [{
-        Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, and Ex variants. Got: " + String(options.api ?? "(none)"),
-      }];
-      renderRows("Exploit Builder", rows);
-      return toDxResult("Exploit Builder", rows);
+    const SUPPORTED_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "WinExec", "VirtualProtectEx", "VirtualAllocEx"];
+    const DEP_BYPASS_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx"];
+
+    // IAT slot discovery helper — returns slot address or undefined.
+    // sc.iat_find returns a DxResult directly (not through setResult/lastResult),
+    // so we read the Slot field from the returned DxResult's rows.
+    const discoverIatSlot = (apiName: string): number | undefined => {
+      const iatName = API_IAT_NAMES[apiName];
+      if (!iatName) return undefined;
+      try {
+        const scNs = api.sc as Record<string, (...a: unknown[]) => unknown> | undefined;
+        if (scNs && typeof scNs.iat_find === "function") {
+          const dxResult = scNs.iat_find(iatName) as { rows?: { length: number; [i: number]: Record<string, string> } } | undefined;
+          if (dxResult?.rows && dxResult.rows.length > 0) {
+            const firstRow = dxResult.rows[0];
+            const slotStr = String((firstRow as Record<string, string>).Slot ?? "");
+            const match = /0x([0-9a-fA-F]+)/i.exec(slotStr);
+            if (match) return parseInt(match[1], 16) >>> 0;
+          }
+        }
+      } catch { /* not available */ }
+      return undefined;
+    };
+
+    // Badchar check on a DWORD
+    const isDwordBadcharFree = (value: number, bad: number[]): boolean => {
+      if (bad.length === 0) return true;
+      const badSet = new Set(bad.map(b => b & 0xff));
+      const v = value >>> 0;
+      for (let i = 0; i < 4; i++) if (badSet.has((v >>> (i * 8)) & 0xff)) return false;
+      return true;
+    };
+
+    const badchars = parseBadcharsOption(options.badchars);
+    const isAutoApi = String(options.api ?? "").toLowerCase() === "auto";
+
+    // ── API auto-selection ───────────────────────────────────────────────
+    let strategyName: string | undefined;
+
+    if (isAutoApi) {
+      out.section("API Auto-Selection");
+      out.info("Evaluating DEP bypass candidates...");
+
+      interface ApiCandidate {
+        api: string;
+        iatSlot?: number;
+        slotClean: boolean;
+        argCount: number;
+        reason: string;
+        score: number;
+      }
+      const candidates: ApiCandidate[] = [];
+
+      for (const apiName of DEP_BYPASS_APIS) {
+        const slot = discoverIatSlot(apiName);
+        const argCount = { VirtualProtect: 4, VirtualAlloc: 4, WriteProcessMemory: 5, VirtualProtectEx: 5, VirtualAllocEx: 5, WinExec: 2 }[apiName] ?? 0;
+        const slotClean = slot !== undefined ? isDwordBadcharFree(slot, badchars) : false;
+
+        let score = 0;
+        const reasons: string[] = [];
+
+        if (slot !== undefined) {
+          score += 50;
+          reasons.push("IAT slot found");
+          if (slotClean) {
+            score += 20;
+            reasons.push("slot address badchar-free");
+          } else {
+            score -= 10;
+            reasons.push("slot address contains badchar(s)");
+          }
+        } else {
+          reasons.push("IAT slot NOT found");
+        }
+
+        // Prefer simpler APIs (fewer args = shorter chain = less room for error)
+        score += Math.max(0, 10 - argCount * 2);
+        if (argCount <= 4) reasons.push(`${argCount} args (compact frame)`);
+        else reasons.push(`${argCount} args`);
+
+        // VirtualAlloc is most commonly taught/used in OSED
+        if (apiName === "VirtualAlloc") { score += 5; reasons.push("preferred default"); }
+
+        // Ex variants are less common in imports
+        if (apiName.endsWith("Ex")) { score -= 5; reasons.push("Ex variant (less common)"); }
+
+        candidates.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
+      }
+
+      // Sort by score descending
+      candidates.sort((a, b) => b.score - a.score);
+
+      // Report all candidates
+      for (const c of candidates) {
+        const status = c.iatSlot !== undefined
+          ? `${hex32(c.iatSlot)}${c.slotClean ? "" : " [BADCHAR]"}`
+          : "not found";
+        const marker = c === candidates[0] ? " ← SELECTED" : "";
+        out.info(`  ${c.api.padEnd(20)} IAT: ${status.padEnd(24)} Score: ${String(c.score).padStart(3)}  (${c.reason})${marker}`);
+      }
+
+      const best = candidates[0];
+      if (best.iatSlot === undefined) {
+        out.warn("No API found in IAT. The selected candidate will require a manual iatSlot override.");
+      }
+      strategyName = best.api;
+      out.info(`Selected: ${strategyName} (score ${best.score})`);
+    } else {
+      strategyName = normalizeExploitStrategy(String(options.api ?? "VirtualAlloc"));
+      if (
+        !strategyName ||
+        strategyName === "Stack Pivot" ||
+        strategyName === "LoadLibraryA" ||
+        strategyName === "GetProcAddress"
+      ) {
+        const rows = [{
+          Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, Ex variants, or 'auto'. Got: " + String(options.api ?? "(none)"),
+        }];
+        renderRows("Exploit Builder", rows);
+        return toDxResult("Exploit Builder", rows);
+      }
     }
 
     const shellcodeHex = String(options.shellcode ?? "");
-    const badchars = parseBadcharsOption(options.badchars);
     const entrySkew = Number(options.entrySkew ?? 0);
     const pythonLines: string[] = [];
     const allWarnings: string[] = [];
@@ -2017,25 +2126,10 @@ function bindApi(): OsedApi {
       iatSlotAddr = Number(options.iatSlot) >>> 0;
       out.info(`IAT slot: ${hex32(iatSlotAddr)} (user-supplied)`);
     } else {
-      const iatName = API_IAT_NAMES[strategyName];
-      if (iatName) {
-        try {
-          const scNs = api.sc as Record<string, (...a: unknown[]) => unknown> | undefined;
-          if (scNs && typeof scNs.iat_find === "function") {
-            const iatResult = scNs.iat_find(iatName);
-            if (lastResult && lastResult.success && lastResult.findings.length > 0) {
-              const firstRow = lastResult.findings[0] as Record<string, unknown>;
-              const slotStr = String(firstRow.Slot ?? firstRow.slot ?? "");
-              const match = /0x([0-9a-fA-F]+)/.exec(slotStr);
-              if (match) {
-                iatSlotAddr = parseInt(match[1], 16) >>> 0;
-                out.info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${iatName})`);
-              }
-            }
-          }
-        } catch { /* fall through to placeholder */ }
-      }
-      if (iatSlotAddr === undefined) {
+      iatSlotAddr = discoverIatSlot(strategyName);
+      if (iatSlotAddr !== undefined) {
+        out.info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${strategyName})`);
+      } else {
         allWarnings.push(`Could not auto-discover IAT slot for ${strategyName}. Pass iatSlot manually, or run: dx @$osed().sc.iat_find("${strategyName}")`);
         out.warn(`IAT slot not found — use iatSlot parameter or run sc.iat_find("${strategyName}")`);
       }
@@ -2044,7 +2138,9 @@ function bindApi(): OsedApi {
     // --- Step 2: Resolve writable buffer address ---
     let bufAddr: string | undefined;
     if (options.buf !== undefined) {
-      bufAddr = String(options.buf).trim();
+      bufAddr = typeof options.buf === "number"
+        ? `0x${(options.buf >>> 0).toString(16).padStart(8, "0")}`
+        : String(options.buf).trim();
       out.info(`Buffer: ${bufAddr} (user-supplied)`);
     } else {
       try {
@@ -2054,13 +2150,20 @@ function bindApi(): OsedApi {
           maxResults: 5,
         });
         if (cavesResult.success && cavesResult.findings.length > 0) {
-          const cave = cavesResult.findings[0] as Record<string, unknown>;
-          const caveAddr = String(cave.address ?? "");
-          const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
-          if (addrMatch) {
-            bufAddr = `0x${addrMatch[1]}`;
-            const caveSize = cave.size ?? "?";
-            out.info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${cave.module ?? "?"})`);
+          const cave = cavesResult.findings.find(
+            (c) => (c as Record<string, unknown>).writable === true,
+          ) as Record<string, unknown> | undefined;
+          if (cave) {
+            const caveAddr = String(cave.address ?? "");
+            const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
+            if (addrMatch) {
+              bufAddr = `0x${addrMatch[1]}`;
+              const caveSize = cave.size ?? "?";
+              out.info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${cave.module ?? "?"})`);
+            }
+          } else {
+            allWarnings.push("Code caves found but none confirmed writable. Pass buf address, or verify with !vprot.");
+            out.warn("Code caves found but none writable — use buf parameter or verify with !vprot");
           }
         }
       } catch { /* fall through */ }
@@ -2089,7 +2192,9 @@ function bindApi(): OsedApi {
 
     let retAddrWord: FrameWord;
     if (options.retAddr !== undefined) {
-      const ra = String(options.retAddr).trim();
+      const ra = typeof options.retAddr === "number"
+        ? `0x${(options.retAddr >>> 0).toString(16)}`
+        : String(options.retAddr).trim();
       if (/^(0x)?[0-9a-fA-F]+$/.test(ra)) {
         retAddrWord = { value: parseInt(ra.replace(/^0x/i, ""), 16) >>> 0, comment: "return address (user-supplied)" };
       } else {
@@ -2287,13 +2392,177 @@ function bindApi(): OsedApi {
     renderRows("Exploit Builder", rows);
     setResult({
       command: "rop.generate",
-      args: options,
+      args: { ...options, resolvedApi: strategyName },
       success: (chainPlan?.success ?? false) && allErrors.length === 0,
       findings: [{ python: pythonLines, chain: chainPlan, encode: encodeResult }],
       warnings: allWarnings,
       errors: allErrors,
     });
     return toDxResult("Exploit Builder", rows);
+  };
+
+  // ── rop.verify ─────────────────────────────────────────────────────────
+
+  const executeRopVerify = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") {
+      return helperHelp("rop.verify");
+    }
+
+    const options = isPlainObject(args[0]) ? args[0] : {};
+    const badchars = parseBadcharsOption(options.badchars ?? (lastResult?.args as Record<string, unknown> | undefined)?.badchars);
+
+    // Determine the chain to verify: manual chain string, or last rop.generate result
+    let steps: import("./rop/chain").ChainStep[];
+    let sourceLabel: string;
+
+    if (typeof options.chain === "string" && options.chain.trim().length > 0) {
+      steps = parseManualChain(options.chain);
+      sourceLabel = `manual chain (${steps.length} DWORDs)`;
+    } else if (
+      lastResult?.command === "rop.generate" &&
+      lastResult.success &&
+      lastResult.findings.length > 0
+    ) {
+      const genResult = lastResult.findings[0] as Record<string, unknown>;
+      const chainPlan = genResult.chain as { steps: import("./rop/chain").ChainStep[] } | undefined;
+      if (chainPlan?.steps && chainPlan.steps.length > 0) {
+        steps = chainPlan.steps;
+        sourceLabel = `last rop.generate result (${steps.length} DWORDs)`;
+      } else {
+        const rows = [{ Error: "Last rop.generate did not produce a complete chain. Supply a manual chain or re-run rop.generate." }];
+        renderRows("Chain Verifier", rows);
+        return toDxResult("Chain Verifier", rows);
+      }
+    } else {
+      const rows = [{ Error: "No chain to verify. Run rop.generate first, or pass {chain: \"ADDR1 ADDR2 ...\"}" }];
+      renderRows("Chain Verifier", rows);
+      return toDxResult("Chain Verifier", rows);
+    }
+
+    const api_name = options.api
+      ? String(options.api)
+      : lastResult?.command === "rop.generate"
+        ? String((lastResult.args as Record<string, unknown>)?.resolvedApi ?? "") || undefined
+        : undefined;
+    const report: VerificationReport = verifyChain({
+      steps,
+      badchars,
+      api: api_name,
+      corpus: currentRopCorpus ?? undefined,
+      expectedArgCount: options.expectedArgCount ? Number(options.expectedArgCount) : undefined,
+    });
+
+    // ── Format output ──────────────────────────────────────────────────
+    out.section(`Chain Verifier — ${sourceLabel}`);
+
+    // Static report
+    out.section("Static Analysis");
+    out.info(`DWORDs: ${report.static.dwordCount}  |  Stack: ${report.static.totalStackBytes} bytes  |  Alignment: ${report.static.alignment}`);
+
+    if (report.static.badcharHits.length > 0) {
+      out.error(`Bad character violations: ${report.static.badcharHits.length}`);
+      for (const hit of report.static.badcharHits) {
+        out.error(`  [${hit.stepIndex}] ${hit.dwordHex} — byte ${hit.bytePosition} = 0x${hit.byte.toString(16).padStart(2, "0")} @ offset ${hit.byteOffset} — ${hit.comment}`);
+      }
+    } else if (badchars.length > 0) {
+      out.info("Bad characters: CLEAN — no violations found");
+    }
+
+    if (report.static.unresolvedPlaceholders.length > 0) {
+      out.warn(`Unresolved placeholders: ${report.static.unresolvedPlaceholders.length}`);
+      for (const p of report.static.unresolvedPlaceholders) {
+        out.warn(`  [${p.stepIndex}] ${p.placeholder} @ offset ${p.byteOffset} — ${p.comment}`);
+      }
+    }
+
+    if (report.static.frameCheck) {
+      const fc = report.static.frameCheck;
+      if (fc.status === "ok") {
+        out.info(`Frame check: ${fc.detail}`);
+      } else if (fc.status === "not_checked") {
+        out.warn(`Frame check: ${fc.detail}`);
+      } else if (fc.status === "unknown_api") {
+        out.warn(`Frame check: ${fc.detail}`);
+      } else {
+        out.error(`Frame check FAILED: ${fc.detail}`);
+      }
+    }
+
+    for (const a of report.static.assumptions) {
+      out.info(`  Assumption: ${a}`);
+    }
+
+    // Runtime trace
+    out.section("Runtime Trace");
+    if (!report.runtime.available) {
+      out.warn(report.runtime.reason ?? "Runtime trace unavailable");
+    } else {
+      // DWORD-by-DWORD trace table
+      out.info("ESP+Off  | DWORD      | Action                                           | Side Effects");
+      out.info("---------|------------|--------------------------------------------------|---------------------------");
+      for (const t of report.runtime.trace) {
+        const espCol = `ESP+${t.espOffset.toString(16).padStart(4, "0").toUpperCase()}`;
+        const effects = t.sideEffects.length > 0 ? t.sideEffects.join("; ") : "";
+        out.info(`${espCol.padEnd(9)}| ${t.dwordHex.padEnd(11)}| ${t.action.substring(0, 49).padEnd(49)}| ${effects}`);
+        for (const note of t.notes) {
+          out.info(`         |            |   ${note}`);
+        }
+      }
+
+      // Register state at end
+      out.section("Final Register State");
+      const regs = report.runtime.finalRegisters;
+      const regOrder = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+      for (const reg of regOrder) {
+        if (regs[reg] !== undefined && regs[reg] !== "?") {
+          out.info(`  ${reg.toUpperCase()} = ${regs[reg]}`);
+        }
+      }
+
+      // Register clobber warnings
+      if (report.runtime.registerClobbers.length > 0) {
+        out.section("Register Clobber Warnings");
+        for (const c of report.runtime.registerClobbers) {
+          out.warn(`  ${c}`);
+        }
+      }
+
+      for (const a of report.runtime.assumptions) {
+        out.info(`  Assumption: ${a}`);
+      }
+    }
+
+    // Summary row — three-state: PASS (all checks ran and passed),
+    // INCOMPLETE (checks clean but frame not validated), FAIL (a check failed)
+    const hasNotChecked = report.static.frameCheck?.status === "not_checked";
+    const staticStatus = !report.static.valid ? "FAIL"
+      : hasNotChecked ? "INCOMPLETE"
+      : "PASS";
+    const runtimeStatus = report.runtime.available
+      ? (report.runtime.registerClobbers.length > 0 ? "WARN" : "OK")
+      : "N/A";
+
+    const rows = [{
+      Source: sourceLabel,
+      DWORDs: String(report.static.dwordCount),
+      Stack: `${report.static.totalStackBytes} bytes`,
+      Badchars: report.static.badcharHits.length > 0
+        ? `${report.static.badcharHits.length} VIOLATION(S)`
+        : badchars.length > 0 ? "clean" : "not checked",
+      Placeholders: String(report.static.unresolvedPlaceholders.length),
+      Static: staticStatus,
+      Runtime: runtimeStatus,
+    }];
+    renderRows("Chain Verifier", rows);
+    setResult({
+      command: "rop.verify",
+      args: options,
+      success: report.static.valid && !hasNotChecked,
+      findings: [report],
+      warnings: report.static.badcharHits.map(h => `Badchar 0x${h.byte.toString(16).padStart(2, "0")} in ${h.dwordHex} at step ${h.stepIndex}`),
+      errors: [],
+    });
+    return toDxResult("Chain Verifier", rows);
   };
 
   for (const command of registry.getAll()) {
@@ -2330,6 +2599,7 @@ function bindApi(): OsedApi {
     frame_write: executeRopFrameWrite,
     slot_call: executeRopSlotCall,
     generate: executeRopGenerate,
+    verify: executeRopVerify,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 

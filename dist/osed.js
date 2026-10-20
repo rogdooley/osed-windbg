@@ -6366,6 +6366,424 @@ var osed_bundle = (() => {
     }
   }
 
+  // src/rop/chain_verifier.ts
+  function hex323(v) {
+    return `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+  function dwordBytes(value) {
+    const v = value >>> 0;
+    return [v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255];
+  }
+  function resolveStepDword(step) {
+    if (step.kind === "gadget" && step.address !== void 0) return Number(step.address) >>> 0;
+    if (step.value !== void 0) return step.value >>> 0;
+    return void 0;
+  }
+  function stepDwordHex(step) {
+    const v = resolveStepDword(step);
+    return v !== void 0 ? hex323(v) : "????????";
+  }
+  function analyzeStatic(input) {
+    var _a, _b;
+    const { steps, badchars } = input;
+    const badSet = new Set(badchars.map((b) => b & 255));
+    const hits = [];
+    const unresolved = [];
+    const assumptions = [];
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const byteOffset = i * 4;
+      if (step.placeholder) {
+        unresolved.push({
+          stepIndex: i,
+          byteOffset,
+          placeholder: step.placeholder,
+          comment: step.comment
+        });
+        continue;
+      }
+      const dword = resolveStepDword(step);
+      if (dword === void 0) continue;
+      if (badSet.size > 0) {
+        const bytes = dwordBytes(dword);
+        for (let pos = 0; pos < 4; pos++) {
+          if (badSet.has(bytes[pos])) {
+            hits.push({
+              stepIndex: i,
+              byteOffset: byteOffset + pos,
+              byte: bytes[pos],
+              bytePosition: pos,
+              dwordHex: hex323(dword),
+              comment: step.comment
+            });
+          }
+        }
+      }
+    }
+    const totalBytes = steps.length * 4;
+    const aligned = totalBytes % 4 === 0;
+    let frameCheck;
+    if (input.api || input.expectedArgCount !== void 0) {
+      const apiName = (_a = input.api) != null ? _a : "";
+      const knownArgCount = (_b = input.expectedArgCount) != null ? _b : STDCALL_ARG_COUNT[apiName];
+      if (knownArgCount === void 0) {
+        frameCheck = {
+          api: apiName,
+          expectedArgCount: 0,
+          expectedFrameWords: 0,
+          status: "unknown_api",
+          detail: `Unknown API "${apiName}" \u2014 cannot validate frame structure. Known APIs: ${Object.keys(STDCALL_ARG_COUNT).join(", ")}`
+        };
+      } else {
+        const expectedWords = 1 + knownArgCount;
+        const hasGadgets = steps.some((s) => s.kind === "gadget");
+        if (hasGadgets) {
+          frameCheck = {
+            api: apiName,
+            expectedArgCount: knownArgCount,
+            expectedFrameWords: expectedWords,
+            status: "not_checked",
+            detail: `${apiName} expects ${expectedWords} frame words (1 retaddr + ${knownArgCount} args); chain contains gadget machinery \u2014 frame word count not verifiable from flat steps, verify against builder output`
+          };
+        } else {
+          const actualCount = steps.length;
+          let status;
+          let detail;
+          if (actualCount < expectedWords) {
+            status = "too_few";
+            detail = `${apiName} requires ${expectedWords} frame words (1 retaddr + ${knownArgCount} args), but chain has ${actualCount}`;
+          } else if (actualCount > expectedWords) {
+            status = "too_many";
+            detail = `${apiName} requires ${expectedWords} frame words (1 retaddr + ${knownArgCount} args), but chain has ${actualCount}`;
+          } else {
+            status = "ok";
+            detail = `Frame matches ${apiName}: ${expectedWords} words (1 retaddr + ${knownArgCount} args)`;
+          }
+          frameCheck = { api: apiName, expectedArgCount: knownArgCount, expectedFrameWords: expectedWords, status, detail };
+        }
+      }
+    }
+    if (badchars.length === 0) {
+      assumptions.push("No bad characters specified \u2014 byte-level check skipped");
+    } else {
+      assumptions.push(`Bad characters: ${badchars.map((b) => `0x${(b & 255).toString(16).padStart(2, "0")}`).join(" ")}`);
+    }
+    if (unresolved.length > 0) {
+      assumptions.push(`${unresolved.length} placeholder(s) must be resolved before deployment`);
+    }
+    const gadgetSteps = steps.filter((s) => s.kind === "gadget");
+    if (gadgetSteps.length > 0) {
+      assumptions.push(`${gadgetSteps.length} gadget address(es) assumed stable (non-ASLR module, preferred base)`);
+    }
+    const frameOk = !frameCheck || frameCheck.status === "ok" || frameCheck.status === "not_checked";
+    return {
+      valid: hits.length === 0 && unresolved.length === 0 && aligned && frameOk,
+      dwordCount: steps.length,
+      totalStackBytes: totalBytes,
+      alignment: aligned ? "aligned" : "misaligned",
+      badcharHits: hits,
+      unresolvedPlaceholders: unresolved,
+      frameCheck,
+      assumptions
+    };
+  }
+  function lookupGadgetByAddress(corpus, address) {
+    for (const g of corpus.gadgets) {
+      for (const loc of g.locations) {
+        if (loc.virtualAddress !== void 0 && BigInt(loc.virtualAddress) === address) {
+          return g;
+        }
+      }
+    }
+    return void 0;
+  }
+  function cloneRegs(regs) {
+    return __spreadValues({}, regs);
+  }
+  var X86_REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+  function simulateGadget(gadget, regs, steps, currentIndex) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    const sideEffects = [];
+    const popTargets = [];
+    let consumed = 0;
+    for (const instr of gadget.instructions) {
+      const m = instr.mnemonic.toLowerCase();
+      const ops = instr.operands.map((o) => o.trim().toLowerCase());
+      if (m === "ret") {
+        break;
+      }
+      if (m === "pop") {
+        const reg = ops[0];
+        if (reg && X86_REGS.includes(reg)) {
+          consumed++;
+          const targetIdx = currentIndex + consumed;
+          if (targetIdx < steps.length) {
+            const targetStep = steps[targetIdx];
+            const val = resolveStepDword(targetStep);
+            regs[reg] = val !== void 0 ? hex323(val) : (_a = targetStep.placeholder) != null ? _a : "?";
+            popTargets.push({ reg, stepIndex: targetIdx });
+          } else {
+            regs[reg] = "? (past end of chain)";
+            sideEffects.push(`pop ${reg} reads past chain end`);
+          }
+        }
+      } else if (m === "xchg") {
+        const [a, b] = ops;
+        if (a && b && X86_REGS.includes(a) && X86_REGS.includes(b)) {
+          const tmp = (_b = regs[a]) != null ? _b : "?";
+          regs[a] = (_c = regs[b]) != null ? _c : "?";
+          regs[b] = tmp;
+          sideEffects.push(`xchg ${a}, ${b}`);
+        }
+      } else if (m === "mov") {
+        const dst = ops[0];
+        const src = ops[1];
+        if (dst && src) {
+          if (X86_REGS.includes(dst) && X86_REGS.includes(src)) {
+            regs[dst] = (_d = regs[src]) != null ? _d : "?";
+            sideEffects.push(`${dst} \u2190 ${src} (${(_e = regs[src]) != null ? _e : "?"})`);
+          } else if (X86_REGS.includes(dst)) {
+            const match = /\[(e[a-z]{2})\]/.exec(src);
+            if (match) {
+              const ptrReg = match[1];
+              regs[dst] = `*[${(_f = regs[ptrReg]) != null ? _f : ptrReg}]`;
+              sideEffects.push(`${dst} \u2190 *[${ptrReg}] (runtime deref)`);
+            } else {
+              regs[dst] = "?";
+            }
+          } else {
+            const dstMatch = /\[(e[a-z]{2})\]/.exec(dst);
+            if (dstMatch && X86_REGS.includes(src)) {
+              sideEffects.push(`*[${dstMatch[1]}] \u2190 ${src} (${(_g = regs[src]) != null ? _g : "?"})`);
+            }
+          }
+        }
+      } else if (m === "add" || m === "sub") {
+        const reg = ops[0];
+        if (reg && X86_REGS.includes(reg)) {
+          const immMatch = /^(?:0x)?([0-9a-f]+)$/i.exec((_h = ops[1]) != null ? _h : "");
+          if (immMatch && regs[reg] && /^0x[0-9A-F]+$/i.test(regs[reg])) {
+            const current = parseInt(regs[reg].replace(/^0x/i, ""), 16) >>> 0;
+            const imm = parseInt(immMatch[1], 16) >>> 0;
+            const result3 = m === "add" ? current + imm >>> 0 : current - imm >>> 0;
+            regs[reg] = hex323(result3);
+          } else {
+            regs[reg] = "?";
+          }
+          sideEffects.push(`${m} ${reg}, ${ops[1]}`);
+        }
+      } else if (m === "xor") {
+        const [a, b] = ops;
+        if (a === b && X86_REGS.includes(a)) {
+          regs[a] = hex323(0);
+          sideEffects.push(`${a} \u2190 0 (xor self)`);
+        } else if (a && X86_REGS.includes(a)) {
+          regs[a] = "?";
+          sideEffects.push(`xor ${a}, ${b} (clobber)`);
+        }
+      } else if (m === "neg" || m === "not" || m === "inc" || m === "dec") {
+        const reg = ops[0];
+        if (reg && X86_REGS.includes(reg)) {
+          if (regs[reg] && /^0x[0-9A-F]+$/i.test(regs[reg])) {
+            const v = parseInt(regs[reg].replace(/^0x/i, ""), 16) >>> 0;
+            let result3;
+            if (m === "neg") result3 = -v >>> 0;
+            else if (m === "not") result3 = ~v >>> 0;
+            else if (m === "inc") result3 = v + 1 >>> 0;
+            else result3 = v - 1 >>> 0;
+            regs[reg] = hex323(result3);
+          } else {
+            regs[reg] = "?";
+          }
+          sideEffects.push(`${m} ${reg}`);
+        }
+      } else if (m === "jmp") {
+        sideEffects.push(`jmp ${ops[0]} (dispatch)`);
+        break;
+      } else if (m === "push") {
+        if (ops[0] && X86_REGS.includes(ops[0])) {
+          sideEffects.push(`push ${ops[0]} (${(_i = regs[ops[0]]) != null ? _i : "?"})`);
+        }
+      } else if (m === "nop" || m === "int3") {
+      } else {
+        if (ops[0] && X86_REGS.includes(ops[0])) {
+          sideEffects.push(`${instr.originalText} (may clobber ${ops[0]})`);
+        }
+      }
+    }
+    return { consumed, sideEffects, popTargets };
+  }
+  function analyzeRuntime(input) {
+    var _a, _b;
+    const { steps, corpus } = input;
+    if (!corpus) {
+      return {
+        available: false,
+        reason: "No ROP corpus loaded \u2014 runtime trace requires gadget instruction data. Load a corpus with rop.scan() first.",
+        trace: [],
+        finalRegisters: {},
+        registerClobbers: [],
+        assumptions: []
+      };
+    }
+    const regs = {};
+    for (const r of X86_REGS) regs[r] = "?";
+    const trace = [];
+    const assumptions = [];
+    const registerWrites = /* @__PURE__ */ new Map();
+    let i = 0;
+    while (i < steps.length) {
+      const step = steps[i];
+      const espOffset = i * 4;
+      const dword = stepDwordHex(step);
+      if (step.placeholder) {
+        trace.push({
+          stepIndex: i,
+          espOffset,
+          dwordHex: "????????",
+          action: `PLACEHOLDER: ${step.placeholder}`,
+          kind: "placeholder",
+          registersAfter: cloneRegs(regs),
+          sideEffects: [],
+          notes: [`Unresolved: ${step.placeholder} \u2014 ${step.comment}`]
+        });
+        i++;
+        continue;
+      }
+      if (step.kind === "gadget" && step.address !== void 0) {
+        const gadget = lookupGadgetByAddress(corpus, step.address);
+        const instrText = gadget ? gadget.instructions.map((ins) => ins.normalizedText || ins.originalText).join(" ; ") : "? (not in corpus)";
+        if (!gadget) {
+          trace.push({
+            stepIndex: i,
+            espOffset,
+            dwordHex: dword,
+            action: `GADGET: ${dword} \u2014 ${step.comment}`,
+            kind: "gadget",
+            registersAfter: cloneRegs(regs),
+            sideEffects: [],
+            notes: [`Address ${dword} not found in corpus \u2014 cannot trace instructions`]
+          });
+          assumptions.push(`Gadget at ${dword} not in corpus; register effects unknown from step ${i} onward`);
+          i++;
+          continue;
+        }
+        const { consumed, sideEffects, popTargets } = simulateGadget(gadget, regs, steps, i);
+        for (const { reg, stepIndex } of popTargets) {
+          const writes = (_a = registerWrites.get(reg)) != null ? _a : [];
+          writes.push(stepIndex);
+          registerWrites.set(reg, writes);
+        }
+        for (const effect of sideEffects) {
+          const match = /^(e[a-z]{2}) ←/.exec(effect);
+          if (match) {
+            const writes = (_b = registerWrites.get(match[1])) != null ? _b : [];
+            writes.push(i);
+            registerWrites.set(match[1], writes);
+          }
+        }
+        trace.push({
+          stepIndex: i,
+          espOffset,
+          dwordHex: dword,
+          action: `GADGET: ${instrText}`,
+          kind: "gadget",
+          registersAfter: cloneRegs(regs),
+          sideEffects,
+          notes: []
+        });
+        for (let p = 0; p < consumed; p++) {
+          const opIdx = i + 1 + p;
+          if (opIdx < steps.length) {
+            trace.push({
+              stepIndex: opIdx,
+              espOffset: opIdx * 4,
+              dwordHex: stepDwordHex(steps[opIdx]),
+              action: `POP operand for: ${step.comment}`,
+              kind: "pop-operand",
+              registersAfter: cloneRegs(regs),
+              sideEffects: [],
+              notes: [steps[opIdx].comment]
+            });
+          }
+        }
+        const lastInstr = gadget.instructions[gadget.instructions.length - 1];
+        if ((lastInstr == null ? void 0 : lastInstr.mnemonic) === "ret" && lastInstr.operands.length > 0) {
+          const retN = parseInt(lastInstr.operands[0].replace(/^0x/i, ""), 16);
+          if (retN > 0) {
+            const padCount = Math.floor(retN / 4);
+            for (let p = 0; p < padCount; p++) {
+              const padIdx = i + 1 + consumed + p;
+              if (padIdx < steps.length) {
+                trace.push({
+                  stepIndex: padIdx,
+                  espOffset: padIdx * 4,
+                  dwordHex: stepDwordHex(steps[padIdx]),
+                  action: `PADDING (ret ${retN} skip)`,
+                  kind: "padding",
+                  registersAfter: cloneRegs(regs),
+                  sideEffects: [],
+                  notes: []
+                });
+              }
+            }
+            i += 1 + consumed + padCount;
+            continue;
+          }
+        }
+        i += 1 + consumed;
+        continue;
+      }
+      const isPadding = step.comment.startsWith("padding (ret ");
+      trace.push({
+        stepIndex: i,
+        espOffset,
+        dwordHex: dword,
+        action: isPadding ? `PADDING: ${step.comment}` : `VALUE: ${step.comment}`,
+        kind: isPadding ? "padding" : "frame-value",
+        registersAfter: cloneRegs(regs),
+        sideEffects: [],
+        notes: []
+      });
+      i++;
+    }
+    const clobbers = [];
+    for (const [reg, writes] of registerWrites) {
+      if (writes.length > 1) {
+        clobbers.push(`${reg} set ${writes.length} times (steps ${writes.join(", ")}) \u2014 verify intended value survives to use`);
+      }
+    }
+    assumptions.push("Trace assumes linear execution: no conditional branches taken");
+    assumptions.push("Register state before chain entry is unknown (shown as '?')");
+    if (steps.some((s) => s.kind === "gadget" && s.address !== void 0 && !lookupGadgetByAddress(corpus, s.address))) {
+      assumptions.push("Some gadget addresses not found in corpus \u2014 trace may be incomplete");
+    }
+    return {
+      available: true,
+      trace,
+      finalRegisters: cloneRegs(regs),
+      registerClobbers: clobbers,
+      assumptions
+    };
+  }
+  function verifyChain(input) {
+    return {
+      static: analyzeStatic(input),
+      runtime: analyzeRuntime(input)
+    };
+  }
+  function parseManualChain(input) {
+    const tokens = input.trim().split(/\s+/).filter((t) => t.length > 0);
+    return tokens.map((token, i) => {
+      const cleaned = token.replace(/^0x/i, "");
+      const value = parseInt(cleaned, 16);
+      if (/^[0-9a-fA-F]{1,8}$/.test(cleaned) && Number.isFinite(value)) {
+        return { kind: "value", value: value >>> 0, comment: `DWORD ${i}` };
+      }
+      return { kind: "value", placeholder: token, comment: `DWORD ${i} (unresolved)` };
+    });
+  }
+
   // src/semantics/types.ts
   var SEMANTIC_SCHEMA_VERSION = "v1";
 
@@ -8269,12 +8687,22 @@ var osed_bundle = (() => {
     },
     {
       name: "rop.generate",
-      description: "One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. All discovery is optional \u2014 pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).",
+      description: 'One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. Use api: "auto" to enumerate all candidates and select the best. All discovery is optional \u2014 pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).',
       usage: "dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})",
       examples: [
+        'dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
         'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
-        'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})',
-        'dx @$osed().rop.generate({api: "VirtualAlloc"})'
+        'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})'
+      ]
+    },
+    {
+      name: "rop.verify",
+      description: "Chain verifier. Inspects a generated or manually supplied ROP chain for bad characters, unresolved placeholders, stack consumption, and register side effects. Reports static validity separately from a DWORD-by-DWORD runtime trace with ESP movement and register state. Never modifies the chain \u2014 read-only analysis.",
+      usage: "dx @$osed().rop.verify({chain?, badchars?, api?})",
+      examples: [
+        "dx @$osed().rop.verify()                                          // verify last rop.generate result",
+        'dx @$osed().rop.verify({badchars: "00 0A 0D"})                    // verify last result with explicit badchars',
+        'dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF", badchars: "00 0A 0D"})'
       ]
     },
     {
@@ -12543,10 +12971,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-10-19T22:10:58.017Z" : globalThis[key2];
+        value = true ? "2026-10-20T00:38:36.989Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "2cb74191e8a7" : globalThis[key2];
+        value = true ? "b6564412067a" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15307,17 +15735,97 @@ var osed_bundle = (() => {
       const exploitStale = staleCorpusGuard("Exploit Builder", "rop.generate");
       if (exploitStale) return exploitStale;
       const options = isPlainObject(args[0]) ? args[0] : { api: args[0], shellcode: args[1], badchars: args[2] };
-      const strategyName = normalizeExploitStrategy(String((_a = options.api) != null ? _a : "VirtualAlloc"));
-      if (!strategyName || strategyName === "Stack Pivot" || strategyName === "LoadLibraryA" || strategyName === "GetProcAddress") {
-        const rows2 = [{
-          Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, and Ex variants. Got: " + String((_b = options.api) != null ? _b : "(none)")
-        }];
-        renderRows("Exploit Builder", rows2);
-        return toDxResult("Exploit Builder", rows2);
-      }
-      const shellcodeHex = String((_c = options.shellcode) != null ? _c : "");
+      const SUPPORTED_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "WinExec", "VirtualProtectEx", "VirtualAllocEx"];
+      const DEP_BYPASS_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx"];
+      const discoverIatSlot = (apiName) => {
+        var _a2;
+        const iatName = API_IAT_NAMES[apiName];
+        if (!iatName) return void 0;
+        try {
+          const scNs = api.sc;
+          if (scNs && typeof scNs.iat_find === "function") {
+            const dxResult = scNs.iat_find(iatName);
+            if ((dxResult == null ? void 0 : dxResult.rows) && dxResult.rows.length > 0) {
+              const firstRow = dxResult.rows[0];
+              const slotStr = String((_a2 = firstRow.Slot) != null ? _a2 : "");
+              const match = /0x([0-9a-fA-F]+)/i.exec(slotStr);
+              if (match) return parseInt(match[1], 16) >>> 0;
+            }
+          }
+        } catch (e) {
+        }
+        return void 0;
+      };
+      const isDwordBadcharFree = (value, bad) => {
+        if (bad.length === 0) return true;
+        const badSet = new Set(bad.map((b) => b & 255));
+        const v = value >>> 0;
+        for (let i = 0; i < 4; i++) if (badSet.has(v >>> i * 8 & 255)) return false;
+        return true;
+      };
       const badchars = parseBadcharsOption(options.badchars);
-      const entrySkew = Number((_d = options.entrySkew) != null ? _d : 0);
+      const isAutoApi = String((_a = options.api) != null ? _a : "").toLowerCase() === "auto";
+      let strategyName;
+      if (isAutoApi) {
+        section("API Auto-Selection");
+        info("Evaluating DEP bypass candidates...");
+        const candidates2 = [];
+        for (const apiName of DEP_BYPASS_APIS) {
+          const slot = discoverIatSlot(apiName);
+          const argCount = (_b = { VirtualProtect: 4, VirtualAlloc: 4, WriteProcessMemory: 5, VirtualProtectEx: 5, VirtualAllocEx: 5, WinExec: 2 }[apiName]) != null ? _b : 0;
+          const slotClean = slot !== void 0 ? isDwordBadcharFree(slot, badchars) : false;
+          let score = 0;
+          const reasons = [];
+          if (slot !== void 0) {
+            score += 50;
+            reasons.push("IAT slot found");
+            if (slotClean) {
+              score += 20;
+              reasons.push("slot address badchar-free");
+            } else {
+              score -= 10;
+              reasons.push("slot address contains badchar(s)");
+            }
+          } else {
+            reasons.push("IAT slot NOT found");
+          }
+          score += Math.max(0, 10 - argCount * 2);
+          if (argCount <= 4) reasons.push(`${argCount} args (compact frame)`);
+          else reasons.push(`${argCount} args`);
+          if (apiName === "VirtualAlloc") {
+            score += 5;
+            reasons.push("preferred default");
+          }
+          if (apiName.endsWith("Ex")) {
+            score -= 5;
+            reasons.push("Ex variant (less common)");
+          }
+          candidates2.push({ api: apiName, iatSlot: slot, slotClean, argCount, reason: reasons.join("; "), score });
+        }
+        candidates2.sort((a, b) => b.score - a.score);
+        for (const c of candidates2) {
+          const status = c.iatSlot !== void 0 ? `${hex32(c.iatSlot)}${c.slotClean ? "" : " [BADCHAR]"}` : "not found";
+          const marker = c === candidates2[0] ? " \u2190 SELECTED" : "";
+          info(`  ${c.api.padEnd(20)} IAT: ${status.padEnd(24)} Score: ${String(c.score).padStart(3)}  (${c.reason})${marker}`);
+        }
+        const best = candidates2[0];
+        if (best.iatSlot === void 0) {
+          warn("No API found in IAT. The selected candidate will require a manual iatSlot override.");
+        }
+        strategyName = best.api;
+        info(`Selected: ${strategyName} (score ${best.score})`);
+      } else {
+        strategyName = normalizeExploitStrategy(String((_c = options.api) != null ? _c : "VirtualAlloc"));
+        if (!strategyName || strategyName === "Stack Pivot" || strategyName === "LoadLibraryA" || strategyName === "GetProcAddress") {
+          const rows2 = [{
+            Error: "rop.generate supports VirtualProtect, VirtualAlloc, WriteProcessMemory, WinExec, Ex variants, or 'auto'. Got: " + String((_d = options.api) != null ? _d : "(none)")
+          }];
+          renderRows("Exploit Builder", rows2);
+          return toDxResult("Exploit Builder", rows2);
+        }
+      }
+      const shellcodeHex = String((_e = options.shellcode) != null ? _e : "");
+      const entrySkew = Number((_f = options.entrySkew) != null ? _f : 0);
       const pythonLines = [];
       const allWarnings = [];
       const allErrors = [];
@@ -15327,33 +15835,17 @@ var osed_bundle = (() => {
         iatSlotAddr = Number(options.iatSlot) >>> 0;
         info(`IAT slot: ${hex32(iatSlotAddr)} (user-supplied)`);
       } else {
-        const iatName = API_IAT_NAMES[strategyName];
-        if (iatName) {
-          try {
-            const scNs = api.sc;
-            if (scNs && typeof scNs.iat_find === "function") {
-              const iatResult = scNs.iat_find(iatName);
-              if (lastResult && lastResult.success && lastResult.findings.length > 0) {
-                const firstRow = lastResult.findings[0];
-                const slotStr = String((_f = (_e = firstRow.Slot) != null ? _e : firstRow.slot) != null ? _f : "");
-                const match = /0x([0-9a-fA-F]+)/.exec(slotStr);
-                if (match) {
-                  iatSlotAddr = parseInt(match[1], 16) >>> 0;
-                  info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${iatName})`);
-                }
-              }
-            }
-          } catch (e) {
-          }
-        }
-        if (iatSlotAddr === void 0) {
+        iatSlotAddr = discoverIatSlot(strategyName);
+        if (iatSlotAddr !== void 0) {
+          info(`IAT slot: ${hex32(iatSlotAddr)} (auto-discovered for ${strategyName})`);
+        } else {
           allWarnings.push(`Could not auto-discover IAT slot for ${strategyName}. Pass iatSlot manually, or run: dx @$osed().sc.iat_find("${strategyName}")`);
           warn(`IAT slot not found \u2014 use iatSlot parameter or run sc.iat_find("${strategyName}")`);
         }
       }
       let bufAddr;
       if (options.buf !== void 0) {
-        bufAddr = String(options.buf).trim();
+        bufAddr = typeof options.buf === "number" ? `0x${(options.buf >>> 0).toString(16).padStart(8, "0")}` : String(options.buf).trim();
         info(`Buffer: ${bufAddr} (user-supplied)`);
       } else {
         try {
@@ -15363,13 +15855,20 @@ var osed_bundle = (() => {
             maxResults: 5
           });
           if (cavesResult.success && cavesResult.findings.length > 0) {
-            const cave = cavesResult.findings[0];
-            const caveAddr = String((_g = cave.address) != null ? _g : "");
-            const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
-            if (addrMatch) {
-              bufAddr = `0x${addrMatch[1]}`;
-              const caveSize = (_h = cave.size) != null ? _h : "?";
-              info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${(_i = cave.module) != null ? _i : "?"})`);
+            const cave = cavesResult.findings.find(
+              (c) => c.writable === true
+            );
+            if (cave) {
+              const caveAddr = String((_g = cave.address) != null ? _g : "");
+              const addrMatch = /0x([0-9a-fA-F]+)/i.exec(caveAddr);
+              if (addrMatch) {
+                bufAddr = `0x${addrMatch[1]}`;
+                const caveSize = (_h = cave.size) != null ? _h : "?";
+                info(`Buffer: ${bufAddr} (code cave, ${caveSize} bytes, module: ${(_i = cave.module) != null ? _i : "?"})`);
+              }
+            } else {
+              allWarnings.push("Code caves found but none confirmed writable. Pass buf address, or verify with !vprot.");
+              warn("Code caves found but none writable \u2014 use buf parameter or verify with !vprot");
             }
           }
         } catch (e) {
@@ -15396,7 +15895,7 @@ var osed_bundle = (() => {
       }
       let retAddrWord;
       if (options.retAddr !== void 0) {
-        const ra = String(options.retAddr).trim();
+        const ra = typeof options.retAddr === "number" ? `0x${(options.retAddr >>> 0).toString(16)}` : String(options.retAddr).trim();
         if (/^(0x)?[0-9a-fA-F]+$/.test(ra)) {
           retAddrWord = { value: parseInt(ra.replace(/^0x/i, ""), 16) >>> 0, comment: "return address (user-supplied)" };
         } else {
@@ -15570,13 +16069,136 @@ var osed_bundle = (() => {
       renderRows("Exploit Builder", rows);
       setResult({
         command: "rop.generate",
-        args: options,
+        args: __spreadProps(__spreadValues({}, options), { resolvedApi: strategyName }),
         success: ((_l = chainPlan == null ? void 0 : chainPlan.success) != null ? _l : false) && allErrors.length === 0,
         findings: [{ python: pythonLines, chain: chainPlan, encode: encodeResult }],
         warnings: allWarnings,
         errors: allErrors
       });
       return toDxResult("Exploit Builder", rows);
+    };
+    const executeRopVerify = (...args) => {
+      var _a, _b, _c, _d, _e, _f;
+      if (args.length === 1 && args[0] === "help") {
+        return helperHelp("rop.verify");
+      }
+      const options = isPlainObject(args[0]) ? args[0] : {};
+      const badchars = parseBadcharsOption((_b = options.badchars) != null ? _b : (_a = lastResult == null ? void 0 : lastResult.args) == null ? void 0 : _a.badchars);
+      let steps;
+      let sourceLabel;
+      if (typeof options.chain === "string" && options.chain.trim().length > 0) {
+        steps = parseManualChain(options.chain);
+        sourceLabel = `manual chain (${steps.length} DWORDs)`;
+      } else if ((lastResult == null ? void 0 : lastResult.command) === "rop.generate" && lastResult.success && lastResult.findings.length > 0) {
+        const genResult = lastResult.findings[0];
+        const chainPlan = genResult.chain;
+        if ((chainPlan == null ? void 0 : chainPlan.steps) && chainPlan.steps.length > 0) {
+          steps = chainPlan.steps;
+          sourceLabel = `last rop.generate result (${steps.length} DWORDs)`;
+        } else {
+          const rows2 = [{ Error: "Last rop.generate did not produce a complete chain. Supply a manual chain or re-run rop.generate." }];
+          renderRows("Chain Verifier", rows2);
+          return toDxResult("Chain Verifier", rows2);
+        }
+      } else {
+        const rows2 = [{ Error: 'No chain to verify. Run rop.generate first, or pass {chain: "ADDR1 ADDR2 ..."}' }];
+        renderRows("Chain Verifier", rows2);
+        return toDxResult("Chain Verifier", rows2);
+      }
+      const api_name = options.api ? String(options.api) : (lastResult == null ? void 0 : lastResult.command) === "rop.generate" ? String((_d = (_c = lastResult.args) == null ? void 0 : _c.resolvedApi) != null ? _d : "") || void 0 : void 0;
+      const report = verifyChain({
+        steps,
+        badchars,
+        api: api_name,
+        corpus: currentRopCorpus != null ? currentRopCorpus : void 0,
+        expectedArgCount: options.expectedArgCount ? Number(options.expectedArgCount) : void 0
+      });
+      section(`Chain Verifier \u2014 ${sourceLabel}`);
+      section("Static Analysis");
+      info(`DWORDs: ${report.static.dwordCount}  |  Stack: ${report.static.totalStackBytes} bytes  |  Alignment: ${report.static.alignment}`);
+      if (report.static.badcharHits.length > 0) {
+        error(`Bad character violations: ${report.static.badcharHits.length}`);
+        for (const hit of report.static.badcharHits) {
+          error(`  [${hit.stepIndex}] ${hit.dwordHex} \u2014 byte ${hit.bytePosition} = 0x${hit.byte.toString(16).padStart(2, "0")} @ offset ${hit.byteOffset} \u2014 ${hit.comment}`);
+        }
+      } else if (badchars.length > 0) {
+        info("Bad characters: CLEAN \u2014 no violations found");
+      }
+      if (report.static.unresolvedPlaceholders.length > 0) {
+        warn(`Unresolved placeholders: ${report.static.unresolvedPlaceholders.length}`);
+        for (const p of report.static.unresolvedPlaceholders) {
+          warn(`  [${p.stepIndex}] ${p.placeholder} @ offset ${p.byteOffset} \u2014 ${p.comment}`);
+        }
+      }
+      if (report.static.frameCheck) {
+        const fc = report.static.frameCheck;
+        if (fc.status === "ok") {
+          info(`Frame check: ${fc.detail}`);
+        } else if (fc.status === "not_checked") {
+          warn(`Frame check: ${fc.detail}`);
+        } else if (fc.status === "unknown_api") {
+          warn(`Frame check: ${fc.detail}`);
+        } else {
+          error(`Frame check FAILED: ${fc.detail}`);
+        }
+      }
+      for (const a of report.static.assumptions) {
+        info(`  Assumption: ${a}`);
+      }
+      section("Runtime Trace");
+      if (!report.runtime.available) {
+        warn((_e = report.runtime.reason) != null ? _e : "Runtime trace unavailable");
+      } else {
+        info("ESP+Off  | DWORD      | Action                                           | Side Effects");
+        info("---------|------------|--------------------------------------------------|---------------------------");
+        for (const t of report.runtime.trace) {
+          const espCol = `ESP+${t.espOffset.toString(16).padStart(4, "0").toUpperCase()}`;
+          const effects = t.sideEffects.length > 0 ? t.sideEffects.join("; ") : "";
+          info(`${espCol.padEnd(9)}| ${t.dwordHex.padEnd(11)}| ${t.action.substring(0, 49).padEnd(49)}| ${effects}`);
+          for (const note of t.notes) {
+            info(`         |            |   ${note}`);
+          }
+        }
+        section("Final Register State");
+        const regs = report.runtime.finalRegisters;
+        const regOrder = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+        for (const reg of regOrder) {
+          if (regs[reg] !== void 0 && regs[reg] !== "?") {
+            info(`  ${reg.toUpperCase()} = ${regs[reg]}`);
+          }
+        }
+        if (report.runtime.registerClobbers.length > 0) {
+          section("Register Clobber Warnings");
+          for (const c of report.runtime.registerClobbers) {
+            warn(`  ${c}`);
+          }
+        }
+        for (const a of report.runtime.assumptions) {
+          info(`  Assumption: ${a}`);
+        }
+      }
+      const hasNotChecked = ((_f = report.static.frameCheck) == null ? void 0 : _f.status) === "not_checked";
+      const staticStatus = !report.static.valid ? "FAIL" : hasNotChecked ? "INCOMPLETE" : "PASS";
+      const runtimeStatus = report.runtime.available ? report.runtime.registerClobbers.length > 0 ? "WARN" : "OK" : "N/A";
+      const rows = [{
+        Source: sourceLabel,
+        DWORDs: String(report.static.dwordCount),
+        Stack: `${report.static.totalStackBytes} bytes`,
+        Badchars: report.static.badcharHits.length > 0 ? `${report.static.badcharHits.length} VIOLATION(S)` : badchars.length > 0 ? "clean" : "not checked",
+        Placeholders: String(report.static.unresolvedPlaceholders.length),
+        Static: staticStatus,
+        Runtime: runtimeStatus
+      }];
+      renderRows("Chain Verifier", rows);
+      setResult({
+        command: "rop.verify",
+        args: options,
+        success: report.static.valid && !hasNotChecked,
+        findings: [report],
+        warnings: report.static.badcharHits.map((h) => `Badchar 0x${h.byte.toString(16).padStart(2, "0")} in ${h.dwordHex} at step ${h.stepIndex}`),
+        errors: []
+      });
+      return toDxResult("Chain Verifier", rows);
     };
     for (const command of registry.getAll()) {
       api[command.name] = (...args) => {
@@ -15610,7 +16232,8 @@ var osed_bundle = (() => {
       frame_va: executeRopFrameVa,
       frame_write: executeRopFrameWrite,
       slot_call: executeRopSlotCall,
-      generate: executeRopGenerate
+      generate: executeRopGenerate,
+      verify: executeRopVerify
     };
     api.rop_find = (...args) => invoke("rop", args);
     api.exploit = {

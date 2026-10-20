@@ -12,6 +12,7 @@ export * from "./planner";
 export * from "./emitter";
 export * from "./synthesizer";
 export * from "./exploit_frame";
+export * from "./chain_verifier";
 
 import { canonicalizeSequenceForPolicy, composeSemanticSequence } from "../semantics/compose";
 import { InstructionSequence, InstructionSequenceSource } from "../semantics/types";
