@@ -190,6 +190,18 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "rop.prove",
+    description: "Guided debugger-backed ROP proof. Predicts one checkpoint at a time, optionally owns one one-shot breakpoint, and never resumes execution. Reports gadget execution separately from the DEP objective.",
+    usage: 'dx @$osed().rop.prove({mode?, chain?, api?, postcondition?} | {action:"status"|"cancel"|"history", orphans?})',
+    examples: [
+      'dx @$osed().rop.prove({mode:"guided"})',
+      'dx @$osed().rop.prove({mode:"observe"})',
+      'dx @$osed().rop.prove()',
+      'dx @$osed().rop.prove({action:"status"})',
+      'dx @$osed().rop.prove({action:"cancel", orphans:true})',
+    ],
+  },
+  {
     name: "rop.export",
     description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
     usage: "dx @$osed().rop.export(planId, path?)",

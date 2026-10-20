@@ -6,3 +6,5 @@ export * from "./fingerprint";
 export * from "./store";
 export * from "./session";
 export * from "./postcondition";
+export * from "./controller";
+export * from "./windbg_adapter";

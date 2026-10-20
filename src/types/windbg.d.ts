@@ -7,4 +7,15 @@ declare const host: {
   };
   currentProcess: unknown;
   currentThread: unknown;
+  namespace?: {
+    Debugger?: {
+      Utility?: {
+        Control?: { ExecuteCommand?(command: string): unknown };
+        FileSystem?: {
+          OpenFile?(path: string): unknown;
+          CreateFile?(path: string, disposition: string): unknown;
+        };
+      };
+    };
+  };
 };

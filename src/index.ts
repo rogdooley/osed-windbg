@@ -67,6 +67,7 @@ import { createFindStackBytesCommand } from "./commands/find_stack_bytes";
 import { createFindMemBytesCommand } from "./commands/find_mem_bytes";
 import { createStackmapCommand } from "./commands/stackmap";
 import type { SerializedLandingEvidence } from "./analysis/landing";
+import { ProofController, ProofSessionStore, WinDbgProofAdapter, type ProofPlanInput } from "./rop/proof";
 
 declare const self: Record<string, unknown> | undefined;
 
@@ -93,6 +94,8 @@ interface CorpusModuleEntry {
 let corpusModules: CorpusModuleEntry[] = [];
 const ropEmitter = new RankedSemanticEmitter();
 let cachedExploitState: ExploitState | undefined;
+let proofSessionStore = new ProofSessionStore();
+let lastGeneratedProofInput: ProofPlanInput | undefined;
 const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
 const NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
 
@@ -2398,7 +2401,61 @@ function bindApi(): OsedApi {
       warnings: allWarnings,
       errors: allErrors,
     });
+    if (chainPlan?.success && chainPlan.steps.length > 0) {
+      lastGeneratedProofInput = { chain: chainPlan.steps, corpus: currentRopCorpus, api: strategyName };
+    }
     return toDxResult("Exploit Builder", rows);
+  };
+
+  const executeRopProve = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.prove");
+    const controller = new ProofController({
+      adapter: new WinDbgProofAdapter(),
+      store: proofSessionStore,
+      getDefaultInput: () => lastGeneratedProofInput,
+      getCorpus: () => currentRopCorpus,
+    });
+    const options = args.length === 0 ? undefined : isPlainObject(args[0]) ? args[0] : {};
+    const outcome = controller.execute(options);
+    const rows: Array<Record<string, string>> = [];
+    if (outcome.error) {
+      rows.push({ Error: outcome.error });
+    } else if (outcome.history) {
+      for (const session of outcome.history) {
+        rows.push({
+          Session: session.id,
+          State: session.state,
+          Execution: session.executionStatus,
+          Objective: session.objectiveStatus,
+          Checkpoint: `${session.checkpointIndex}/${session.plan.checkpoints.length}`,
+        });
+      }
+      if (rows.length === 0) rows.push({ Session: "none", State: "IDLE", Execution: "UNVERIFIED", Objective: "UNVERIFIED", Checkpoint: "0/0" });
+    } else if (outcome.session) {
+      const session = outcome.session;
+      rows.push({
+        Session: session.id,
+        State: session.state,
+        Execution: session.executionStatus,
+        Objective: session.objectiveStatus,
+        Checkpoint: `${session.checkpointIndex}/${session.plan.checkpoints.length}`,
+        Next: session.ownedBreakpoint ? `0x${session.ownedBreakpoint.address.toString(16).toUpperCase().padStart(8, "0")}` : "none",
+        Reason: session.objectiveReason,
+      });
+    } else if (outcome.orphanResults) {
+      for (const result of outcome.orphanResults) rows.push({ Session: "orphan", State: result.status, Execution: "UNVERIFIED", Objective: "UNVERIFIED", Checkpoint: "n/a" });
+    }
+    renderRows("ROP Proof", rows);
+    const errors = outcome.error ? [outcome.error] : [];
+    setResult({
+      command: "rop.prove",
+      args: options ?? {},
+      success: outcome.success,
+      findings: [outcome],
+      warnings: outcome.session?.executionStatus === "UNVERIFIED" ? ["Execution remains UNVERIFIED."] : [],
+      errors,
+    });
+    return toDxResult("ROP Proof", rows);
   };
 
   // ── rop.verify ─────────────────────────────────────────────────────────
@@ -2600,6 +2657,7 @@ function bindApi(): OsedApi {
     slot_call: executeRopSlotCall,
     generate: executeRopGenerate,
     verify: executeRopVerify,
+    prove: executeRopProve,
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
@@ -2945,11 +3003,15 @@ function initialize(): void {
   cachedExploitState = undefined;
   invalidateCorpusPlans();
   resetCorpusModules();
+  proofSessionStore = new ProofSessionStore();
+  lastGeneratedProofInput = undefined;
   registry.setReloader(() => {
     currentRopCorpus = undefined;
     cachedExploitState = undefined;
     invalidateCorpusPlans();
     resetCorpusModules();
+    proofSessionStore = new ProofSessionStore();
+    lastGeneratedProofInput = undefined;
     registerAll();
     osed = bindApi();
     publishOsed();

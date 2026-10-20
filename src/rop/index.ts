@@ -13,6 +13,7 @@ export * from "./emitter";
 export * from "./synthesizer";
 export * from "./exploit_frame";
 export * from "./chain_verifier";
+export * from "./proof";
 
 import { canonicalizeSequenceForPolicy, composeSemanticSequence } from "../semantics/compose";
 import { InstructionSequence, InstructionSequenceSource } from "../semantics/types";
