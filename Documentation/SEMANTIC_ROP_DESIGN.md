@@ -139,7 +139,7 @@ The capability index tags each gadget with one or more `CapabilityKind` values:
 ### Control flow
 - `DISPATCH_RET`, `DISPATCH_PUSHAD`
 - `DISPATCH_CALL_REGISTER`, `DISPATCH_CALL_MEMORY`
-- `DISPATCH_JMP_REGISTER`
+- `DISPATCH_JMP_REGISTER`, `DISPATCH_JMP_MEMORY`
 - `STACK_PIVOT`, `STACK_ADJUST`
 
 The `ARITHMETIC` query alias expands to all arithmetic capability kinds.
@@ -149,9 +149,9 @@ The `ARITHMETIC` query alias expands to all arithmetic capability kinds.
 `scan_live` includes a backward scanner that discovers gadgets the pattern scanner misses. Where the pattern scanner matches fixed byte sequences ending in `C3`, the backward scanner:
 
 1. Scans executable memory for `ret` (`C3`) and `ret N` (`C2 xx xx`) terminators
-2. Decodes backward from each terminator using a lookup-table x86 mini-decoder (up to 12 bytes, 3 instructions)
-3. Only decodes `mod=11` (register-register) ModRM to avoid variable-length memory operand ambiguity
-4. Covers: inc/dec/push/pop, all ALU reg-reg (`add`/`or`/`adc`/`sbb`/`and`/`sub`/`xor`/`cmp`/`test`/`xchg`/`mov`), `neg`/`not`, group-1 imm8 (`83`), ALU eax-imm32 short forms, `call`/`jmp` reg, FPU D9 ops
+2. Decodes backward from each terminator using a lookup-table x86 mini-decoder (up to 12 bytes, 4 instructions)
+3. Decodes `mod=11` (register-register) ModRM plus the unambiguous `[reg]` memory form for `mov` and `xchg`; other memory addressing forms remain excluded
+4. Covers: inc/dec/push/pop, all ALU reg-reg (`add`/`or`/`adc`/`sbb`/`and`/`sub`/`xor`/`cmp`/`test`/`xchg`/`mov`), base-register memory `mov`/`xchg`, `neg`/`not`, group-1 imm8 (`83`), ALU eax-imm32 short forms, `call`/`jmp` reg, FPU D9 ops
 5. Skips single-instruction gadgets already covered by the pattern scanner
 
 The backward scanner is x86-only (0x40–0x4F are REX prefixes in x64) and runs in O(memory) time.

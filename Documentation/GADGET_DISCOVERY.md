@@ -50,6 +50,19 @@ Confirm what the corpus can do:
 dx @$osed().rop.capabilities()
 ```
 
+### Preserve a corpus across a debugger restart
+
+Export after discovery, then import and validate after reattaching to the
+target. The imported corpus stays inactive until validation confirms that its
+module mappings and sampled gadget bytes still match; this prevents stale
+addresses from being queried or emitted.
+
+```js
+dx @$osed().rop.corpus.export("C:\\labs\\rop-corpus.json")
+dx @$osed().rop.corpus.import("C:\\labs\\rop-corpus.json")
+dx @$osed().rop.corpus.validate()
+```
+
 ## Step 2: Query for a gadget
 
 `rop.query` takes either a single `(field, value)` pair or an object with

@@ -48,7 +48,8 @@ export type CapabilityKind =
   | "DISPATCH_RET"
   | "DISPATCH_CALL_REGISTER"
   | "DISPATCH_CALL_MEMORY"
-  | "DISPATCH_JMP_REGISTER";
+  | "DISPATCH_JMP_REGISTER"
+  | "DISPATCH_JMP_MEMORY";
 
 export type TerminatorKind = "RETURN" | "CALL" | "JUMP";
 

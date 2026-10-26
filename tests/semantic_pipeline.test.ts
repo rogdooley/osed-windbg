@@ -159,6 +159,28 @@ describe("semantic pipeline", () => {
     expect(gadget.categories).not.toContain("LOAD_REGISTER");
   });
 
+  test("pop esp is not advertised as a general stack-value load capability", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: pop esp ; ret ;"));
+    const index = buildCapabilityIndex(buildRopIndexFromSequences([sequence]));
+    expect(index.query({ capability: "LOAD_REGISTER" })).toHaveLength(0);
+    expect(index.query({ capability: "LOAD_CONSTANT" })).toHaveLength(0);
+  });
+
+  test("memory-indirect jmp has a distinct dispatch capability", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: jmp dword [eax] ;"));
+    const index = buildCapabilityIndex(buildRopIndexFromSequences([sequence]));
+    expect(index.query({ capability: "DISPATCH_JMP_MEMORY" })).toHaveLength(1);
+    expect(index.query({ capability: "DISPATCH_JMP_REGISTER" })).toHaveLength(0);
+  });
+
+  test("memory xchg is represented as memory access, not register exchange", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: push ebp ; xchg dword [ecx], eax ; pop ebp ; ret ;"));
+    const index = buildCapabilityIndex(buildRopIndexFromSequences([sequence]));
+    expect(index.query({ capability: "MEMORY_READ" })).toHaveLength(1);
+    expect(index.query({ capability: "MEMORY_WRITE" })).toHaveLength(1);
+    expect(index.query({ capability: "EXCHANGE_REGISTER" })).toHaveLength(0);
+  });
+
   test("add/sub esp, imm is classified as STACK_ADJUST", async () => {
     for (const text of ["0x1000: add esp, 0x10 ; ret ;", "0x1000: sub esp, 4 ; ret ;"]) {
       const [sequence] = await loadAll(new RPPlusProvider(text));

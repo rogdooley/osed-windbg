@@ -677,6 +677,26 @@ const RULES: Rule[] = [
     },
   },
   {
+    name: "xchg-reg-memory",
+    match: (instruction) => instruction.mnemonic === "xchg" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      const memory = left.kind === "memory" ? left : right.kind === "memory" ? right : undefined;
+      const register = isRegisterOperand(left) ? left : isRegisterOperand(right) ? right : undefined;
+      if (!memory || !register) return {};
+      const base = memoryBaseRegister(memory.text);
+      return {
+        reads: [...(base ? [base] : []), register.register],
+        writes: [register.register],
+        memoryReads: [memory.text],
+        memoryWrites: [memory.text],
+        registerEffects: { [register.register]: unknownExpr() },
+        evidence: [`XCHG ${left.text}, ${right.text}`],
+      };
+    },
+  },
+  {
     name: "lea-reg-mem",
     match: (instruction) => instruction.mnemonic === "lea" && instruction.operands.length === 2,
     evaluate: (instruction) => {

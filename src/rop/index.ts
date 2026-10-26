@@ -14,6 +14,7 @@ export * from "./synthesizer";
 export * from "./exploit_frame";
 export * from "./chain_verifier";
 export * from "./proof";
+export * from "./corpus_store";
 
 import { canonicalizeSequenceForPolicy, composeSemanticSequence } from "../semantics/compose";
 import { InstructionSequence, InstructionSequenceSource } from "../semantics/types";

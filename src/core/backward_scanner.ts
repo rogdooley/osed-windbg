@@ -75,6 +75,15 @@ function decodeModRM11(modrm: number): { reg: number; rm: number } | undefined {
   return { reg: (modrm >> 3) & 7, rm: modrm & 7 };
 }
 
+// Bounded memory form: `[reg]` only.  SIB and displacement encodings are
+// deliberately excluded until their full address syntax is modeled.
+function decodeModRMBaseMemory(modrm: number): { reg: number; rm: number } | undefined {
+  if ((modrm & 0xc0) !== 0x00) return undefined;
+  const rm = modrm & 7;
+  if (rm === 4 || rm === 5) return undefined;
+  return { reg: (modrm >> 3) & 7, rm };
+}
+
 export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | undefined {
   if (offset >= bytes.length) return undefined;
   const b0 = bytes[offset];
@@ -97,9 +106,20 @@ export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | 
   for (const entry of ALU_REG_OPCODES) {
     if (b0 === entry.opcode) {
       const decoded = decodeModRM11(b1);
-      if (!decoded) return undefined;
-      const dst = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
-      const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+      if (decoded) {
+        const dst = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
+        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+        return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
+      }
+      // Memory operands are only decoded for the data-movement instructions
+      // whose semantics are modeled below. The remaining ALU forms retain the
+      // register-only boundary rather than inventing incomplete addressing.
+      if (entry.name !== "xchg" && entry.name !== "mov") return undefined;
+      const memory = decodeModRMBaseMemory(b1);
+      if (!memory) return undefined;
+      const mem = `dword [${REG_NAMES[memory.rm]}]`;
+      const dst = entry.form === "rm" ? mem : REG_NAMES[memory.reg];
+      const src = entry.form === "rm" ? REG_NAMES[memory.reg] : mem;
       return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
     }
   }

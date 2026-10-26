@@ -45,17 +45,17 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
-import { listModulesWithMitigations } from "./commands/modules";
+import { findModuleByAddress, listModulesWithMitigations } from "./commands/modules";
 import { sequencesFromLiveHits } from "./semantics/live-provider";
 import { RPPlusProviderOptions } from "./semantics/rpplus-provider";
 import { formatAddress } from "./core/output";
 import * as out from "./core/output";
 import { DxResult, toDxResult } from "./core/dx_result";
-import { getPointerSize } from "./core/memory";
+import { getPointerSize, tryReadMemory } from "./core/memory";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand, landingDxRows } from "./commands/landing";
@@ -79,6 +79,7 @@ const registry = new CommandRegistry();
 let osed: OsedApi = {};
 let lastResult: CommandResult | undefined;
 let currentRopCorpus: CapabilityIndex | undefined;
+let pendingImportedCorpus: ImportedCorpus | undefined;
 let corpusGeneration = 0;
 let nextRopPlanId = 1;
 const ropPlans = new Map<number, { plan: RopStrategyPlan; generation: number }>();
@@ -96,7 +97,7 @@ const ropEmitter = new RankedSemanticEmitter();
 let cachedExploitState: ExploitState | undefined;
 let proofSessionStore = new ProofSessionStore();
 let lastGeneratedProofInput: ProofPlanInput | undefined;
-const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+const NO_ROP_CORPUS_MESSAGE = "No active ROP corpus. Run rop.scan(...) or rop.scan_live(...), or validate an imported corpus with rop.corpus.validate().";
 const NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
 
 function buildExploitStateFromTriage(findings: Record<string, unknown>): ExploitState {
@@ -323,6 +324,46 @@ function writeProofText(path: string, content: string): void {
   }
 }
 
+function readText(path: string): string {
+  const hostAny = host as unknown as { namespace?: { Debugger?: { Utility?: { FileSystem?: { OpenFile?: (path: string) => unknown; CreateFile?: (path: string, disposition: string) => unknown } } } } };
+  const fs = hostAny.namespace?.Debugger?.Utility?.FileSystem;
+  const raw = fs?.OpenFile?.(path) ?? fs?.CreateFile?.(path, "OpenExisting");
+  const file = raw as { ReadBytes?: (count: number) => unknown; Close?: () => void } | undefined;
+  if (!file || typeof file.ReadBytes !== "function") throw new Error("WinDbg host filesystem read support is unavailable.");
+  try {
+    const bytes: number[] = [];
+    for (;;) {
+      const chunk = Array.from(file.ReadBytes(64 * 1024) as Iterable<unknown>, Number);
+      if (chunk.length === 0) break;
+      bytes.push(...chunk);
+      if (chunk.length < 64 * 1024) break;
+    }
+    return String.fromCharCode(...bytes);
+  } finally {
+    file.Close?.();
+  }
+}
+
+function fingerprintCorpus(index: CapabilityIndex): CorpusFingerprint {
+  const modules = new Map<string, CorpusFingerprint["modules"][number]>();
+  const samples: CorpusFingerprint["samples"] = [];
+  const seen = new Set<number>();
+  for (const gadget of index.gadgets) {
+    for (const location of gadget.locations) {
+      if (location.virtualAddress === undefined || seen.has(location.virtualAddress) || samples.length >= 128) continue;
+      seen.add(location.virtualAddress);
+      const address = BigInt(location.virtualAddress);
+      const module = findModuleByAddress(address);
+      if (!module) continue;
+      const bytes = tryReadMemory(address, Math.min(16, Math.max(1, gadget.instructions.length * 4)));
+      if (!bytes) continue;
+      modules.set(`${module.name}\u0000${module.path}`, { name: module.name, path: module.path, base: Number(module.base), size: Number(module.size) });
+      samples.push({ address: location.virtualAddress, bytes: [...bytes] });
+    }
+  }
+  return { modules: [...modules.values()], samples };
+}
+
 function registerAll(): void {
   const commands: Command[] = [
     ...createPatternCommands(),
@@ -485,6 +526,7 @@ function bindApi(): OsedApi {
   };
 
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}, badchars?: number[]): DxResult => {
+    pendingImportedCorpus = undefined;
     invalidateCorpusPlans();
     resetCorpusModules();
     const raw = buildCapabilityIndexFromRpPlusText(text, options);
@@ -525,6 +567,7 @@ function bindApi(): OsedApi {
     options: Omit<LiveDiscoveryOptions, "module">,
     append: boolean,
   ): DxResult => {
+    pendingImportedCorpus = undefined;
     const discoveries = modules.map((module) => discoverLiveGadgets({ ...options, module }));
     const discoveredIndexes = discoveries.map((discovery) =>
       buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
@@ -552,7 +595,7 @@ function bindApi(): OsedApi {
       const mod = modules[i];
       const disc = discoveries[i];
       const accepted = disc.stats.discovered;
-      const rejected = disc.stats.scanned - accepted;
+      const rejected = disc.stats.rejected;
       let reason: string | undefined;
       if (mod && disc.stats.scanned > 0 && accepted === 0 && badcharsArray.length > 0) {
         reason = diagnoseModuleBadchars(mod, badcharsArray);
@@ -584,7 +627,7 @@ function bindApi(): OsedApi {
       const mod = modules[i] ?? "<all>";
       const disc = discoveries[i];
       const accepted = disc.stats.discovered;
-      const rejected = disc.stats.scanned - accepted;
+      const rejected = disc.stats.rejected;
       out.info(`${mod}: ${accepted} raw gadgets accepted, ${rejected} rejected`);
     }
 
@@ -702,6 +745,66 @@ function bindApi(): OsedApi {
       provenance: options.provenance as RPPlusProviderOptions["provenance"],
       preserveEmptyLines: options.preserveEmptyLines as boolean | undefined,
     }, Array.isArray(parsedBadchars) ? parsedBadchars : undefined);
+  };
+
+  const executeCorpusExport = (...args: unknown[]): DxResult => {
+    const path = typeof args[0] === "string" ? args[0] : undefined;
+    if (!currentRopCorpus) {
+      setResult({ command: "rop.corpus.export", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP Corpus Export", [{ Error: NO_ROP_CORPUS_MESSAGE }]);
+    }
+    const text = exportCorpus(currentRopCorpus, fingerprintCorpus(currentRopCorpus));
+    if (path) writeProofText(path, text);
+    const rows = [{ Status: path ? "written" : "ready", File: path ?? "(console)", Gadgets: currentRopCorpus.gadgets.length.toString() }];
+    renderRows("ROP Corpus Export", rows);
+    if (!path) out.print(text);
+    setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
+    return toDxResult("ROP Corpus Export", rows);
+  };
+
+  const executeCorpusImport = (...args: unknown[]): DxResult => {
+    const path = typeof args[0] === "string" ? args[0] : undefined;
+    if (!path) {
+      const message = "rop.corpus.import requires a JSON file path.";
+      setResult({ command: "rop.corpus.import", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("ROP Corpus Import", [{ Error: message }]);
+    }
+    try {
+      pendingImportedCorpus = importCorpus(readText(path));
+      currentRopCorpus = undefined;
+      invalidateCorpusPlans();
+      resetCorpusModules();
+      const rows = [{ Status: "stale-imported", File: path, Gadgets: pendingImportedCorpus.index.gadgets.length.toString() }];
+      renderRows("ROP Corpus Import", rows);
+      setResult({ command: "rop.corpus.import", args: { path }, success: true, findings: rows, warnings: ["Imported corpus is inactive until validation succeeds."], errors: [] });
+      return toDxResult("ROP Corpus Import", rows);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setResult({ command: "rop.corpus.import", args: { path }, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("ROP Corpus Import", [{ Error: message }]);
+    }
+  };
+
+  const executeCorpusValidate = (): DxResult => {
+    if (!pendingImportedCorpus) {
+      const message = "No imported ROP corpus is awaiting validation.";
+      setResult({ command: "rop.corpus.validate", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("ROP Corpus Validate", [{ Error: message }]);
+    }
+    const result = validateCorpus(pendingImportedCorpus, fingerprintCorpus(pendingImportedCorpus.index));
+    if (!result.valid) {
+      const rows = [{ Status: "stale", Detail: result.reasons.join("; ") }];
+      renderRows("ROP Corpus Validate", rows);
+      setResult({ command: "rop.corpus.validate", args: {}, success: false, findings: [], warnings: [], errors: result.reasons });
+      return toDxResult("ROP Corpus Validate", rows);
+    }
+    currentRopCorpus = pendingImportedCorpus.index;
+    pendingImportedCorpus = undefined;
+    invalidateCorpusPlans();
+    const rows = [{ Status: "validated", Detail: "module mappings and sampled gadget bytes match" }];
+    renderRows("ROP Corpus Validate", rows);
+    setResult({ command: "rop.corpus.validate", args: {}, success: true, findings: rows, warnings: [], errors: [] });
+    return toDxResult("ROP Corpus Validate", rows);
   };
 
   const executeRopQuery = (...args: unknown[]): DxResult => {
@@ -2653,6 +2756,11 @@ function bindApi(): OsedApi {
     },
     scan: executeRopScan,
     scan_live: executeRopScanLive,
+    corpus: {
+      export: executeCorpusExport,
+      import: executeCorpusImport,
+      validate: executeCorpusValidate,
+    },
     query: executeRopQuery,
     capabilities: executeRopCapabilities,
     plan: executeRopPlan,

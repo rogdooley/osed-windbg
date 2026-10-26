@@ -154,6 +154,16 @@ dx @$osed().rop.query("capability", "LOAD_REGISTER")
 dx @$osed().rop.capabilities()
 ```
 
+Persist a corpus before restarting WinDbg, then explicitly revalidate it after
+the target is attached again. Import alone never activates gadgets: validation
+requires the saved module mapping and sampled gadget bytes to match live memory.
+
+```js
+dx @$osed().rop.corpus.export("C:\\labs\\rop-corpus.json")
+dx @$osed().rop.corpus.import("C:\\labs\\rop-corpus.json")
+dx @$osed().rop.corpus.validate()
+```
+
 #### 2. Plan — choose a strategy
 
 Plans feasible exploit strategies from semantic capabilities. Reports feasibility, preconditions, and recommended approaches.

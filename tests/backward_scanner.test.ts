@@ -109,6 +109,12 @@ describe("backward scanner instruction decoder", () => {
       expect(decode([0x01, 0x02])).toBeUndefined();
       expect(decode([0x89, 0x45])).toBeUndefined();
     });
+
+    it("decodes a base-register memory exchange", () => {
+      // xchg dword ptr [ecx], eax: 87 /r, ModRM 00 000 001 = 01
+      expect(decode([0x87, 0x01])).toBe("xchg dword [ecx], eax");
+      expect(decodeLen([0x87, 0x01])).toBe(2);
+    });
   });
 
   describe("neg and not (F7)", () => {
@@ -204,6 +210,14 @@ describe("backward scanner instruction decoder", () => {
   });
 
   describe("multi-instruction sequences", () => {
+    it("decodes every non-terminator instruction in a four-instruction memory gadget", () => {
+      // 55  87 01  5D  C3
+      const bytes = Uint8Array.from([0x55, 0x87, 0x01, 0x5d, 0xc3]);
+      expect(tryDecodeInsn(bytes, 0)?.mnemonic).toBe("push ebp");
+      expect(tryDecodeInsn(bytes, 1)?.mnemonic).toBe("xchg dword [ecx], eax");
+      expect(tryDecodeInsn(bytes, 3)?.mnemonic).toBe("pop ebp");
+    });
+
     it("decodes add edx, ebx ; pop ebx ; ret 0x10 as gadget mnemonic", () => {
       // 01 DA  5B  C2 10 00
       const bytes = Uint8Array.from([0x01, 0xda, 0x5b, 0xc2, 0x10, 0x00]);

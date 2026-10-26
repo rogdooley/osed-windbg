@@ -92,7 +92,7 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
   for (const step of semantic.instructionSemantics) {
     const text = step.instruction.normalizedText;
     const operands = step.instruction.operands.map((operand) => operand.trim().toLowerCase());
-    if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
+    if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1 && operands[0] !== "esp") {
       add({ kind: "LOAD_REGISTER", register: operands[0], evidence: [text] });
       add({ kind: "LOAD_CONSTANT", register: operands[0], evidence: [text] });
       add({ kind: "STACK_READ", register: operands[0], evidence: [text] });
@@ -134,6 +134,15 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
     }
     if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
       const [left, right] = operands;
+      if (left.includes("[") || right.includes("[")) {
+        const memory = left.includes("[") ? left : right;
+        const register = left.includes("[") ? right : left;
+        add({ kind: "MEMORY_READ", register, evidence: [text] });
+        add({ kind: "LOAD_MEMORY", register, evidence: [text] });
+        add({ kind: "MEMORY_WRITE", register, evidence: [text] });
+        add({ kind: "STORE_MEMORY", register, evidence: [text] });
+        continue;
+      }
       if (left === "esp" || right === "esp") {
         add({ kind: "STACK_PIVOT", evidence: [text] });
       }
@@ -172,8 +181,12 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
         evidence: [text],
       });
     }
-    if (step.instruction.mnemonic === "jmp" && operands.length === 1 && !operands[0].includes("[")) {
-      add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
+    if (step.instruction.mnemonic === "jmp" && operands.length === 1) {
+      if (operands[0].includes("[")) {
+        add({ kind: "DISPATCH_JMP_MEMORY", evidence: [text] });
+      } else {
+        add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
+      }
     }
   }
 

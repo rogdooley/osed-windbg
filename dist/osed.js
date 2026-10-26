@@ -3686,7 +3686,7 @@ var osed_bundle = (() => {
     for (const step of semantic.instructionSemantics) {
       const text = step.instruction.normalizedText;
       const operands = step.instruction.operands.map((operand) => operand.trim().toLowerCase());
-      if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
+      if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1 && operands[0] !== "esp") {
         add({ kind: "LOAD_REGISTER", register: operands[0], evidence: [text] });
         add({ kind: "LOAD_CONSTANT", register: operands[0], evidence: [text] });
         add({ kind: "STACK_READ", register: operands[0], evidence: [text] });
@@ -3728,6 +3728,15 @@ var osed_bundle = (() => {
       }
       if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
         const [left, right] = operands;
+        if (left.includes("[") || right.includes("[")) {
+          const memory = left.includes("[") ? left : right;
+          const register2 = left.includes("[") ? right : left;
+          add({ kind: "MEMORY_READ", register: register2, evidence: [text] });
+          add({ kind: "LOAD_MEMORY", register: register2, evidence: [text] });
+          add({ kind: "MEMORY_WRITE", register: register2, evidence: [text] });
+          add({ kind: "STORE_MEMORY", register: register2, evidence: [text] });
+          continue;
+        }
         if (left === "esp" || right === "esp") {
           add({ kind: "STACK_PIVOT", evidence: [text] });
         }
@@ -3766,8 +3775,12 @@ var osed_bundle = (() => {
           evidence: [text]
         });
       }
-      if (step.instruction.mnemonic === "jmp" && operands.length === 1 && !operands[0].includes("[")) {
-        add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
+      if (step.instruction.mnemonic === "jmp" && operands.length === 1) {
+        if (operands[0].includes("[")) {
+          add({ kind: "DISPATCH_JMP_MEMORY", evidence: [text] });
+        } else {
+          add({ kind: "DISPATCH_JMP_REGISTER", register: operands[0], evidence: [text] });
+        }
       }
     }
     if (categories.includes("STACK_PIVOT")) {
@@ -7370,6 +7383,26 @@ var osed_bundle = (() => {
       }
     },
     {
+      name: "xchg-reg-memory",
+      match: (instruction) => instruction.mnemonic === "xchg" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        const memory = left.kind === "memory" ? left : right.kind === "memory" ? right : void 0;
+        const register2 = isRegisterOperand(left) ? left : isRegisterOperand(right) ? right : void 0;
+        if (!memory || !register2) return {};
+        const base = memoryBaseRegister(memory.text);
+        return {
+          reads: [...base ? [base] : [], register2.register],
+          writes: [register2.register],
+          memoryReads: [memory.text],
+          memoryWrites: [memory.text],
+          registerEffects: { [register2.register]: unknownExpr() },
+          evidence: [`XCHG ${left.text}, ${right.text}`]
+        };
+      }
+    },
+    {
       name: "lea-reg-mem",
       match: (instruction) => instruction.mnemonic === "lea" && instruction.operands.length === 2,
       evaluate: (instruction) => {
@@ -9131,6 +9164,79 @@ var osed_bundle = (() => {
     }
   };
 
+  // src/rop/corpus_store.ts
+  var CORPUS_EXPORT_SCHEMA_VERSION = "v1";
+  function isGadget(value) {
+    if (!value || typeof value !== "object") return false;
+    const gadget = value;
+    return gadget.schemaVersion === "v1" && typeof gadget.canonicalId === "string" && Array.isArray(gadget.instructions) && Array.isArray(gadget.locations) && Array.isArray(gadget.categories) && !!gadget.semanticSummary && Array.isArray(gadget.capabilities);
+  }
+  function replacer(_key, value) {
+    if (value instanceof Set) return { $set: [...value] };
+    return value;
+  }
+  function reviver(_key, value) {
+    if (value && typeof value === "object" && "$set" in value) {
+      const encoded = value;
+      if (Array.isArray(encoded.$set)) return new Set(encoded.$set);
+    }
+    return value;
+  }
+  function isFingerprint(value) {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value;
+    return Array.isArray(candidate.modules) && Array.isArray(candidate.samples) && candidate.modules.every((module) => module && typeof module.name === "string" && typeof module.path === "string" && typeof module.base === "number" && typeof module.size === "number") && candidate.samples.every((sample) => sample && typeof sample.address === "number" && Array.isArray(sample.bytes) && sample.bytes.every((byte) => typeof byte === "number"));
+  }
+  function exportCorpus(index, fingerprint) {
+    const stored = {
+      schemaVersion: CORPUS_EXPORT_SCHEMA_VERSION,
+      gadgets: index.gadgets,
+      fingerprint
+    };
+    return JSON.stringify(stored, replacer, 2);
+  }
+  function importCorpus(text) {
+    var _a;
+    let parsed;
+    try {
+      parsed = JSON.parse(text, reviver);
+    } catch (_error) {
+      throw new Error("ROP corpus JSON is invalid.");
+    }
+    if (!parsed || typeof parsed !== "object") throw new Error("ROP corpus JSON must contain an object.");
+    const stored = parsed;
+    if (stored.schemaVersion !== CORPUS_EXPORT_SCHEMA_VERSION) {
+      throw new Error(`Unsupported ROP corpus schema '${String((_a = stored.schemaVersion) != null ? _a : "missing")}'.`);
+    }
+    if (!Array.isArray(stored.gadgets) || !stored.gadgets.every(isGadget) || !isFingerprint(stored.fingerprint)) {
+      throw new Error("ROP corpus JSON is missing gadgets or fingerprint data.");
+    }
+    return {
+      schemaVersion: CORPUS_EXPORT_SCHEMA_VERSION,
+      index: buildCapabilities(stored.gadgets),
+      fingerprint: stored.fingerprint
+    };
+  }
+  function sameBytes3(left, right) {
+    return left.length === right.length && left.every((byte, index) => byte === right[index]);
+  }
+  function validateCorpus(imported, live) {
+    const reasons = [];
+    for (const expected of imported.fingerprint.modules) {
+      const observed = live.modules.find((module) => module.name === expected.name && module.path === expected.path);
+      if (!observed || observed.base !== expected.base || observed.size !== expected.size) {
+        reasons.push(`module ${expected.name} mapping changed`);
+      }
+    }
+    for (const expected of imported.fingerprint.samples) {
+      const observed = live.samples.find((sample) => sample.address === expected.address);
+      if (!observed || !sameBytes3(expected.bytes, observed.bytes)) {
+        reasons.push(`gadget bytes changed at 0x${expected.address.toString(16)}`);
+      }
+    }
+    return { valid: reasons.length === 0, reasons };
+  }
+
   // src/semantics/rpplus-provider.ts
   function defaultSource() {
     return {
@@ -10181,6 +10287,24 @@ var osed_bundle = (() => {
         "dx @$osed().rop.export(1)",
         'dx @$osed().rop.export(1, "C:\\\\exploit\\\\rop.py")'
       ]
+    },
+    {
+      name: "rop.corpus.export",
+      description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+      usage: "dx @$osed().rop.corpus.export(path?)",
+      examples: ['dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")']
+    },
+    {
+      name: "rop.corpus.import",
+      description: "Imports a corpus as stale evidence. Run rop.corpus.validate() before querying or planning.",
+      usage: "dx @$osed().rop.corpus.import(path)",
+      examples: ['dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")']
+    },
+    {
+      name: "rop.corpus.validate",
+      description: "Validates imported module mappings and sampled gadget bytes before enabling the corpus.",
+      usage: "dx @$osed().rop.corpus.validate()",
+      examples: ["dx @$osed().rop.corpus.validate()"]
     },
     {
       name: "rop.pivots",
@@ -13967,6 +14091,12 @@ var osed_bundle = (() => {
     if ((modrm & 192) !== 192) return void 0;
     return { reg: modrm >> 3 & 7, rm: modrm & 7 };
   }
+  function decodeModRMBaseMemory(modrm) {
+    if ((modrm & 192) !== 0) return void 0;
+    const rm = modrm & 7;
+    if (rm === 4 || rm === 5) return void 0;
+    return { reg: modrm >> 3 & 7, rm };
+  }
   function tryDecodeInsn(bytes, offset) {
     if (offset >= bytes.length) return void 0;
     const b0 = bytes[offset];
@@ -13986,9 +14116,17 @@ var osed_bundle = (() => {
     for (const entry of ALU_REG_OPCODES) {
       if (b0 === entry.opcode) {
         const decoded = decodeModRM11(b1);
-        if (!decoded) return void 0;
-        const dst = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
-        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+        if (decoded) {
+          const dst2 = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
+          const src2 = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+          return { length: 2, mnemonic: `${entry.name} ${dst2}, ${src2}` };
+        }
+        if (entry.name !== "xchg" && entry.name !== "mov") return void 0;
+        const memory = decodeModRMBaseMemory(b1);
+        if (!memory) return void 0;
+        const mem = `dword [${REG_NAMES[memory.rm]}]`;
+        const dst = entry.form === "rm" ? mem : REG_NAMES[memory.reg];
+        const src = entry.form === "rm" ? REG_NAMES[memory.reg] : mem;
         return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
       }
     }
@@ -14167,7 +14305,7 @@ var osed_bundle = (() => {
     const backward = scanBackward({
       module: options.module,
       maxResults: 1e4,
-      maxInstructionsPerGadget: 3,
+      maxInstructionsPerGadget: 4,
       maxBackwardBytes: 12
     });
     for (const w of backward.warnings) warningSet.add(w);
@@ -14410,10 +14548,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-10-20T02:20:35.685Z" : globalThis[key2];
+        value = true ? "2026-10-25T20:48:13.508Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7b2158a97cf0" : globalThis[key2];
+        value = true ? "c9f26eae0671" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15458,6 +15596,7 @@ var osed_bundle = (() => {
   var osed = {};
   var lastResult;
   var currentRopCorpus;
+  var pendingImportedCorpus;
   var corpusGeneration = 0;
   var nextRopPlanId = 1;
   var ropPlans = /* @__PURE__ */ new Map();
@@ -15466,7 +15605,7 @@ var osed_bundle = (() => {
   var cachedExploitState;
   var proofSessionStore = new ProofSessionStore();
   var lastGeneratedProofInput;
-  var NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
+  var NO_ROP_CORPUS_MESSAGE = "No active ROP corpus. Run rop.scan(...) or rop.scan_live(...), or validate an imported corpus with rop.corpus.validate().";
   var NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
   function buildExploitStateFromTriage(findings) {
     var _a, _b;
@@ -15651,6 +15790,45 @@ var osed_bundle = (() => {
       (_f = file.Close) == null ? void 0 : _f.call(file);
     }
   }
+  function readText(path) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const hostAny = host;
+    const fs = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem;
+    const raw = (_f = (_d = fs == null ? void 0 : fs.OpenFile) == null ? void 0 : _d.call(fs, path)) != null ? _f : (_e = fs == null ? void 0 : fs.CreateFile) == null ? void 0 : _e.call(fs, path, "OpenExisting");
+    const file = raw;
+    if (!file || typeof file.ReadBytes !== "function") throw new Error("WinDbg host filesystem read support is unavailable.");
+    try {
+      const bytes = [];
+      for (; ; ) {
+        const chunk = Array.from(file.ReadBytes(64 * 1024), Number);
+        if (chunk.length === 0) break;
+        bytes.push(...chunk);
+        if (chunk.length < 64 * 1024) break;
+      }
+      return String.fromCharCode(...bytes);
+    } finally {
+      (_g = file.Close) == null ? void 0 : _g.call(file);
+    }
+  }
+  function fingerprintCorpus(index) {
+    const modules = /* @__PURE__ */ new Map();
+    const samples = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const gadget of index.gadgets) {
+      for (const location of gadget.locations) {
+        if (location.virtualAddress === void 0 || seen.has(location.virtualAddress) || samples.length >= 128) continue;
+        seen.add(location.virtualAddress);
+        const address = BigInt(location.virtualAddress);
+        const module = findModuleByAddress(address);
+        if (!module) continue;
+        const bytes = tryReadMemory(address, Math.min(16, Math.max(1, gadget.instructions.length * 4)));
+        if (!bytes) continue;
+        modules.set(`${module.name}\0${module.path}`, { name: module.name, path: module.path, base: Number(module.base), size: Number(module.size) });
+        samples.push({ address: location.virtualAddress, bytes: [...bytes] });
+      }
+    }
+    return { modules: [...modules.values()], samples };
+  }
   function registerAll() {
     const commands = [
       ...createPatternCommands(),
@@ -15797,6 +15975,7 @@ var osed_bundle = (() => {
       return toDxResult(title, rows);
     };
     const scanCorpus = (text, options = {}, badchars) => {
+      pendingImportedCorpus = void 0;
       invalidateCorpusPlans();
       resetCorpusModules();
       const raw = buildCapabilityIndexFromRpPlusText(text, options);
@@ -15833,6 +16012,7 @@ var osed_bundle = (() => {
     };
     const scanLiveCorpus = (modules, options, append) => {
       var _a;
+      pendingImportedCorpus = void 0;
       const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
       const discoveredIndexes = discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
       invalidateCorpusPlans();
@@ -15860,7 +16040,7 @@ var osed_bundle = (() => {
         const mod = modules[i];
         const disc = discoveries[i];
         const accepted = disc.stats.discovered;
-        const rejected = disc.stats.scanned - accepted;
+        const rejected = disc.stats.rejected;
         let reason;
         if (mod && disc.stats.scanned > 0 && accepted === 0 && badcharsArray.length > 0) {
           reason = diagnoseModuleBadchars(mod, badcharsArray);
@@ -15891,7 +16071,7 @@ var osed_bundle = (() => {
         const mod = (_a = modules[i]) != null ? _a : "<all>";
         const disc = discoveries[i];
         const accepted = disc.stats.discovered;
-        const rejected = disc.stats.scanned - accepted;
+        const rejected = disc.stats.rejected;
         info(`${mod}: ${accepted} raw gadgets accepted, ${rejected} rejected`);
       }
       section("Corpus Summary");
@@ -15992,6 +16172,63 @@ var osed_bundle = (() => {
         provenance: options.provenance,
         preserveEmptyLines: options.preserveEmptyLines
       }, Array.isArray(parsedBadchars) ? parsedBadchars : void 0);
+    };
+    const executeCorpusExport = (...args) => {
+      const path = typeof args[0] === "string" ? args[0] : void 0;
+      if (!currentRopCorpus) {
+        setResult({ command: "rop.corpus.export", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+        return toDxResult("ROP Corpus Export", [{ Error: NO_ROP_CORPUS_MESSAGE }]);
+      }
+      const text = exportCorpus(currentRopCorpus, fingerprintCorpus(currentRopCorpus));
+      if (path) writeProofText(path, text);
+      const rows = [{ Status: path ? "written" : "ready", File: path != null ? path : "(console)", Gadgets: currentRopCorpus.gadgets.length.toString() }];
+      renderRows("ROP Corpus Export", rows);
+      if (!path) print(text);
+      setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
+      return toDxResult("ROP Corpus Export", rows);
+    };
+    const executeCorpusImport = (...args) => {
+      const path = typeof args[0] === "string" ? args[0] : void 0;
+      if (!path) {
+        const message = "rop.corpus.import requires a JSON file path.";
+        setResult({ command: "rop.corpus.import", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Import", [{ Error: message }]);
+      }
+      try {
+        pendingImportedCorpus = importCorpus(readText(path));
+        currentRopCorpus = void 0;
+        invalidateCorpusPlans();
+        resetCorpusModules();
+        const rows = [{ Status: "stale-imported", File: path, Gadgets: pendingImportedCorpus.index.gadgets.length.toString() }];
+        renderRows("ROP Corpus Import", rows);
+        setResult({ command: "rop.corpus.import", args: { path }, success: true, findings: rows, warnings: ["Imported corpus is inactive until validation succeeds."], errors: [] });
+        return toDxResult("ROP Corpus Import", rows);
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        setResult({ command: "rop.corpus.import", args: { path }, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Import", [{ Error: message }]);
+      }
+    };
+    const executeCorpusValidate = () => {
+      if (!pendingImportedCorpus) {
+        const message = "No imported ROP corpus is awaiting validation.";
+        setResult({ command: "rop.corpus.validate", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Validate", [{ Error: message }]);
+      }
+      const result3 = validateCorpus(pendingImportedCorpus, fingerprintCorpus(pendingImportedCorpus.index));
+      if (!result3.valid) {
+        const rows2 = [{ Status: "stale", Detail: result3.reasons.join("; ") }];
+        renderRows("ROP Corpus Validate", rows2);
+        setResult({ command: "rop.corpus.validate", args: {}, success: false, findings: [], warnings: [], errors: result3.reasons });
+        return toDxResult("ROP Corpus Validate", rows2);
+      }
+      currentRopCorpus = pendingImportedCorpus.index;
+      pendingImportedCorpus = void 0;
+      invalidateCorpusPlans();
+      const rows = [{ Status: "validated", Detail: "module mappings and sampled gadget bytes match" }];
+      renderRows("ROP Corpus Validate", rows);
+      setResult({ command: "rop.corpus.validate", args: {}, success: true, findings: rows, warnings: [], errors: [] });
+      return toDxResult("ROP Corpus Validate", rows);
     };
     const executeRopQuery = (...args) => {
       var _a;
@@ -17723,6 +17960,11 @@ var osed_bundle = (() => {
       },
       scan: executeRopScan,
       scan_live: executeRopScanLive,
+      corpus: {
+        export: executeCorpusExport,
+        import: executeCorpusImport,
+        validate: executeCorpusValidate
+      },
       query: executeRopQuery,
       capabilities: executeRopCapabilities,
       plan: executeRopPlan,

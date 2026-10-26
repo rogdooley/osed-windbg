@@ -5,6 +5,7 @@ import { createFindMemBytesCommand } from "../src/commands/find_mem_bytes";
 import { createRopCommands } from "../src/commands/rop";
 import { createFindStackBytesCommand } from "../src/commands/find_stack_bytes";
 import { initializeScript } from "../src/index";
+import { buildCapabilityIndexFromRpPlusText, exportCorpus, type CorpusFingerprint } from "../src/rop";
 
 function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
   bytes[offset] = value & 0xff;
@@ -230,6 +231,86 @@ describe("rop_suggest command", () => {
     expect(api.last_result().success).toBe(false);
     expect(api.last_result().errors[0]).toContain("bytes");
     expect(logs.join("")).toContain("Usage: dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)");
+  });
+
+  test("scan_live reports explicit rejected counts when backward discovery exceeds pattern hits", () => {
+    const { image, base, textStart } = makeImageWithTextSection();
+    const logs: string[] = [];
+    // A four-instruction gadget supplies extra backward discoveries beyond the
+    // two fixed-pattern hits at its tail; rejection reporting must stay valid.
+    image.set([0x55, 0x87, 0x01, 0x5d, 0xc3], Number(textStart - base) + 0x100);
+    installPeBackedHost(image, base);
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host.diagnostics = {
+      debugLog: (line: string) => logs.push(line),
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: { rop: { scan_live: (module: string) => unknown } };
+    }).osed;
+
+    api.rop.scan_live("target.exe");
+    expect(logs.join("")).not.toMatch(/raw gadgets accepted, -\d+ rejected/);
+  });
+
+  test("imported corpora remain inactive until the live target validates their mapping and bytes", () => {
+    const { image, base, textStart } = makeImageWithTextSection();
+    const gadgetAddress = textStart + BigInt(0x100);
+    image.set([0x58, 0xc3], Number(gadgetAddress - base));
+    installPeBackedHost(image, base);
+
+    const corpus = buildCapabilityIndexFromRpPlusText(
+      `0x${gadgetAddress.toString(16)}: pop eax ; ret ;`,
+      { provenance: { module: "target.exe", executable: "EXACT" } },
+    );
+    const fingerprint: CorpusFingerprint = {
+      modules: [{ name: "target.exe", path: "C:\\labs\\target.exe", base: Number(base), size: image.length }],
+      samples: [{ address: Number(gadgetAddress), bytes: Array.from(image.slice(Number(gadgetAddress - base), Number(gadgetAddress - base) + 8)) }],
+    };
+    const fileText = exportCorpus(corpus, fingerprint);
+    const encoded = Array.from(fileText, (char) => char.charCodeAt(0));
+    let offset = 0;
+    (globalThis as unknown as {
+      host: {
+        namespace: { Debugger: { Utility: { FileSystem: { OpenFile: () => { ReadBytes: (count: number) => number[]; Close: () => void } } } } };
+      };
+    }).host.namespace = {
+      Debugger: {
+        Utility: {
+          FileSystem: {
+            OpenFile: () => ({
+              ReadBytes: (count: number) => {
+                const chunk = encoded.slice(offset, offset + count);
+                offset += chunk.length;
+                return chunk;
+              },
+              Close: () => undefined,
+            }),
+          },
+        },
+      },
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        rop: {
+          corpus: { import: (path: string) => unknown; validate: () => unknown };
+          query: (field: string, value: string) => unknown;
+        };
+        last_result: () => { success: boolean; errors: string[] };
+      };
+    }).osed;
+
+    api.rop.corpus.import("corpus.json");
+    expect(api.last_result().success).toBe(true);
+    api.rop.query("capability", "LOAD_REGISTER");
+    expect(api.last_result().success).toBe(false);
+    expect(api.last_result().errors[0]).toContain("No active ROP corpus");
+    api.rop.corpus.validate();
+    expect(api.last_result().success).toBe(true);
+    api.rop.query("capability", "LOAD_REGISTER");
+    expect(api.last_result().success).toBe(true);
   });
 
   test("find_stack_bytes finds live stack hits without searching heap memory", () => {

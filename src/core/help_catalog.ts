@@ -212,6 +212,24 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
   },
   {
+    name: "rop.corpus.export",
+    description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+    usage: "dx @$osed().rop.corpus.export(path?)",
+    examples: ['dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")'],
+  },
+  {
+    name: "rop.corpus.import",
+    description: "Imports a corpus as stale evidence. Run rop.corpus.validate() before querying or planning.",
+    usage: "dx @$osed().rop.corpus.import(path)",
+    examples: ['dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")'],
+  },
+  {
+    name: "rop.corpus.validate",
+    description: "Validates imported module mappings and sampled gadget bytes before enabling the corpus.",
+    usage: "dx @$osed().rop.corpus.validate()",
+    examples: ["dx @$osed().rop.corpus.validate()"],
+  },
+  {
     name: "rop.pivots",
     description: "Finds, classifies, and ranks stack pivot gadgets from the semantic corpus. Optionally filters by source register or minimum ESP adjustment.",
     usage: "dx @$osed().rop.pivots(register?, minDelta?)",

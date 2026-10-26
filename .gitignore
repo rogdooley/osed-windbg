@@ -32,6 +32,7 @@ Modules/*
 .codex
 .agents
 .claude
+.superpowers/
 .pytest_cache/
 .vscode/
 output/
