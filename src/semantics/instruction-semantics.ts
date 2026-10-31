@@ -12,6 +12,7 @@ import {
   SemanticField,
   SemanticSet,
 } from "./types";
+import { ArchConfig, getArchConfig } from "../core/arch";
 
 type OperandKind = "register" | "immediate" | "memory" | "unknown";
 
@@ -36,10 +37,29 @@ interface RuleResult {
 interface Rule {
   name: string;
   match(instruction: Instruction): boolean;
-  evaluate(instruction: Instruction): RuleResult;
+  evaluate(instruction: Instruction, arch: ArchConfig): RuleResult;
 }
 
-const REGISTERS: Register[] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+const X86_REGISTERS: Register[] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+const X64_REGISTERS: Register[] = [
+  "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+  "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+];
+const ALL_REGISTERS: Register[] = [...X86_REGISTERS, ...X64_REGISTERS];
+
+function registersForArch(arch: ArchConfig): Register[] {
+  return arch.id === "x64" ? X64_REGISTERS : X86_REGISTERS;
+}
+
+function spForArch(arch: ArchConfig): Register {
+  return arch.stackPointer as Register;
+}
+
+function bpForArch(arch: ArchConfig): Register {
+  return arch.basePointer as Register;
+}
+
+let REGISTERS: Register[] = X86_REGISTERS;
 
 function makeSet<T>(exact: T[] = [], conservative: T[] = [], unknown = false): SemanticSet<T> {
   return {
@@ -96,7 +116,7 @@ function parseOperand(text: string): ParsedOperand {
     return { kind: "unknown", text: normalized };
   }
 
-  if (REGISTERS.includes(normalized as Register)) {
+  if (ALL_REGISTERS.includes(normalized as Register)) {
     return { kind: "register", text: normalized, register: normalized as Register };
   }
 
@@ -112,12 +132,12 @@ function parseOperand(text: string): ParsedOperand {
 }
 
 function memoryBaseRegister(text: string): Register | undefined {
-  const match = text.toLowerCase().match(/\[([a-z]{3})\]/);
+  const match = text.toLowerCase().match(/\[([a-z][a-z0-9]{1,2})\]/);
   if (!match) {
     return undefined;
   }
   const register = match[1] as Register;
-  return REGISTERS.includes(register) ? register : undefined;
+  return ALL_REGISTERS.includes(register) ? register : undefined;
 }
 
 function isRegisterOperand(operand: ParsedOperand): operand is ParsedOperand & { register: Register } {
@@ -199,12 +219,12 @@ function memoryExpr(address: RegisterExpr): RegisterExpr {
 }
 
 function memoryAddressExpression(text: string): RegisterExpr | undefined {
-  const match = text.toLowerCase().match(/\[\s*([a-z]{3})(?:\s*([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/);
+  const match = text.toLowerCase().match(/\[\s*([a-z][a-z0-9]{1,2})(?:\s*([+-])\s*(0x[0-9a-f]+|\d+))?\s*\]/);
   if (!match) {
     return undefined;
   }
   const register = match[1] as Register;
-  if (!REGISTERS.includes(register)) {
+  if (!ALL_REGISTERS.includes(register)) {
     return undefined;
   }
   const rawOffset = match[3] === undefined ? 0 : parseImmediateValue(match[3]);
@@ -215,8 +235,16 @@ function memoryAddressExpression(text: string): RegisterExpr | undefined {
   return registerExpr(register, offset);
 }
 
+function isStackPointerReg(register: Register): boolean {
+  return register === "esp" || register === "rsp";
+}
+
+function isBasePointerReg(register: Register): boolean {
+  return register === "ebp" || register === "rbp";
+}
+
 function stackDeltaForRegisterImmediate(register: Register, delta: number | undefined): RuleResult["stackDelta"] {
-  return register === "esp" && delta !== undefined ? { exact: [delta] } : undefined;
+  return isStackPointerReg(register) && delta !== undefined ? { exact: [delta] } : undefined;
 }
 
 function stackReadEvidence(text: string): string {
@@ -252,25 +280,25 @@ const RULES: Rule[] = [
   {
     name: "pop-reg",
     match: (instruction) => instruction.mnemonic === "pop" && instruction.operands.length === 1,
-    evaluate: (instruction) => {
+    evaluate: (instruction, arch) => {
       const operand = parseOperand(instruction.operands[0]);
       if (!isRegisterOperand(operand)) {
         return {};
       }
-      // POP into ESP loads an arbitrary dword into ESP, so the net stack delta
-      // is unknown — not +4. Keep stackDelta consistent with the ESP transform.
-      const popsEsp = operand.register === "esp";
+      const sp = spForArch(arch);
+      const entrySize = arch.stackEntrySize;
+      const popsSp = isStackPointerReg(operand.register);
       return {
-        reads: ["esp"],
+        reads: [sp],
         writes: [operand.register],
-        stackDelta: popsEsp ? { unknown: true } : { exact: [4] },
-        memoryReads: ["[esp]"],
+        stackDelta: popsSp ? { unknown: true } : { exact: [entrySize] },
+        memoryReads: [`[${sp}]`],
         flowEffects: [],
-        registerEffects: popsEsp
-          ? { esp: unknownExpr() }
+        registerEffects: popsSp
+          ? { [sp]: unknownExpr() }
           : {
-              [operand.register]: memoryExpr(registerExpr("esp")),
-              esp: selfPlus(4),
+              [operand.register]: memoryExpr(registerExpr(sp)),
+              [sp]: selfPlus(entrySize),
             },
         evidence: [`POP ${operand.register} reads stack and writes ${operand.register}`],
       };
@@ -279,17 +307,19 @@ const RULES: Rule[] = [
   {
     name: "push-reg",
     match: (instruction) => instruction.mnemonic === "push" && instruction.operands.length === 1,
-    evaluate: (instruction) => {
+    evaluate: (instruction, arch) => {
       const operand = parseOperand(instruction.operands[0]);
       if (!isRegisterOperand(operand)) {
         return {};
       }
+      const sp = spForArch(arch);
+      const entrySize = arch.stackEntrySize;
       return {
-        reads: [operand.register, "esp"],
-        writes: ["esp"],
-        stackDelta: { exact: [-4] },
-        memoryWrites: ["[esp]"],
-        registerEffects: { esp: selfPlus(-4) },
+        reads: [operand.register, sp],
+        writes: [sp],
+        stackDelta: { exact: [-entrySize] },
+        memoryWrites: [`[${sp}]`],
+        registerEffects: { [sp]: selfPlus(-entrySize) },
         evidence: [`PUSH ${operand.register} decrements stack pointer`],
       };
     },
@@ -297,18 +327,20 @@ const RULES: Rule[] = [
   {
     name: "ret",
     match: (instruction) => instruction.mnemonic === "ret",
-    evaluate: (instruction) => {
+    evaluate: (instruction, arch) => {
+      const sp = spForArch(arch);
+      const entrySize = arch.stackEntrySize;
       const imm = immediateOperand(instruction);
-      const delta = imm === undefined ? 4 : 4 + imm;
+      const delta = imm === undefined ? entrySize : entrySize + imm;
       const evidence = imm === undefined
         ? ["RET pops return address"]
         : [`RET ${imm} adjusts stack by ${delta}`];
       return {
-        reads: ["esp"],
-        writes: ["esp"],
+        reads: [sp],
+        writes: [sp],
         stackDelta: { exact: [delta] },
         flowEffects: ["RETURN"],
-        registerEffects: { esp: selfPlus(delta) },
+        registerEffects: { [sp]: selfPlus(delta) },
         evidence,
       };
     },
@@ -316,7 +348,7 @@ const RULES: Rule[] = [
   {
     name: "mov-reg-reg",
     match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -333,7 +365,7 @@ const RULES: Rule[] = [
   {
     name: "mov-reg-mem",
     match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "memory") {
@@ -353,7 +385,7 @@ const RULES: Rule[] = [
   {
     name: "mov-mem-reg",
     match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (left.kind !== "memory" || !isRegisterOperand(right)) {
@@ -362,7 +394,7 @@ const RULES: Rule[] = [
       const base = memoryBaseRegister(left.text);
       return {
         reads: [right.register, ...(base ? [base] : [])],
-        writes: base === "esp" ? ["esp"] : [],
+        writes: base && isStackPointerReg(base) ? [base] : [],
         memoryWrites: [left.text],
         evidence: [`MOV ${left.text}, ${right.register}`],
       };
@@ -371,7 +403,7 @@ const RULES: Rule[] = [
   {
     name: "xor-reg-reg",
     match: (instruction) => instruction.mnemonic === "xor" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const reg = sameRegisterOperands(instruction);
       if (!reg) {
         return {};
@@ -387,7 +419,7 @@ const RULES: Rule[] = [
   {
     name: "add-reg-reg",
     match: (instruction) => instruction.mnemonic === "add" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -404,7 +436,7 @@ const RULES: Rule[] = [
   {
     name: "add-reg-imm",
     match: (instruction) => instruction.mnemonic === "add" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
@@ -423,7 +455,7 @@ const RULES: Rule[] = [
   {
     name: "sub-reg-reg",
     match: (instruction) => instruction.mnemonic === "sub" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -440,7 +472,7 @@ const RULES: Rule[] = [
   {
     name: "sub-reg-imm",
     match: (instruction) => instruction.mnemonic === "sub" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
@@ -459,7 +491,7 @@ const RULES: Rule[] = [
   {
     name: "neg-reg",
     match: (instruction) => instruction.mnemonic === "neg" && instruction.operands.length === 1,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const operand = parseOperand(instruction.operands[0]);
       if (!isRegisterOperand(operand)) {
         return {};
@@ -475,7 +507,7 @@ const RULES: Rule[] = [
   {
     name: "not-reg",
     match: (instruction) => instruction.mnemonic === "not" && instruction.operands.length === 1,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const operand = parseOperand(instruction.operands[0]);
       if (!isRegisterOperand(operand)) {
         return {};
@@ -491,7 +523,7 @@ const RULES: Rule[] = [
   {
     name: "or-reg-reg",
     match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -508,7 +540,7 @@ const RULES: Rule[] = [
   {
     name: "or-reg-imm",
     match: (instruction) => instruction.mnemonic === "or" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
@@ -525,7 +557,7 @@ const RULES: Rule[] = [
   {
     name: "and-reg-reg",
     match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -542,7 +574,7 @@ const RULES: Rule[] = [
   {
     name: "and-reg-imm",
     match: (instruction) => instruction.mnemonic === "and" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
@@ -559,7 +591,7 @@ const RULES: Rule[] = [
   {
     name: "adc-reg-reg",
     match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -576,7 +608,7 @@ const RULES: Rule[] = [
   {
     name: "adc-reg-imm",
     match: (instruction) => instruction.mnemonic === "adc" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
@@ -593,7 +625,7 @@ const RULES: Rule[] = [
   {
     name: "sbb-reg-reg",
     match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -610,7 +642,7 @@ const RULES: Rule[] = [
   {
     name: "sbb-reg-imm",
     match: (instruction) => instruction.mnemonic === "sbb" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "immediate") {
@@ -627,7 +659,7 @@ const RULES: Rule[] = [
   {
     name: "inc-reg",
     match: (instruction) => instruction.mnemonic === "inc" && instruction.operands.length === 1,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const operand = parseOperand(instruction.operands[0]);
       if (!isRegisterOperand(operand)) {
         return {};
@@ -643,7 +675,7 @@ const RULES: Rule[] = [
   {
     name: "dec-reg",
     match: (instruction) => instruction.mnemonic === "dec" && instruction.operands.length === 1,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const operand = parseOperand(instruction.operands[0]);
       if (!isRegisterOperand(operand)) {
         return {};
@@ -659,7 +691,7 @@ const RULES: Rule[] = [
   {
     name: "xchg-reg-reg",
     match: (instruction) => instruction.mnemonic === "xchg" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || !isRegisterOperand(right)) {
@@ -679,7 +711,7 @@ const RULES: Rule[] = [
   {
     name: "lea-reg-mem",
     match: (instruction) => instruction.mnemonic === "lea" && instruction.operands.length === 2,
-    evaluate: (instruction) => {
+    evaluate: (instruction, _arch) => {
       const left = parseOperand(instruction.operands[0]);
       const right = parseOperand(instruction.operands[1]);
       if (!isRegisterOperand(left) || right.kind !== "memory") {
@@ -701,43 +733,56 @@ const RULES: Rule[] = [
   {
     name: "leave",
     match: (instruction) => instruction.mnemonic === "leave",
-    evaluate: () => ({
-      reads: ["ebp", "esp"],
-      writes: ["esp", "ebp"],
-      stackDelta: { conservative: [4] },
-      memoryReads: ["[ebp]"],
-      registerEffects: {
-        esp: registerExpr("ebp", 4),
-        ebp: memoryExpr(registerExpr("ebp")),
-      },
-      evidence: ["LEAVE restores frame and pops saved base pointer"],
-    }),
+    evaluate: (_instruction, arch) => {
+      const sp = spForArch(arch);
+      const bp = bpForArch(arch);
+      const entrySize = arch.stackEntrySize;
+      return {
+        reads: [bp, sp],
+        writes: [sp, bp],
+        stackDelta: { conservative: [entrySize] },
+        memoryReads: [`[${bp}]`],
+        registerEffects: {
+          [sp]: registerExpr(bp, entrySize),
+          [bp]: memoryExpr(registerExpr(bp)),
+        },
+        evidence: ["LEAVE restores frame and pops saved base pointer"],
+      };
+    },
   },
   {
     name: "call",
     match: (instruction) => instruction.mnemonic === "call" && instruction.operands.length >= 1,
-    evaluate: (instruction) => ({
-      reads: instruction.operands.length > 0 ? [parseOperand(instruction.operands[0]).register ?? "eax"] : ["eax"],
-      writes: ["esp"],
-      stackDelta: { exact: [-4] },
-      flowEffects: ["CALL"],
-      registerEffects: { esp: selfPlus(-4) },
-      evidence: [`CALL ${instruction.operands.join(", ")}`],
-    }),
+    evaluate: (instruction, arch) => {
+      const sp = spForArch(arch);
+      const entrySize = arch.stackEntrySize;
+      const defaultReg = (arch.id === "x64" ? "rax" : "eax") as Register;
+      return {
+        reads: instruction.operands.length > 0 ? [parseOperand(instruction.operands[0]).register ?? defaultReg] : [defaultReg],
+        writes: [sp],
+        stackDelta: { exact: [-entrySize] },
+        flowEffects: ["CALL"] as FlowEffectKind[],
+        registerEffects: { [sp]: selfPlus(-entrySize) },
+        evidence: [`CALL ${instruction.operands.join(", ")}`],
+      };
+    },
   },
   {
     name: "jmp",
     match: (instruction) => instruction.mnemonic === "jmp" && instruction.operands.length >= 1,
-    evaluate: (instruction) => ({
-      reads: instruction.operands.length > 0 ? [parseOperand(instruction.operands[0]).register ?? "eax"] : ["eax"],
-      flowEffects: ["JUMP"],
-      evidence: [`JMP ${instruction.operands.join(", ")}`],
-    }),
+    evaluate: (instruction, arch) => {
+      const defaultReg = (arch.id === "x64" ? "rax" : "eax") as Register;
+      return {
+        reads: instruction.operands.length > 0 ? [parseOperand(instruction.operands[0]).register ?? defaultReg] : [defaultReg],
+        flowEffects: ["JUMP"] as FlowEffectKind[],
+        evidence: [`JMP ${instruction.operands.join(", ")}`],
+      };
+    },
   },
   {
     name: "nop",
     match: (instruction) => instruction.mnemonic === "nop",
-    evaluate: () => ({
+    evaluate: (_instruction, _arch) => ({
       evidence: ["NOP has no semantic side effects"],
     }),
   },
@@ -773,13 +818,14 @@ function fromRuleResult(instruction: Instruction, index: number, result: RuleRes
   };
 }
 
-export function analyzeInstruction(instruction: Instruction, index: number): InstructionSemantic {
+export function analyzeInstruction(instruction: Instruction, index: number, arch?: ArchConfig): InstructionSemantic {
+  const config = arch ?? getArchConfig();
   for (const rule of RULES) {
     if (!rule.match(instruction)) {
       continue;
     }
 
-    const result = rule.evaluate(instruction);
+    const result = rule.evaluate(instruction, config);
     const supported = Object.values(result).some((value) => Array.isArray(value) ? value.length > 0 : value !== undefined);
     if (!supported) {
       continue;

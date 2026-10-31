@@ -4,7 +4,7 @@ export type SchemaVersion = typeof SEMANTIC_SCHEMA_VERSION;
 
 export type Confidence = "EXACT" | "CONSERVATIVE" | "UNKNOWN";
 
-export type Register =
+export type X86Register =
   | "eax"
   | "ecx"
   | "edx"
@@ -13,6 +13,26 @@ export type Register =
   | "ebp"
   | "esi"
   | "edi";
+
+export type X64Register =
+  | "rax"
+  | "rcx"
+  | "rdx"
+  | "rbx"
+  | "rsp"
+  | "rbp"
+  | "rsi"
+  | "rdi"
+  | "r8"
+  | "r9"
+  | "r10"
+  | "r11"
+  | "r12"
+  | "r13"
+  | "r14"
+  | "r15";
+
+export type Register = X86Register | X64Register;
 
 export type FlowEffectKind = "RETURN" | "CALL" | "JUMP";
 
