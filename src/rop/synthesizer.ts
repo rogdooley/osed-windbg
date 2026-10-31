@@ -2,6 +2,7 @@ import { CapabilityIndex } from "./capabilities";
 import { ChainStep, firstKnownAddress } from "./chain";
 import { ExploitStrategy, RopStrategyPlan, StrategyPlan } from "./planner";
 import { RopGadget } from "./types";
+import { getArchConfig, isStackPointer, isGPRegister, normalizeRegisterForArch } from "../core/arch";
 
 // ---- Exploit state ----------------------------------------------------------
 
@@ -85,14 +86,22 @@ export type X86Register =
   | "eax" | "ebx" | "ecx" | "edx"
   | "esi" | "edi" | "ebp" | "esp";
 
+export type X64Register =
+  | "rax" | "rbx" | "rcx" | "rdx"
+  | "rsi" | "rdi" | "rbp" | "rsp"
+  | "r8" | "r9" | "r10" | "r11"
+  | "r12" | "r13" | "r14" | "r15";
+
+export type ArchRegister = X86Register | X64Register;
+
 export interface PivotSemantics {
   sequence: string;
   address: bigint;
   source: PivotSource;
-  sourceRegister?: X86Register;
+  sourceRegister?: ArchRegister;
   adjustment?: number;
   stackDeltaBeforePivot: number;
-  clobbers: X86Register[];
+  clobbers: ArchRegister[];
 }
 
 // ---- Synthesis output -------------------------------------------------------
@@ -143,8 +152,9 @@ export interface SynthesisResult {
 // ---- Helpers ----------------------------------------------------------------
 
 function hex32(value: bigint | number): string {
+  const arch = getArchConfig();
   const v = typeof value === "bigint" ? value : BigInt(value >>> 0);
-  return `0x${v.toString(16).toUpperCase().padStart(8, "0")}`;
+  return `0x${v.toString(16).toUpperCase().padStart(arch.pointerSize * 2, "0")}`;
 }
 
 function uniqueBytes(values: number[] | undefined): number[] {
@@ -157,10 +167,11 @@ function uniqueBytes(values: number[] | undefined): number[] {
 
 function badcharHits(value: number, badchars: number[]): number[] {
   if (badchars.length === 0) return [];
+  const arch = getArchConfig();
   const bad = new Set(badchars);
   const hits: number[] = [];
   const word = value >>> 0;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < arch.pointerSize; i++) {
     const byte = (word >>> (i * 8)) & 0xff;
     if (bad.has(byte) && !hits.includes(byte)) hits.push(byte);
   }
@@ -176,7 +187,9 @@ export function gadgetSequence(gadget: RopGadget): string {
   return gadget.instructions.map((i) => i.normalizedText).join(" ; ");
 }
 
-const GP_REGISTERS: X86Register[] = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+function getGPRegisters(): ArchRegister[] {
+  return [...getArchConfig().generalPurposeRegisters] as ArchRegister[];
+}
 
 // ---- Gadget selection -------------------------------------------------------
 
@@ -190,50 +203,51 @@ function findRetGadget(index: CapabilityIndex): RopGadget | undefined {
     .sort((a, b) => b.score - a.score)[0];
 }
 
-export function classifyPivotSource(gadget: RopGadget): { source: PivotSource; sourceRegister?: X86Register; adjustment?: number; clobbers: X86Register[] } {
+export function classifyPivotSource(gadget: RopGadget): { source: PivotSource; sourceRegister?: ArchRegister; adjustment?: number; clobbers: ArchRegister[] } {
   const instrs = gadget.instructions;
   const first = instrs[0];
+  const sp = getArchConfig().stackPointer as ArchRegister;
 
   if (first.mnemonic === "xchg" && first.operands.length === 2) {
     const ops = first.operands.map((o) => o.trim().toLowerCase());
-    const espIdx = ops.indexOf("esp");
-    if (espIdx >= 0) {
-      const other = ops[1 - espIdx] as X86Register;
-      return { source: "register", sourceRegister: other, clobbers: [other, "esp"] };
+    const spIdx = ops.findIndex((o) => isStackPointer(o));
+    if (spIdx >= 0) {
+      const other = ops[1 - spIdx] as ArchRegister;
+      return { source: "register", sourceRegister: other, clobbers: [other, sp] };
     }
   }
 
   if (first.mnemonic === "mov" && first.operands.length === 2) {
     const dst = first.operands[0].trim().toLowerCase();
     const src = first.operands[1].trim().toLowerCase();
-    if (dst === "esp" && GP_REGISTERS.includes(src as X86Register)) {
-      return { source: "register", sourceRegister: src as X86Register, clobbers: ["esp"] };
+    if (isStackPointer(dst) && isGPRegister(src)) {
+      return { source: "register", sourceRegister: src as ArchRegister, clobbers: [sp] };
     }
   }
 
   if (first.mnemonic === "add" && first.operands.length === 2) {
     const dst = first.operands[0].trim().toLowerCase();
-    if (dst === "esp") {
+    if (isStackPointer(dst)) {
       const imm = first.operands[1].trim();
       const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
       if (Number.isFinite(val)) {
-        return { source: "esp-adjust", adjustment: val, clobbers: ["esp"] };
+        return { source: "esp-adjust", adjustment: val, clobbers: [sp] };
       }
     }
   }
 
   if (first.mnemonic === "sub" && first.operands.length === 2) {
     const dst = first.operands[0].trim().toLowerCase();
-    if (dst === "esp") {
+    if (isStackPointer(dst)) {
       const imm = first.operands[1].trim();
       const val = imm.startsWith("0x") ? parseInt(imm, 16) : parseInt(imm, 10);
       if (Number.isFinite(val)) {
-        return { source: "esp-adjust", adjustment: -val, clobbers: ["esp"] };
+        return { source: "esp-adjust", adjustment: -val, clobbers: [sp] };
       }
     }
   }
 
-  return { source: "memory", clobbers: ["esp"] };
+  return { source: "memory", clobbers: [sp] };
 }
 
 function selectPivotGadget(index: CapabilityIndex, state: ExploitState): { gadget: RopGadget; semantics: PivotSemantics } | undefined {
@@ -290,34 +304,37 @@ function validateForDirectApi(
   state: ExploitState,
   plan: RopStrategyPlan,
 ): StateValidation {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const sp = arch.stackPointer.toUpperCase();
+  const entrySize = arch.stackEntrySize;
+  const convention = arch.id === "x64" ? "Microsoft x64" : "stdcall";
   const blockers: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
 
   if (!state.control.instructionPointerControlled) {
-    blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    blockers.push({ kind: "blocker", source: "control", message: `${ip} is not controlled.` });
   }
   if (state.control.mechanism !== "saved-ret") {
     blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; DIRECT_API requires ret-based control transfer.` });
   }
 
-  // DIRECT_API: the API address is the consumed saved return, so only the
-  // return-address slot plus the argument words sit after ESP (slots - 1).
-  const frameSize = (apiFrameSlots(plan.strategy).length - 1) * 4;
+  const frameSize = (apiFrameSlots(plan.strategy).length - 1) * entrySize;
   if (state.stack.controlledAfterEsp < frameSize) {
-    blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for ${plan.strategy} arguments (API address is the saved return, not on the stack).` });
+    blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ${sp}; ${frameSize} needed for ${plan.strategy} arguments (API address is the saved return, not on the stack).` });
   }
 
   if (!state.stack.writable) {
-    blockers.push({ kind: "blocker", source: "stack", message: "Stack region after ESP is not writable." });
+    blockers.push({ kind: "blocker", source: "stack", message: `Stack region after ${sp} is not writable.` });
   }
 
   if (state.stack.executable) {
     warnings.push({ kind: "warning", source: "stack", message: "Stack is already executable; DEP bypass may be unnecessary." });
   }
 
-  const alignment = state.stack.alignment ?? 4;
-  if (alignment % 4 !== 0) {
-    warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
+  const alignment = state.stack.alignment ?? entrySize;
+  if (alignment % entrySize !== 0) {
+    warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; ${convention} frames assume ${entrySize}-byte alignment.` });
   }
 
   if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
@@ -340,11 +357,16 @@ function validateForRetToFrame(
   plan: RopStrategyPlan,
   index: CapabilityIndex,
 ): StateValidation {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const sp = arch.stackPointer.toUpperCase();
+  const entrySize = arch.stackEntrySize;
+  const convention = arch.id === "x64" ? "Microsoft x64" : "stdcall";
   const blockers: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
 
   if (!state.control.instructionPointerControlled) {
-    blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    blockers.push({ kind: "blocker", source: "control", message: `${ip} is not controlled.` });
   }
   if (state.control.mechanism !== "saved-ret") {
     blockers.push({ kind: "blocker", source: "control", message: `Control mechanism "${state.control.mechanism}" is not saved-ret; RET_TO_FRAME requires ret-based control transfer.` });
@@ -361,15 +383,13 @@ function validateForRetToFrame(
     blockers.push({ kind: "blocker", source: "corpus", message: "No plain ret gadget with a known address exists in the corpus." });
   }
 
-  // RET_TO_FRAME: the full frame lives on the stack (API address, return
-  // address, and every argument word), i.e. one word per apiFrameSlots entry.
-  const frameSize = apiFrameSlots(plan.strategy).length * 4;
+  const frameSize = apiFrameSlots(plan.strategy).length * entrySize;
   if (state.stack.controlledAfterEsp < frameSize) {
-    blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ESP; ${frameSize} needed for the ${plan.strategy} stdcall frame (ret gadget + API + args).` });
+    blockers.push({ kind: "blocker", source: "stack", message: `Only ${state.stack.controlledAfterEsp} bytes controlled after ${sp}; ${frameSize} needed for the ${plan.strategy} ${convention} frame (ret gadget + API + args).` });
   }
 
   if (!state.stack.writable) {
-    blockers.push({ kind: "blocker", source: "stack", message: "Stack region after ESP is not writable." });
+    blockers.push({ kind: "blocker", source: "stack", message: `Stack region after ${sp} is not writable.` });
   }
 
   if (state.stack.executable) {
@@ -383,9 +403,9 @@ function validateForRetToFrame(
     blockers.push({ kind: "blocker", source: "resolution", message: "Plan requires direct resolution but exploit state constrains to IAT resolution." });
   }
 
-  const alignment = state.stack.alignment ?? 4;
-  if (alignment % 4 !== 0) {
-    warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; stdcall frames assume 4-byte alignment.` });
+  const alignment = state.stack.alignment ?? entrySize;
+  if (alignment % entrySize !== 0) {
+    warnings.push({ kind: "warning", source: "stack", message: `Stack alignment is ${alignment}-byte; ${convention} frames assume ${entrySize}-byte alignment.` });
   }
 
   return {
@@ -401,11 +421,15 @@ function validateForPivotToFrame(
   plan: RopStrategyPlan,
   index: CapabilityIndex,
 ): StateValidation {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const sp = arch.stackPointer.toUpperCase();
+  const entrySize = arch.stackEntrySize;
   const blockers: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
 
   if (!state.control.instructionPointerControlled) {
-    blockers.push({ kind: "blocker", source: "control", message: "EIP is not controlled." });
+    blockers.push({ kind: "blocker", source: "control", message: `${ip} is not controlled.` });
   }
 
   const pivotShape = plan.strategies.find((s) => s.shape === "STACK_PIVOT_FRAME");
@@ -424,15 +448,17 @@ function validateForPivotToFrame(
     }
   }
 
+  const minFrameBytes = 6 * entrySize;
   const hasControlledRegion = (state.memory ?? []).some(
-    (r) => r.controlled && r.writable && r.size >= 24,
+    (r) => r.controlled && r.writable && r.size >= minFrameBytes,
   );
-  if (!hasControlledRegion && state.stack.controlledAfterEsp < 24) {
-    blockers.push({ kind: "blocker", source: "memory", message: "No controlled, writable memory region large enough for a stdcall frame is described in the exploit state." });
+  if (!hasControlledRegion && state.stack.controlledAfterEsp < minFrameBytes) {
+    blockers.push({ kind: "blocker", source: "memory", message: "No controlled, writable memory region large enough for a call frame is described in the exploit state." });
   }
 
-  if (state.stack.controlledAfterEsp < 8) {
-    blockers.push({ kind: "blocker", source: "stack", message: "Fewer than 8 controlled bytes after ESP; not enough room for a pivot gadget address and target." });
+  const minPivotBytes = 2 * entrySize;
+  if (state.stack.controlledAfterEsp < minPivotBytes) {
+    blockers.push({ kind: "blocker", source: "stack", message: `Fewer than ${minPivotBytes} controlled bytes after ${sp}; not enough room for a pivot gadget address and target.` });
   }
 
   if (plan.apiResolution === "iat" && state.constraints.apiResolution === "direct") {
@@ -549,6 +575,7 @@ function buildFrameSlots(
   badchars: number[],
   startOffset: number,
 ): { slots: SynthesisSlot[]; placeholders: string[]; violations: Diagnostic[]; warnings: Diagnostic[] } {
+  const entrySize = getArchConfig().stackEntrySize;
   const placeholders = new Set<string>();
   const violations: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
@@ -578,8 +605,8 @@ function buildFrameSlots(
       step = { kind: "value", placeholder: def.placeholder, comment: def.comment };
     }
 
-    slots.push({ offset, size: 4, role: def.role, step });
-    offset += 4;
+    slots.push({ offset, size: entrySize, role: def.role, step });
+    offset += entrySize;
   }
 
   return { slots, placeholders: [...placeholders], violations, warnings };
@@ -604,24 +631,28 @@ function synthesizeDirectApi(
   state: ExploitState,
   badchars: number[],
 ): SynthesisResult {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const entrySize = arch.stackEntrySize;
   const frameDefs = apiFrameSlots(plan.strategy);
   const apiSlot = frameDefs.shift()!;
   const { slots, placeholders, violations, warnings } = buildFrameSlots(frameDefs, badchars, 0);
 
-  const apiStep: ChainStep = { kind: "value", placeholder: apiSlot.placeholder, comment: `saved EIP = ${apiSlot.comment} (direct overwrite)` };
+  const apiStep: ChainStep = { kind: "value", placeholder: apiSlot.placeholder, comment: `saved ${ip} = ${apiSlot.comment} (direct overwrite)` };
   const allPlaceholders = new Set([apiSlot.placeholder!, ...placeholders]);
   warnings.push({
     kind: "warning",
     source: "api-address",
-    message: `${apiSlot.placeholder}: saved EIP must contain the API address; check against badchars after resolution.`,
+    message: `${apiSlot.placeholder}: saved ${ip} must contain the API address; check against badchars after resolution.`,
   });
 
+  const savedIpRole = arch.id === "x64" ? "saved-rip" : "saved-eip";
   const allSlots: SynthesisSlot[] = [
-    { offset: -4, size: 4, role: "saved-eip", step: apiStep },
+    { offset: -entrySize, size: entrySize, role: savedIpRole, step: apiStep },
     ...slots,
   ];
 
-  const totalBytes = allSlots.length * 4;
+  const totalBytes = allSlots.length * entrySize;
   const lengthCheck = checkPayloadLength(totalBytes, state);
   if (lengthCheck) {
     return blocked(plan, "DIRECT_API", [lengthCheck]);
@@ -651,6 +682,10 @@ function synthesizeRetToFrame(
   state: ExploitState,
   badchars: number[],
 ): SynthesisResult {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const sp = arch.stackPointer.toUpperCase();
+  const entrySize = arch.stackEntrySize;
   const retGadget = findRetGadget(index)!;
   const retAddr = firstKnownAddress(retGadget)!;
   const violations: Diagnostic[] = [];
@@ -662,7 +697,7 @@ function synthesizeRetToFrame(
   const retStep: ChainStep = {
     kind: "gadget",
     address: retAddr,
-    comment: `saved EIP = ret gadget (dispatches to frame at ESP)`,
+    comment: `saved ${ip} = ret gadget (dispatches to frame at ${sp})`,
   };
 
   const frameDefs = apiFrameSlots(plan.strategy);
@@ -672,12 +707,13 @@ function synthesizeRetToFrame(
   violations.push(...frameViolations);
   warnings.push(...frameWarnings);
 
+  const savedIpRole = arch.id === "x64" ? "saved-rip" : "saved-eip";
   const allSlots: SynthesisSlot[] = [
-    { offset: -4, size: 4, role: "saved-eip", step: retStep },
+    { offset: -entrySize, size: entrySize, role: savedIpRole, step: retStep },
     ...frameSlots,
   ];
 
-  const totalBytes = allSlots.length * 4;
+  const totalBytes = allSlots.length * entrySize;
   const lengthCheck = checkPayloadLength(totalBytes, state);
   if (lengthCheck) {
     return blocked(plan, "RET_TO_FRAME", [lengthCheck]);
@@ -708,6 +744,10 @@ function synthesizePivotToFrame(
   badchars: number[],
   pivotSel: { gadget: RopGadget; semantics: PivotSemantics },
 ): SynthesisResult {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const entrySize = arch.stackEntrySize;
+  const convention = arch.id === "x64" ? "Microsoft x64" : "stdcall";
   const violations: Diagnostic[] = [];
   const warnings: Diagnostic[] = [];
 
@@ -717,18 +757,18 @@ function synthesizePivotToFrame(
   const pivotStep: ChainStep = {
     kind: "gadget",
     address: pivotSel.semantics.address,
-    comment: `saved EIP = pivot: ${pivotSel.semantics.sequence}`,
+    comment: `saved ${ip} = pivot: ${pivotSel.semantics.sequence}`,
   };
 
   const pivotDestStep: ChainStep = {
     kind: "value",
     placeholder: "PIVOT_DEST",
-    comment: "pivot destination (controlled region holding the stdcall frame)",
+    comment: `pivot destination (controlled region holding the ${convention} frame)`,
   };
 
   const frameDefs = apiFrameSlots(plan.strategy);
   const { slots: frameSlots, placeholders: framePlaceholders, violations: frameViolations, warnings: frameWarnings } =
-    buildFrameSlots(frameDefs, badchars, 8);
+    buildFrameSlots(frameDefs, badchars, 2 * entrySize);
 
   violations.push(...frameViolations);
   warnings.push(...frameWarnings);
@@ -737,16 +777,17 @@ function synthesizePivotToFrame(
   warnings.push({
     kind: "warning",
     source: "pivot-destination",
-    message: "PIVOT_DEST: set to a controlled, writable region that holds the stdcall frame.",
+    message: `PIVOT_DEST: set to a controlled, writable region that holds the ${convention} frame.`,
   });
 
+  const savedIpRole = arch.id === "x64" ? "saved-rip" : "saved-eip";
   const allSlots: SynthesisSlot[] = [
-    { offset: -4, size: 4, role: "saved-eip", step: pivotStep },
-    { offset: 0, size: 4, role: "pivot-destination", step: pivotDestStep },
+    { offset: -entrySize, size: entrySize, role: savedIpRole, step: pivotStep },
+    { offset: 0, size: entrySize, role: "pivot-destination", step: pivotDestStep },
     ...frameSlots,
   ];
 
-  const totalBytes = allSlots.length * 4;
+  const totalBytes = allSlots.length * entrySize;
   const lengthCheck = checkPayloadLength(totalBytes, state);
   if (lengthCheck) {
     return blocked(plan, "PIVOT_TO_FRAME", [lengthCheck]);

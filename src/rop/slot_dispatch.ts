@@ -2,28 +2,12 @@ import { CapabilityIndex } from "./capabilities";
 import { ChainStep, firstKnownAddress, getStableAddressHint, isAddressStable, retImmBytes, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { FrameWord, WriteFramePlan, planWriteFrame } from "./frame_write";
+import { getArchConfig } from "../core/arch";
 
-// ASLR-proof API dispatch through a non-ASLR IAT slot.
-//
-// When the imported API (e.g. kernel32!VirtualAlloc) is ASLR'd but the module's
-// IAT slot that points at it is at a fixed address, we never place the API
-// address in the payload. Instead we place a tiny deref preamble as *data* in
-// the frame and let it run at pivot time:
-//
-//   pop <ptr> ; ret         ; ptr = <IAT slot>            (stable module)
-//   mov <val>, [<ptr>] ; ret; val = *slot = live API addr
-//   jmp <val>               ; dispatch; the fake stdcall frame sits below ESP
-//     <retaddr>             ; where the API returns (-> shellcode / jmp esp)
-//     <arg1> .. <argN>      ; the stdcall arguments
-//
-// The deref/dispatch register is NOT assumed to be eax: any register (or a
-// two-register split, `mov <val>, [<ptr>]`) is used, ranked by stability. The
-// preamble gadget addresses and the slot are badchar-free words; any
-// null/badchar-heavy args are synthesised in a register and stored. This is an
-// assembler on top of planWriteFrame: it prepends the preamble words and hands
-// the whole word list to the write-frame engine.
-
-const REGS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"];
+function getRegs(): string[] {
+  const arch = getArchConfig();
+  return [...arch.generalPurposeRegisters].filter((r) => r !== arch.stackPointer);
+}
 
 export interface DerefChain {
   popPtr: RopGadget; // pop <ptrReg> ; ret
@@ -98,11 +82,12 @@ function stableCount(chain: DerefChain): number {
 // then fewer total instructions, then score. Returns undefined if no register
 // yields a complete chain.
 export function findDerefChain(index: CapabilityIndex): DerefChain | undefined {
+  const regs = getRegs();
   const candidates: DerefChain[] = [];
-  for (const valReg of REGS) {
+  for (const valReg of regs) {
     const dispatch = findJmp(index, valReg);
     if (!dispatch) continue;
-    for (const ptrReg of REGS) {
+    for (const ptrReg of regs) {
       const deref = findMemLoad(index, valReg, ptrReg);
       const popPtr = findPop(index, ptrReg);
       if (deref && popPtr) candidates.push({ popPtr, deref, dispatch, ptrReg, valReg });
@@ -123,9 +108,10 @@ export function findDerefChain(index: CapabilityIndex): DerefChain | undefined {
 
 // Which of the deref/dispatch shapes is missing, for an honest failure report.
 function missingDerefParts(index: CapabilityIndex): string[] {
+  const regs = getRegs();
   const missing: string[] = [];
-  const anyJmp = REGS.some((r) => findJmp(index, r));
-  const anyLoad = REGS.some((v) => REGS.some((p) => findMemLoad(index, v, p)));
+  const anyJmp = regs.some((r) => findJmp(index, r));
+  const anyLoad = regs.some((v) => regs.some((p) => findMemLoad(index, v, p)));
   if (!anyLoad) missing.push("no `mov <reg>, [<reg>] ; ret` to dereference the IAT slot");
   if (!anyJmp) missing.push("no `jmp <reg>` to dispatch the dereferenced pointer");
   if (anyLoad && anyJmp) {
@@ -173,17 +159,15 @@ export function planSlotDispatch(
   try {
     const plan = planSlotDispatchInner(index, bufAddress, slot, frame, badchars, preferStable);
     if (plan.success && entrySkewBytes > 0 && plan.steps.length > 0) {
-      // The vuln returns with `ret N`, so on entry ESP is N bytes past the saved
-      // return address — it skips the word right after the entry gadget. Insert
-      // N/4 filler words there so the entry gadget's real operand (BUF) lines up.
-      const fillers = Math.floor(entrySkewBytes / 4);
+      const entrySize = getArchConfig().stackEntrySize;
+      const fillers = Math.floor(entrySkewBytes / entrySize);
       const fillerSteps: ChainStep[] = Array.from({ length: fillers }, () => ({
         kind: "value" as const,
         value: 0x42424242,
         comment: `entry-skew filler (vuln ret ${entrySkewBytes} compensation)`,
       }));
       plan.steps = [plan.steps[0], ...fillerSteps, ...plan.steps.slice(1)];
-      plan.stackBytes = plan.steps.length * 4;
+      plan.stackBytes = plan.steps.length * entrySize;
     }
     return plan;
   } finally {
@@ -242,5 +226,6 @@ function planSlotDispatchInner(
 }
 
 function hex(value: number): string {
-  return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  const arch = getArchConfig();
+  return `0x${(value >>> 0).toString(16).toUpperCase().padStart(arch.pointerSize * 2, "0")}`;
 }

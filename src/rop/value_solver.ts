@@ -1,6 +1,7 @@
 import { CapabilityIndex } from "./capabilities";
 import { ChainStep, GadgetSelection, firstKnownAddress, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
+import { getArchConfig, normalizeRegisterForArch, isGPRegister, isStackPointer } from "../core/arch";
 
 export type RecipeKind = "direct" | "negate" | "complement" | "two-add" | "two-sub" | "zero-add" | "zero-sub-neg";
 
@@ -13,20 +14,10 @@ export interface ValueRecipe {
   clobbers: string[];
 }
 
-const SCRATCH_CANDIDATES = ["eax", "ecx", "edx", "ebx", "esi", "edi"];
-
-const SUBREGISTER_PARENT: Record<string, string> = {
-  ax: "eax", al: "eax", ah: "eax",
-  bx: "ebx", bl: "ebx", bh: "ebx",
-  cx: "ecx", cl: "ecx", ch: "ecx",
-  dx: "edx", dl: "edx", dh: "edx",
-  si: "esi", di: "edi", bp: "ebp", sp: "esp",
-};
-
-const X86_REGISTERS = new Set<string>([
-  "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
-  ...Object.keys(SUBREGISTER_PARENT),
-]);
+function getScratchCandidates(): string[] {
+  const arch = getArchConfig();
+  return [...arch.generalPurposeRegisters].filter((r) => r !== arch.stackPointer);
+}
 
 // Mnemonics whose first operand is the written destination register.
 const WRITE_DEST_MNEMONICS = new Set<string>([
@@ -40,8 +31,8 @@ const STACK_UNSAFE_MNEMONICS = new Set<string>(["push", "pusha", "pushad", "leav
 
 function normalizeRegister(operand: string | undefined): string | undefined {
   const reg = operand?.trim().toLowerCase();
-  if (!reg || !X86_REGISTERS.has(reg)) return undefined;
-  return SUBREGISTER_PARENT[reg] ?? reg;
+  if (!reg || !isGPRegister(reg)) return undefined;
+  return normalizeRegisterForArch(reg);
 }
 
 function parseImmediate(operand: string | undefined): number | undefined {
@@ -94,21 +85,23 @@ function gadgetEffects(gadget: RopGadget): GadgetEffects {
       fillers.push({ kind: "value", value: 0x41414141, comment: `junk (${rawDst ?? "?"} side effect)` });
       continue;
     }
-    if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+    if ((mnemonic === "add" || mnemonic === "sub") && isStackPointer(rawDst ?? "")) {
+      const entrySize = getArchConfig().stackEntrySize;
+      const sp = getArchConfig().stackPointer;
       const imm = parseImmediate(insn.operands[1]);
-      if (imm === undefined || imm % 4 !== 0) { markUnsafe(`${mnemonic} esp, ${insn.operands[1] ?? "?"} is not a paddable 4-byte multiple`); continue; }
-      if (mnemonic === "sub") { markUnsafe(`sub esp, 0x${imm.toString(16)} shifts ESP back into consumed stack`); continue; }
-      for (let k = 0; k < imm / 4; k++) {
-        fillers.push({ kind: "value", value: 0x41414141, comment: `junk (add esp, 0x${imm.toString(16)})` });
+      if (imm === undefined || imm % entrySize !== 0) { markUnsafe(`${mnemonic} ${sp}, ${insn.operands[1] ?? "?"} is not a paddable ${entrySize}-byte multiple`); continue; }
+      if (mnemonic === "sub") { markUnsafe(`sub ${sp}, 0x${imm.toString(16)} shifts ${sp.toUpperCase()} back into consumed stack`); continue; }
+      for (let k = 0; k < imm / entrySize; k++) {
+        fillers.push({ kind: "value", value: 0x41414141, comment: `junk (add ${sp}, 0x${imm.toString(16)})` });
       }
       continue;
     }
     if (STACK_UNSAFE_MNEMONICS.has(mnemonic)) { markUnsafe(`${mnemonic} alters ESP/control unpredictably`); continue; }
-    if (dst === "esp") { markUnsafe(`${mnemonic} writes ESP directly`); continue; }
+    if (isStackPointer(dst ?? "")) { markUnsafe(`${mnemonic} writes ${getArchConfig().stackPointer} directly`); continue; }
     if (mnemonic === "xchg") {
       const a = normalizeRegister(insn.operands[0]);
       const b = normalizeRegister(insn.operands[1]);
-      if (a === "esp" || b === "esp") { markUnsafe("xchg with ESP"); continue; }
+      if (isStackPointer(a ?? "") || isStackPointer(b ?? "")) { markUnsafe(`xchg with ${getArchConfig().stackPointer}`); continue; }
       if (a) clobbers.add(a);
       if (b) clobbers.add(b);
       continue;
@@ -128,7 +121,7 @@ function gadgetEffects(gadget: RopGadget): GadgetEffects {
 // Such a gadget cannot be used to load that register to a chosen value.
 function poppedRegisterSurvives(gadget: RopGadget, reg: string): boolean {
   const insns = gadget.instructions;
-  const target = SUBREGISTER_PARENT[reg] ?? reg;
+  const target = normalizeRegisterForArch(reg);
   for (let i = 1; i < insns.length; i++) {
     const insn = insns[i];
     const mnemonic = insn.mnemonic.trim().toLowerCase();
@@ -151,7 +144,7 @@ function poppedRegisterSurvives(gadget: RopGadget, reg: string): boolean {
 // thing that touches the register — e.g. `neg ecx ; sbb ecx, ecx ; ret` writes
 // ecx last with sbb, so it is NOT a usable negate gadget for ecx.
 function registerFinalWriteMnemonic(gadget: RopGadget, reg: string): string | undefined {
-  const target = SUBREGISTER_PARENT[reg] ?? reg;
+  const target = normalizeRegisterForArch(reg);
   let last: string | undefined;
   const insns = gadget.instructions;
   for (let i = 0; i < insns.length; i++) {
@@ -189,8 +182,9 @@ function collectClobbers(primaryReg: string, gadgets: RopGadget[], scratch?: str
 
 function isBadcharFree(value: number, badchars: Set<number>): boolean {
   if (badchars.size === 0) return true;
+  const arch = getArchConfig();
   const w = value >>> 0;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < arch.pointerSize; i++) {
     if (badchars.has((w >>> (i * 8)) & 0xff)) return false;
   }
   return true;
@@ -347,7 +341,7 @@ function tryDirect(
   ];
   // Insert the value right after the gadget address (before any side-effect junk)
   steps.splice(1, 0, valueStep(value, valueComment(reg, value)));
-  return { steps, recipe: "direct", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget]) };
+  return { steps, recipe: "direct", stackBytes: steps.length * getArchConfig().stackEntrySize, clobbers: collectClobbers(reg, [pop.gadget]) };
 }
 
 function tryNegate(
@@ -363,7 +357,7 @@ function tryNegate(
   ];
   steps.splice(1, 0, valueStep(negValue, `${reg} = neg(${hex32(value >>> 0)}) = ${hex32(negValue)}`));
   steps.push(...emitGadgetWithSideEffects(neg, `neg ${reg} -> ${hex32(value >>> 0)}`));
-  return { steps, recipe: "negate", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, neg.gadget]) };
+  return { steps, recipe: "negate", stackBytes: steps.length * getArchConfig().stackEntrySize, clobbers: collectClobbers(reg, [pop.gadget, neg.gadget]) };
 }
 
 function tryComplement(
@@ -379,7 +373,7 @@ function tryComplement(
   ];
   steps.splice(1, 0, valueStep(notValue, `${reg} = not(${hex32(value >>> 0)}) = ${hex32(notValue)}`));
   steps.push(...emitGadgetWithSideEffects(not, `not ${reg} -> ${hex32(value >>> 0)}`));
-  return { steps, recipe: "complement", stackBytes: steps.length * 4, clobbers: collectClobbers(reg, [pop.gadget, not.gadget]) };
+  return { steps, recipe: "complement", stackBytes: steps.length * getArchConfig().stackEntrySize, clobbers: collectClobbers(reg, [pop.gadget, not.gadget]) };
 }
 
 function tryTwoOp(
@@ -395,8 +389,9 @@ function tryTwoOp(
   // Evaluate every scratch register and keep the cheapest chain (fewest words),
   // so a clean `add reg, edx ; ret` beats an `add reg, ecx ; ret N` that would
   // drag in filler words.
+  const entrySize = getArchConfig().stackEntrySize;
   let best: ValueRecipe | undefined;
-  for (const scratch of SCRATCH_CANDIDATES) {
+  for (const scratch of getScratchCandidates()) {
     if (scratch === reg || preserve.has(scratch)) continue;
     const binGadget = findBinaryGadget(index, capKind, reg, scratch, preserve);
     if (!binGadget) continue;
@@ -404,15 +399,12 @@ function tryTwoOp(
     if (!scratchPop) continue;
 
     const steps: ChainStep[] = [];
-    // Step 1: pop dst, A
     const popSteps = emitGadgetWithSideEffects(pop, `pop ${reg}`);
     popSteps.splice(1, 0, valueStep(decomp.a, `${reg} = ${hex32(decomp.a)}`));
     steps.push(...popSteps);
-    // Step 2: pop scratch, B
     const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
     scratchSteps.splice(1, 0, valueStep(decomp.b, `${scratch} = ${hex32(decomp.b)}`));
     steps.push(...scratchSteps);
-    // Step 3: add/sub dst, scratch
     const op = mode === "add" ? "add" : "sub";
     steps.push(...emitGadgetWithSideEffects(binGadget, `${op} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
 
@@ -420,7 +412,7 @@ function tryTwoOp(
       steps,
       recipe: mode === "add" ? "two-add" : "two-sub",
       scratchRegister: scratch,
-      stackBytes: steps.length * 4,
+      stackBytes: steps.length * entrySize,
       clobbers: collectClobbers(reg, [pop.gadget, scratchPop.gadget, binGadget.gadget], scratch),
     };
     if (!best || recipe.stackBytes < best.stackBytes) best = recipe;
@@ -435,7 +427,7 @@ function tryZeroAdd(
   const zero = findZeroGadget(index, reg, preserve);
   if (!zero) return undefined;
 
-  for (const scratch of SCRATCH_CANDIDATES) {
+  for (const scratch of getScratchCandidates()) {
     if (scratch === reg || preserve.has(scratch)) continue;
     const addGadget = findBinaryGadget(index, "REGISTER_ADD", reg, scratch, preserve);
     if (!addGadget) continue;
@@ -453,7 +445,7 @@ function tryZeroAdd(
       steps,
       recipe: "zero-add",
       scratchRegister: scratch,
-      stackBytes: steps.length * 4,
+      stackBytes: steps.length * getArchConfig().stackEntrySize,
       clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, addGadget.gadget], scratch),
     };
   }
@@ -468,7 +460,7 @@ function tryZeroSubNeg(
   const neg = findUnaryGadget(index, "REGISTER_NEGATE", reg, preserve);
   if (!zero || !neg) return undefined;
 
-  for (const scratch of SCRATCH_CANDIDATES) {
+  for (const scratch of getScratchCandidates()) {
     if (scratch === reg || preserve.has(scratch)) continue;
     const subGadget = findBinaryGadget(index, "REGISTER_SUB", reg, scratch, preserve);
     if (!subGadget) continue;
@@ -487,7 +479,7 @@ function tryZeroSubNeg(
       steps,
       recipe: "zero-sub-neg",
       scratchRegister: scratch,
-      stackBytes: steps.length * 4,
+      stackBytes: steps.length * getArchConfig().stackEntrySize,
       clobbers: collectClobbers(reg, [zero.gadget, scratchPop.gadget, subGadget.gadget, neg.gadget], scratch),
     };
   }

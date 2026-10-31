@@ -56,6 +56,7 @@ import { formatAddress } from "./core/output";
 import * as out from "./core/output";
 import { DxResult, toDxResult } from "./core/dx_result";
 import { getPointerSize } from "./core/memory";
+import { getArchConfig, formatHexForArch } from "./core/arch";
 import { findHelpEntry, helpRows } from "./core/help_catalog";
 import { createMemoryCommand } from "./commands/memory";
 import { createLandingCommand, landingDxRows } from "./commands/landing";
@@ -96,6 +97,18 @@ let cachedExploitState: ExploitState | undefined;
 const NO_ROP_CORPUS_MESSAGE = "No ROP corpus loaded. Run rop.scan(...) for RP++ text or rop.scan_live(...) for live target memory first.";
 const NO_EXPLOIT_STATE_MESSAGE = "No exploit state available. Run triage() first to capture crash state.";
 
+function hexWord(value: bigint | number): string {
+  const arch = getArchConfig();
+  const w = arch.pointerSize * 2;
+  if (typeof value === "bigint") return `0x${value.toString(16).toUpperCase().padStart(w, "0")}`;
+  return `0x${(value >>> 0).toString(16).toUpperCase().padStart(w, "0")}`;
+}
+
+function formatStepWord(step: { kind: string; address?: bigint; value?: number; placeholder?: string }): string {
+  if (step.kind === "gadget" && step.address !== undefined) return hexWord(step.address);
+  return step.placeholder ?? hexWord(step.value!);
+}
+
 function buildExploitStateFromTriage(findings: Record<string, unknown>): ExploitState {
   const control = findings.control as Record<string, unknown> | undefined;
   const stack = findings.stack as Record<string, unknown> | undefined;
@@ -125,7 +138,8 @@ function buildExploitStateFromTriage(findings: Record<string, unknown>): Exploit
   if (Array.isArray(regEntries)) {
     for (const entry of regEntries) {
       const name = entry.name?.toLowerCase();
-      if (name && name !== "eip" && name !== "esp") {
+      const arch = getArchConfig();
+      if (name && name !== arch.instructionPointer && name !== arch.stackPointer) {
         registers[name] = { kind: "unknown" };
       }
     }
@@ -159,8 +173,8 @@ function mergeExploitStateOverrides(base: ExploitState, overrides: Record<string
   if (overrides.mechanism !== undefined) {
     merged.control = { ...merged.control, mechanism: String(overrides.mechanism) as ControlMechanism };
   }
-  if (overrides.eipControlled !== undefined) {
-    merged.control = { ...merged.control, instructionPointerControlled: Boolean(overrides.eipControlled) };
+  if (overrides.eipControlled !== undefined || overrides.ripControlled !== undefined) {
+    merged.control = { ...merged.control, instructionPointerControlled: Boolean(overrides.eipControlled ?? overrides.ripControlled) };
   }
 
   if (overrides.controlledBytesAfterEsp !== undefined) {
@@ -1094,14 +1108,18 @@ function bindApi(): OsedApi {
   };
 
   const formatExploitStateRows = (state: ExploitState): Array<Record<string, string>> => {
+    const arch = getArchConfig();
+    const ip = arch.instructionPointer;
+    const sp = arch.stackPointer;
+    const hexWidth = arch.pointerSize * 2;
     const rows: Array<Record<string, string>> = [];
     rows.push({ Section: "Control", Field: "mechanism", Value: state.control.mechanism });
-    rows.push({ Section: "Control", Field: "eipControlled", Value: String(state.control.instructionPointerControlled) });
+    rows.push({ Section: "Control", Field: `${ip}Controlled`, Value: String(state.control.instructionPointerControlled) });
     if (state.stack.espAtControl !== undefined) {
-      rows.push({ Section: "Stack", Field: "espAtControl", Value: `0x${(state.stack.espAtControl >>> 0).toString(16).toUpperCase().padStart(8, "0")}` });
+      rows.push({ Section: "Stack", Field: `${sp}AtControl`, Value: `0x${(state.stack.espAtControl >>> 0).toString(16).toUpperCase().padStart(hexWidth, "0")}` });
     }
-    rows.push({ Section: "Stack", Field: "controlledBeforeEsp", Value: state.stack.controlledBeforeEsp.toString() });
-    rows.push({ Section: "Stack", Field: "controlledAfterEsp", Value: state.stack.controlledAfterEsp.toString() });
+    rows.push({ Section: "Stack", Field: `controlledBefore${sp.charAt(0).toUpperCase()}${sp.slice(1)}`, Value: state.stack.controlledBeforeEsp.toString() });
+    rows.push({ Section: "Stack", Field: `controlledAfter${sp.charAt(0).toUpperCase()}${sp.slice(1)}`, Value: state.stack.controlledAfterEsp.toString() });
     rows.push({ Section: "Stack", Field: "contiguousControlledBytes", Value: state.stack.contiguousControlledBytes.toString() });
     rows.push({ Section: "Stack", Field: "readable", Value: String(state.stack.readable) });
     rows.push({ Section: "Stack", Field: "writable", Value: String(state.stack.writable) });
@@ -1114,7 +1132,7 @@ function bindApi(): OsedApi {
       for (const reg of regNames) {
         const rs = state.registers[reg]!;
         const val = rs.kind === "constant"
-          ? `constant: 0x${(rs.value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`
+          ? `constant: 0x${(rs.value >>> 0).toString(16).toUpperCase().padStart(hexWidth, "0")}`
           : rs.kind === "pointer-into-controlled"
             ? `pointer-into-controlled: offset ${rs.offset}`
             : rs.kind;
@@ -1233,7 +1251,7 @@ function bindApi(): OsedApi {
         if (adjustment === undefined || Math.abs(adjustment) < minDelta) continue;
       }
 
-      const addrHex = `0x${addr.toString(16).toUpperCase().padStart(8, "0")}`;
+      const addrHex = hexWord(addr);
       rows.push({
         Address: addrHex,
         Type: source,
@@ -1305,7 +1323,7 @@ function bindApi(): OsedApi {
     }
 
     const rows = plan.steps.map((step) => ({
-      Word: step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Word: formatStepWord(step),
       Meaning: step.comment,
     }));
     renderRows(title, rows);
@@ -1344,7 +1362,8 @@ function bindApi(): OsedApi {
       ? positionalTargets
       : parseChainTargets(options.set ?? options.targets ?? options);
     if (targets.length === 0) {
-      const rows = [{ Error: 'rop.chain requires register/value pairs, e.g. rop.chain("eax", 0xDEADBEEF).' }];
+      const exReg = getArchConfig().id === "x64" ? "rcx" : "eax";
+      const rows = [{ Error: `rop.chain requires register/value pairs, e.g. rop.chain("${exReg}", 0xDEADBEEF).` }];
       renderRows("ROP Chain", rows);
       setResult({ command: "rop.chain", args: options, success: false, findings: [], warnings: [], errors: ["No chain targets provided."] });
       return toDxResult("ROP Chain", rows);
@@ -1364,7 +1383,7 @@ function bindApi(): OsedApi {
     }
 
     const rows = plan.steps.map((step) => ({
-      Word: step.kind === "gadget" ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}` : `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Word: formatStepWord(step),
       Meaning: step.comment,
     }));
     renderRows("ROP Chain", rows);
@@ -1551,9 +1570,7 @@ function bindApi(): OsedApi {
     }
 
     const rows = plan.steps.map((step) => ({
-      Word: step.kind === "gadget"
-        ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}`
-        : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Word: formatStepWord(step),
       Meaning: step.comment,
     }));
     renderRows(sectionLabel, rows);
@@ -1623,9 +1640,7 @@ function bindApi(): OsedApi {
     }
 
     const rows = plan.steps.map((step) => ({
-      Word: step.kind === "gadget"
-        ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}`
-        : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Word: formatStepWord(step),
       Meaning: step.comment,
     }));
     renderRows(sectionLabel, rows);
@@ -1695,9 +1710,7 @@ function bindApi(): OsedApi {
     }
 
     const rows = plan.steps.map((step) => ({
-      Word: step.kind === "gadget"
-        ? `0x${step.address!.toString(16).toUpperCase().padStart(8, "0")}`
-        : step.placeholder ?? `0x${(step.value! >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+      Word: formatStepWord(step),
       Meaning: step.comment,
     }));
     renderRows(sectionLabel, rows);
@@ -2139,7 +2152,7 @@ function bindApi(): OsedApi {
     let bufAddr: string | undefined;
     if (options.buf !== undefined) {
       bufAddr = typeof options.buf === "number"
-        ? `0x${(options.buf >>> 0).toString(16).padStart(8, "0")}`
+        ? hexWord(options.buf)
         : String(options.buf).trim();
       out.info(`Buffer: ${bufAddr} (user-supplied)`);
     } else {
@@ -2512,7 +2525,9 @@ function bindApi(): OsedApi {
       // Register state at end
       out.section("Final Register State");
       const regs = report.runtime.finalRegisters;
-      const regOrder = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
+      const regOrder = getArchConfig().id === "x64"
+        ? ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
+        : ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"];
       for (const reg of regOrder) {
         if (regs[reg] !== undefined && regs[reg] !== "?") {
           out.info(`  ${reg.toUpperCase()} = ${regs[reg]}`);

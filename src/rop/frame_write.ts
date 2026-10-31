@@ -2,13 +2,7 @@ import { CapabilityIndex } from "./capabilities";
 import { ChainStep, firstKnownAddress, fixRetImmPadding, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint, getStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { solveValue } from "./value_solver";
-
-// Write-based stdcall frame construction — the no-PUSHAD path. Assembles the
-// call frame word-by-word in a writable buffer (BUF) using a canonical
-// `mov [eax], ecx ; ret` store (EAX = destination pointer, ECX = value), then
-// pivots ESP onto BUF so the trailing `ret` dispatches into the API and BUF+4..
-// become its stdcall arguments. Null/badchar-heavy words are synthesised in ECX
-// via the value solver rather than placed in the payload.
+import { getArchConfig } from "../core/arch";
 
 export interface FrameWord {
   value?: number;
@@ -25,7 +19,7 @@ export interface FrameWord {
 export interface WriteFramePlan {
   steps: ChainStep[];
   unsatisfied: string[];
-  gadgets: { store?: bigint; advance?: bigint; pivot?: bigint; popEax?: bigint; popEcx?: bigint };
+  gadgets: { store?: bigint; advance?: bigint; pivot?: bigint; popPtr?: bigint };
   placeholders: string[];
   stackBytes: number;
   success: boolean;
@@ -42,8 +36,9 @@ function op(g: RopGadget, i: number, n: number): string {
 
 function isBadcharFree(value: number, badchars: Set<number>): boolean {
   if (badchars.size === 0) return true;
+  const arch = getArchConfig();
   const w = value >>> 0;
-  for (let i = 0; i < 4; i++) if (badchars.has((w >>> (i * 8)) & 0xff)) return false;
+  for (let i = 0; i < arch.pointerSize; i++) if (badchars.has((w >>> (i * 8)) & 0xff)) return false;
   return true;
 }
 
@@ -62,19 +57,30 @@ function pickBest(cands: RopGadget[]): RopGadget | undefined {
     })[0];
 }
 
-const VALUE_REGS = ["ecx", "edx", "ebx", "esi", "edi", "ebp"];
+function getValueRegs(): string[] {
+  const arch = getArchConfig();
+  if (arch.id === "x64") {
+    return ["rcx", "rdx", "rbx", "rsi", "rdi", "rbp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
+  }
+  return ["ecx", "edx", "ebx", "esi", "edi", "ebp"];
+}
+
+function getPtrReg(): string {
+  return getArchConfig().id === "x64" ? "rax" : "eax";
+}
 
 interface Store { gadget: RopGadget; reg: string; }
 
-// All `mov [eax], <reg> ; ret` stores (EAX = pointer). The value register varies
-// by gadget; we pick per word whichever one the value can be built in.
 function findStores(index: CapabilityIndex): Store[] {
+  const ptrReg = getPtrReg();
+  const valueRegs = getValueRegs();
+  const ptrPattern = new RegExp(`\\[${ptrReg}\\]$`);
   const byReg = new Map<string, RopGadget[]>();
   for (const g of index.gadgets) {
     if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
-    if (!/\[eax\]$/.test(op(g, 0, 0))) continue;
+    if (!ptrPattern.test(op(g, 0, 0))) continue;
     const reg = op(g, 0, 1);
-    if (!VALUE_REGS.includes(reg)) continue;
+    if (!valueRegs.includes(reg)) continue;
     (byReg.get(reg) ?? byReg.set(reg, []).get(reg)!).push(g);
   }
   const stores: Store[] = [];
@@ -85,15 +91,17 @@ function findStores(index: CapabilityIndex): Store[] {
   return stores;
 }
 
-// add eax, 4 ; ret  (advance the write pointer one dword). Extra pops after the
-// add each consume a junk dword — captured so the caller can pad them.
 function findAdvance(index: CapabilityIndex): { gadget: RopGadget; junkPops: number } | undefined {
+  const ptrReg = getPtrReg();
+  const arch = getArchConfig();
+  const immHex = `0x${arch.stackEntrySize.toString(16)}`;
+  const immDec = arch.stackEntrySize.toString();
   const cands = index.gadgets.filter((g) => {
     if (!lastIsRet(g)) return false;
     if (g.instructions[0].mnemonic !== "add") return false;
-    if (op(g, 0, 0) !== "eax") return false;
+    if (op(g, 0, 0) !== ptrReg) return false;
     const imm = op(g, 0, 1);
-    return imm === "0x4" || imm === "4";
+    return imm === immHex || imm === immDec;
   });
   const gadget = pickBest(cands);
   if (!gadget) return undefined;
@@ -104,14 +112,15 @@ function findAdvance(index: CapabilityIndex): { gadget: RopGadget; junkPops: num
   return { gadget, junkPops };
 }
 
-// xchg eax, esp ; ret  (or mov esp, eax ; ret) — land ESP on the assembled frame.
 function findPivot(index: CapabilityIndex): RopGadget | undefined {
+  const ptrReg = getPtrReg();
+  const sp = getArchConfig().stackPointer;
   const xchg = index.gadgets.filter((g) =>
     g.instructions.length === 2 && g.instructions[0].mnemonic === "xchg" && lastIsRet(g) &&
-    ((op(g, 0, 0) === "eax" && op(g, 0, 1) === "esp") || (op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax")));
-  const movEsp = index.gadgets.filter((g) =>
-    g.instructions[0]?.mnemonic === "mov" && op(g, 0, 0) === "esp" && op(g, 0, 1) === "eax" && lastIsRet(g));
-  return pickBest(xchg) ?? pickBest(movEsp);
+    ((op(g, 0, 0) === ptrReg && op(g, 0, 1) === sp) || (op(g, 0, 0) === sp && op(g, 0, 1) === ptrReg)));
+  const movSp = index.gadgets.filter((g) =>
+    g.instructions[0]?.mnemonic === "mov" && op(g, 0, 0) === sp && op(g, 0, 1) === ptrReg && lastIsRet(g));
+  return pickBest(xchg) ?? pickBest(movSp);
 }
 
 function findCleanPop(index: CapabilityIndex, reg: string): RopGadget | undefined {
@@ -124,16 +133,18 @@ function findCleanPop(index: CapabilityIndex, reg: string): RopGadget | undefine
 
 interface MemLoad { gadget: RopGadget; valReg: string; ptrReg: string; }
 
-// mov <valReg>, [<ptrReg>] ; ret  (load a pointer through a register). Used to
-// dereference an IAT slot into a value register at runtime.
 function findMemLoads(index: CapabilityIndex, valRegs: string[]): MemLoad[] {
+  const framePtrReg = getPtrReg();
+  const arch = getArchConfig();
+  const gpRegs = arch.generalPurposeRegisters.filter((r) => r !== arch.stackPointer);
+  const regPattern = new RegExp(`\\[(${gpRegs.join("|")})\\]$`);
   const out: MemLoad[] = [];
   for (const g of index.gadgets) {
     if (g.instructions.length !== 2 || g.instructions[0].mnemonic !== "mov" || !lastIsRet(g)) continue;
     const dst = op(g, 0, 0);
-    if (!valRegs.includes(dst) || dst === "eax") continue;
-    const m = /\[(eax|ebx|ecx|edx|esi|edi|ebp)\]$/.exec(op(g, 0, 1));
-    if (!m || m[1] === "eax") continue; // eax is the frame pointer — never use it as the deref pointer
+    if (!valRegs.includes(dst) || dst === framePtrReg) continue;
+    const m = regPattern.exec(op(g, 0, 1));
+    if (!m || m[1] === framePtrReg) continue;
     out.push({ gadget: g, valReg: dst, ptrReg: m[1] });
   }
   return out.sort((a, b) => (isAddressStable(firstKnownAddress(a.gadget)!) ? 0 : 1) - (isAddressStable(firstKnownAddress(b.gadget)!) ? 0 : 1));
@@ -190,20 +201,25 @@ function planWriteFrameInner(
   const unsatisfied: string[] = [];
   const placeholders = new Set<string>();
 
+  const arch = getArchConfig();
+  const ptrReg = getPtrReg();
+  const sp = arch.stackPointer;
+  const entrySize = arch.stackEntrySize;
+
   const stores = findStores(index);
   const advance = findAdvance(index);
   const pivot = findPivot(index);
-  const popEax = findCleanPop(index, "eax");
+  const popPtr = findCleanPop(index, ptrReg);
   const popByReg = new Map<string, RopGadget | undefined>();
   const popFor = (reg: string): RopGadget | undefined => {
     if (!popByReg.has(reg)) popByReg.set(reg, findCleanPop(index, reg));
     return popByReg.get(reg);
   };
 
-  if (stores.length === 0) unsatisfied.push("no `mov [eax], <reg> ; ret` store gadget");
-  if (!popEax) unsatisfied.push("no clean `pop eax ; ret`");
-  if (words.length > 1 && !advance) unsatisfied.push("no `add eax, 4 ; ret` pointer-advance gadget");
-  if (!pivot) unsatisfied.push("no `xchg eax, esp` / `mov esp, eax` pivot gadget");
+  if (stores.length === 0) unsatisfied.push(`no \`mov [${ptrReg}], <reg> ; ret\` store gadget`);
+  if (!popPtr) unsatisfied.push(`no clean \`pop ${ptrReg} ; ret\``);
+  if (words.length > 1 && !advance) unsatisfied.push(`no \`add ${ptrReg}, ${entrySize} ; ret\` pointer-advance gadget`);
+  if (!pivot) unsatisfied.push(`no \`xchg ${ptrReg}, ${sp}\` / \`mov ${sp}, ${ptrReg}\` pivot gadget`);
   if (unsatisfied.length > 0) {
     return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
   }
@@ -221,7 +237,7 @@ function planWriteFrameInner(
         const store = stores.find((s) => s.reg === load.valReg);
         if (!store) continue;
         const ptrPop = isBadcharFree(word.derefSlot, bc) ? popFor(load.ptrReg) : undefined;
-        const ptrRecipe = ptrPop ? undefined : solveValue(index, load.ptrReg, word.derefSlot, badchars, ["eax"]) ?? undefined;
+        const ptrRecipe = ptrPop ? undefined : solveValue(index, load.ptrReg, word.derefSlot, badchars, [ptrReg]) ?? undefined;
         if (!ptrPop && !ptrRecipe) continue;
         resolved.push({ word, store, reg: load.valReg, deref: { memLoad: load.gadget, ptrReg: load.ptrReg, ptrPop, ptrRecipe, slot: word.derefSlot } });
         done = true;
@@ -235,10 +251,10 @@ function planWriteFrameInner(
     } else {
       let done = false;
       for (const store of stores) {
-        const recipe = solveValue(index, store.reg, word.value!, badchars, ["eax"]);
+        const recipe = solveValue(index, store.reg, word.value!, badchars, [ptrReg]);
         if (recipe) { resolved.push({ word, store, reg: store.reg, recipe }); done = true; break; }
       }
-      if (!done) unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex(word.value!)} for ${word.comment} while preserving eax`);
+      if (!done) unsatisfied.push(`cannot build any of [${stores.map((s) => s.reg).join(", ")}] = ${hex(word.value!)} for ${word.comment} while preserving ${ptrReg}`);
     }
   }
   if (unsatisfied.length > 0) {
@@ -246,23 +262,22 @@ function planWriteFrameInner(
   }
 
   const steps: ChainStep[] = [];
-  const setEax = (word: { value?: number; placeholder?: string }, comment: string): void => {
-    steps.push(gadgetStep(popEax!, "pop eax"));
+  const setPtr = (word: { value?: number; placeholder?: string }, comment: string): void => {
+    steps.push(gadgetStep(popPtr!, `pop ${ptrReg}`));
     if (word.placeholder) {
       placeholders.add(word.placeholder);
       steps.push({ kind: "value", placeholder: word.placeholder, comment });
     } else {
       steps.push({ kind: "value", value: word.value! >>> 0, comment });
     }
-    steps.push(...retImmPadding(retImmBytes(popEax!)));
+    steps.push(...retImmPadding(retImmBytes(popPtr!)));
   };
 
-  // EAX = BUF (the frame's base / first slot).
-  setEax(bufAddress, `eax = BUF ${bufAddress.placeholder ?? hex(bufAddress.value!)}`);
+  setPtr(bufAddress, `${ptrReg} = BUF ${bufAddress.placeholder ?? hex(bufAddress.value!)}`);
 
   resolved.forEach((r, i) => {
     if (i > 0) {
-      steps.push(gadgetStep(advance!.gadget, `add eax, 4 -> BUF+0x${(i * 4).toString(16)}`));
+      steps.push(gadgetStep(advance!.gadget, `add ${ptrReg}, ${entrySize} -> BUF+0x${(i * entrySize).toString(16)}`));
       for (let k = 0; k < advance!.junkPops; k++) {
         steps.push({ kind: "value", value: 0x41414141, comment: "junk (advance side-effect pop)" });
       }
@@ -293,13 +308,12 @@ function planWriteFrameInner(
       steps.push(...retImmPadding(retImmBytes(r.pop!)));
     }
 
-    steps.push(gadgetStep(r.store.gadget, `mov [eax], ${r.reg}  -> BUF+0x${(i * 4).toString(16)} = ${r.word.comment}`));
+    steps.push(gadgetStep(r.store.gadget, `mov [${ptrReg}], ${r.reg}  -> BUF+0x${(i * entrySize).toString(16)} = ${r.word.comment}`));
     steps.push(...retImmPadding(retImmBytes(r.store.gadget)));
   });
 
-  // Re-point EAX at BUF and pivot ESP onto the assembled frame.
-  setEax(bufAddress, `eax = BUF ${bufAddress.placeholder ?? hex(bufAddress.value!)} (for pivot)`);
-  steps.push(gadgetStep(pivot!, "xchg eax, esp  -> ESP = BUF; ret dispatches into BUF[0]"));
+  setPtr(bufAddress, `${ptrReg} = BUF ${bufAddress.placeholder ?? hex(bufAddress.value!)} (for pivot)`);
+  steps.push(gadgetStep(pivot!, `xchg ${ptrReg}, ${sp}  -> ${sp.toUpperCase()} = BUF; ret dispatches into BUF[0]`));
   steps.push(...retImmPadding(retImmBytes(pivot!)));
 
   return {
@@ -309,14 +323,15 @@ function planWriteFrameInner(
       store: firstKnownAddress(resolved[0].store.gadget),
       advance: advance ? firstKnownAddress(advance.gadget) : undefined,
       pivot: firstKnownAddress(pivot!),
-      popEax: firstKnownAddress(popEax!),
+      popPtr: firstKnownAddress(popPtr!),
     },
     placeholders: [...placeholders],
-    stackBytes: steps.length * 4,
+    stackBytes: steps.length * entrySize,
     success: true,
   };
 }
 
 function hex(value: number): string {
-  return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  const arch = getArchConfig();
+  return `0x${(value >>> 0).toString(16).toUpperCase().padStart(arch.pointerSize * 2, "0")}`;
 }
