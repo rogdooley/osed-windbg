@@ -1,6 +1,6 @@
 import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
-import { getPointerSize, readUint16LE, readUint32LE } from "../core/memory";
+import { getPointerSize, readUint16LE, readUint32LE, readUint64LE } from "../core/memory";
 
 type TriState = "enabled" | "disabled" | "unknown";
 
@@ -87,6 +87,9 @@ function asArray(value: unknown): unknown[] {
 }
 
 function parseSafeSeh(base: bigint, pe: bigint, optionalHeaderMagic: number): TriState {
+  if (optionalHeaderMagic === 0x20b) {
+    return "disabled";
+  }
   if (optionalHeaderMagic !== 0x10b) {
     return "unknown";
   }
@@ -159,10 +162,14 @@ export function listModulesWithMitigations(filter?: string): ModuleMitigation[] 
           if (sig === 0x4550) {
             characteristics = readUint16LE(pe + BigInt(0x16));
             const optionalHeaderMagic = readUint16LE(pe + BigInt(0x18));
-            dllCharacteristics = readUint16LE(pe + BigInt(0x5e));
-            // PE32 ImageBase lives at optional-header offset 0x1C (pe + 0x18 + 0x1C).
             if (optionalHeaderMagic === 0x10b) {
+              // PE32: DllCharacteristics at optional-header +0x46 (pe+0x5e), ImageBase at +0x1C (pe+0x34)
+              dllCharacteristics = readUint16LE(pe + BigInt(0x5e));
               preferredBase = BigInt(readUint32LE(pe + BigInt(0x34)));
+            } else if (optionalHeaderMagic === 0x20b) {
+              // PE32+: DllCharacteristics at optional-header +0x46 (pe+0x5e), ImageBase at +0x18 (pe+0x30) as 64-bit
+              dllCharacteristics = readUint16LE(pe + BigInt(0x5e));
+              preferredBase = readUint64LE(pe + BigInt(0x30));
             }
 
             aslr = (dllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) !== 0 ? "enabled" : "disabled";

@@ -2,6 +2,7 @@ import { buildCapabilities, CapabilityIndex } from "./capabilities";
 import { ChainStep, firstKnownAddress, fixRetImmPadding, getStableAddressHint, hex32, isAddressStable, retImmBytes, retImmPadding, setStableAddressHint } from "./chain";
 import { RopGadget } from "./types";
 import { solveValue } from "./value_solver";
+import { getArchConfig, normalizeRegisterForArch, isGPRegister, isStackPointer } from "../core/arch";
 
 // Register-packing setup planner. Unlike solveValue (one register at a time),
 // this loads a whole set of target registers at once — the case you hit when
@@ -11,18 +12,6 @@ import { solveValue } from "./value_solver";
 // never overwrites a register that is already final. When no ordering works it
 // reports the conflict honestly instead of emitting a corrupt chain.
 
-const SUBREGISTER_PARENT: Record<string, string> = {
-  ax: "eax", al: "eax", ah: "eax",
-  bx: "ebx", bl: "ebx", bh: "ebx",
-  cx: "ecx", cl: "ecx", ch: "ecx",
-  dx: "edx", dl: "edx", dh: "edx",
-  si: "esi", di: "edi", bp: "ebp", sp: "esp",
-};
-
-const X86_REGISTERS = new Set<string>([
-  "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
-  ...Object.keys(SUBREGISTER_PARENT),
-]);
 
 const WRITE_DEST_MNEMONICS = new Set<string>([
   "mov", "movzx", "movsx", "lea", "xor", "or", "and", "add", "sub", "adc",
@@ -33,12 +22,12 @@ const WRITE_DEST_MNEMONICS = new Set<string>([
 const STACK_UNSAFE_MNEMONICS = new Set<string>(["push", "pusha", "pushad", "leave", "enter", "call", "jmp", "int", "iret"]);
 
 function parent(reg: string): string {
-  return SUBREGISTER_PARENT[reg] ?? reg;
+  return normalizeRegisterForArch(reg);
 }
 
 function normalizeRegister(operand: string | undefined): string | undefined {
   const reg = operand?.trim().toLowerCase();
-  if (!reg || !X86_REGISTERS.has(reg)) return undefined;
+  if (!reg || !isGPRegister(reg)) return undefined;
   return parent(reg);
 }
 
@@ -86,20 +75,22 @@ function analyzeGadget(gadget: RopGadget): GadgetShape {
       lastWriteWasPop.set(reg, true);
       continue;
     }
-    if ((mnemonic === "add" || mnemonic === "sub") && rawDst === "esp") {
+    if ((mnemonic === "add" || mnemonic === "sub") && rawDst && isStackPointer(rawDst)) {
+      const arch = getArchConfig();
+      const entrySize = arch.stackEntrySize;
       const imm = parseImmediate(insn.operands[1]);
-      if (imm === undefined || imm % 4 !== 0 || mnemonic === "sub") { safe = false; continue; }
-      for (let k = 0; k < imm / 4; k++) {
-        espFillers.push({ kind: "value", value: 0x41414141, comment: `junk (add esp, 0x${imm.toString(16)})` });
+      if (imm === undefined || imm % entrySize !== 0 || mnemonic === "sub") { safe = false; continue; }
+      for (let k = 0; k < imm / entrySize; k++) {
+        espFillers.push({ kind: "value", value: 0x41414141, comment: `junk (add ${arch.stackPointer}, 0x${imm.toString(16)})` });
       }
       continue;
     }
     if (STACK_UNSAFE_MNEMONICS.has(mnemonic)) { safe = false; continue; }
-    if (dst === "esp") { safe = false; continue; }
+    if (dst && isStackPointer(dst)) { safe = false; continue; }
     if (mnemonic === "xchg") {
       const a = normalizeRegister(insn.operands[0]);
       const b = normalizeRegister(insn.operands[1]);
-      if (a === "esp" || b === "esp") { safe = false; continue; }
+      if ((a && isStackPointer(a)) || (b && isStackPointer(b))) { safe = false; continue; }
       if (a) { writes.add(a); lastWriteWasPop.set(a, false); }
       if (b) { writes.add(b); lastWriteWasPop.set(b, false); }
       continue;
@@ -295,7 +286,8 @@ function planRegisterSetupPackingInner(
 
   const unresolved = [...pending].map((reg) => ({ register: reg, reason: reasonFor(reg, workingIndex, candidates, done, targetValues, badchars, bc) }));
   const finalSteps = fixRetImmPadding(steps);
-  return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * 4, success: unresolved.length === 0 };
+  const entrySize = getArchConfig().stackEntrySize;
+  return { steps: finalSteps, ordered, unresolved, stackBytes: finalSteps.length * entrySize, success: unresolved.length === 0 };
 }
 
 function pickArithmeticBuild(

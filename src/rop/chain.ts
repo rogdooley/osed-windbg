@@ -1,5 +1,6 @@
 import { CapabilityIndex } from "./capabilities";
 import { RopGadget } from "./types";
+import { getArchConfig } from "../core/arch";
 
 // Native ROP chain construction over the semantic capability index. Covers the
 // bread-and-butter case: loading registers with constant values (API argument
@@ -99,7 +100,8 @@ export interface GadgetSelection {
 
 export function retImmPadding(retImm: number): ChainStep[] {
   if (retImm <= 0) return [];
-  const padWords = retImm / 4;
+  const entrySize = getArchConfig().stackEntrySize;
+  const padWords = retImm / entrySize;
   const steps: ChainStep[] = [];
   for (let i = 0; i < padWords; i++) {
     steps.push({ kind: "value", value: 0x41414141, comment: `padding (ret ${retImm} compensation)` });
@@ -327,7 +329,8 @@ export function planRegisterSetup(index: CapabilityIndex, targets: ChainTarget[]
     }
   }
 
-  return { steps, satisfied, unsatisfied, stackBytes: steps.length * 4 };
+  const entrySize = getArchConfig().stackEntrySize;
+  return { steps, satisfied, unsatisfied, stackBytes: steps.length * entrySize };
 }
 
 export function hex32(value: bigint | number): string {
@@ -335,13 +338,22 @@ export function hex32(value: bigint | number): string {
   return `0x${asBig.toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
+export function hexPtr(value: bigint | number): string {
+  const arch = getArchConfig();
+  const asBig = typeof value === "bigint" ? value : BigInt(value >>> 0);
+  return `0x${asBig.toString(16).toUpperCase().padStart(arch.pointerSize * 2, "0")}`;
+}
+
 export function formatChainPython(plan: { steps: ChainStep[] }): string[] {
+  const arch = getArchConfig();
+  const packFmt = arch.pointerSize === 8 ? "<Q" : "<I";
+  const hexFn = arch.pointerSize === 8 ? hexPtr : hex32;
   const lines = ["from struct import pack", 'rop = b""'];
   for (const step of plan.steps) {
     const word = step.kind === "gadget"
-      ? hex32(step.address!)
-      : step.placeholder ?? hex32(step.value!);
-    lines.push(`rop += pack("<I", ${word})  # ${step.comment}`);
+      ? hexFn(step.address!)
+      : step.placeholder ?? hexFn(step.value!);
+    lines.push(`rop += pack("${packFmt}", ${word})  # ${step.comment}`);
   }
   return lines;
 }
@@ -378,9 +390,10 @@ export function formatEmitPython(emit: ExportableEmission): string[] {
     "",
     "# --- Gadget addresses ---",
   ];
+  const hexFn = getArchConfig().pointerSize === 8 ? hexPtr : hex32;
   for (const g of emit.gadgets) {
     const name = g.capability.toLowerCase().replace(/_/g, "_");
-    lines.push(`${name} = ${hex32(g.address)}  # ${g.sequence} [${g.module}]`);
+    lines.push(`${name} = ${hexFn(g.address)}  # ${g.sequence} [${g.module}]`);
   }
   return lines;
 }
@@ -398,14 +411,17 @@ export function formatSynthesisPython(synth: ExportableSynthesis): string[] {
     lines.push(`# WARNING: ${v}`);
   }
   lines.push("");
+  const arch = getArchConfig();
+  const packFmt = arch.pointerSize === 8 ? "<Q" : "<I";
+  const hexFn = arch.pointerSize === 8 ? hexPtr : hex32;
   lines.push("from struct import pack");
   lines.push('payload = b""');
   for (const slot of synth.slots) {
     const word = slot.step.kind === "gadget"
-      ? hex32(slot.step.address!)
-      : slot.step.placeholder ?? hex32(slot.step.value!);
+      ? hexFn(slot.step.address!)
+      : slot.step.placeholder ?? hexFn(slot.step.value!);
     const offsetLabel = slot.offset < 0 ? `${slot.offset}` : `+${slot.offset}`;
-    lines.push(`payload += pack("<I", ${word})  # [${offsetLabel}] ${slot.role}: ${slot.step.comment}`);
+    lines.push(`payload += pack("${packFmt}", ${word})  # [${offsetLabel}] ${slot.role}: ${slot.step.comment}`);
   }
   return lines;
 }
@@ -446,8 +462,9 @@ function badcharHits(value: number, badchars: number[]): number[] {
   }
   const bad = new Set(badchars);
   const hits: number[] = [];
+  const byteCount = getArchConfig().pointerSize;
   const word = value >>> 0;
-  for (let offset = 0; offset < 4; offset += 1) {
+  for (let offset = 0; offset < byteCount; offset += 1) {
     const byte = (word >>> (offset * 8)) & 0xff;
     if (bad.has(byte) && !hits.includes(byte)) {
       hits.push(byte);
@@ -480,13 +497,14 @@ function planFlatStdcallFrame(entries: FlatFrameInput[], badchars?: number[]): F
     return { kind: "value", value, comment: entry.comment };
   });
 
+  const entrySize = getArchConfig().stackEntrySize;
   return {
     steps,
     placeholders: [...placeholders],
     badcharViolations,
     warnings: [...warnings, ...badcharViolations],
     badchars: normalizedBadchars,
-    stackBytes: steps.length * 4,
+    stackBytes: steps.length * entrySize,
   };
 }
 
@@ -762,6 +780,7 @@ function planPushadChain(
   }
 
   const finalSteps = fixRetImmPadding(steps);
+  const entrySize = getArchConfig().stackEntrySize;
   return {
     steps: finalSteps,
     satisfied,
@@ -770,7 +789,7 @@ function planPushadChain(
     constraints,
     hasPushad: pushad !== undefined,
     mode,
-    stackBytes: finalSteps.length * 4,
+    stackBytes: finalSteps.length * entrySize,
   };
 }
 

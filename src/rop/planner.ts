@@ -1,5 +1,6 @@
 import { CapabilityIndex } from "./capabilities";
 import { CapabilityKind } from "./types";
+import { getArchConfig, x64ArgCount } from "../core/arch";
 
 export type ExploitStrategy =
   | "VirtualProtect"
@@ -101,8 +102,25 @@ function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
 
+function frameBytesDescription(strategy: ExploitStrategy): string {
+  const arch = getArchConfig();
+  const entrySize = arch.stackEntrySize;
+  if (arch.id === "x64") {
+    const regArgs = x64ArgCount(strategy);
+    const stackArgs = Math.max(0, (STDCALL_ARG_COUNT[strategy as ApiExploitStrategy] ?? 0) - regArgs);
+    const shadowBytes = arch.shadowSpaceBytes;
+    const totalBytes = entrySize + shadowBytes + stackArgs * entrySize;
+    return `${totalBytes}+ bytes (return address + ${shadowBytes}-byte shadow space + ${stackArgs} stack args)`;
+  }
+  return `${(STDCALL_ARG_COUNT[strategy as ApiExploitStrategy] + 2) * entrySize}+ contiguous controlled bytes`;
+}
+
 function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
+  const arch = getArchConfig();
+  const ip = arch.instructionPointer.toUpperCase();
+  const sp = arch.stackPointer.toUpperCase();
   const apiName = strategy === "Stack Pivot" ? "continuation" : strategy;
+  const convention = arch.id === "x64" ? "Microsoft x64" : "stdcall";
 
   if (strategy === "Stack Pivot") {
     return [
@@ -120,17 +138,18 @@ function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
     ];
   }
 
-  return [
+  const defs: ShapeDefinition[] = [
     {
       shape: "SYNTHETIC_STDCALL_FRAME",
       complexity: "LOW",
       required: ["DISPATCH_RET"],
       assumptions: [],
       preconditions: [
-        "EIP is controlled (e.g. via SEH overwrite or saved return address).",
-        `ESP points to or can reach a region with ${(STDCALL_ARG_COUNT[strategy as ApiExploitStrategy] + 2) * 4}+ contiguous controlled bytes.`,
+        `${ip} is controlled (e.g. via SEH overwrite or saved return address).`,
+        `${sp} points to or can reach a region with ${frameBytesDescription(strategy)}.`,
         `${apiName} address is known or resolvable at exploit time.`,
         "All frame values are encodable under the current charset.",
+        ...(arch.id === "x64" ? [`Stack must be 16-byte aligned before the API call.`] : []),
       ],
       iatExempt: true,
     },
@@ -152,13 +171,16 @@ function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
       required: ["DISPATCH_RET"],
       assumptions: [],
       preconditions: [
-        "ESP points to a controlled region large enough for the stdcall frame.",
-        `${apiName} address is encodable and placed at ESP when ret executes.`,
-        "Stdcall arguments follow the API address on the stack.",
+        `${sp} points to a controlled region large enough for the ${convention} frame.`,
+        `${apiName} address is encodable and placed at ${sp} when ret executes.`,
+        `${convention} arguments follow the API address on the stack.`,
       ],
       iatExempt: true,
     },
-    {
+  ];
+
+  if (arch.id === "x86") {
+    defs.push({
       shape: "PUSHAD_DISPATCH",
       complexity: "MEDIUM",
       required: ["LOAD_CONSTANT", "DISPATCH_PUSHAD"],
@@ -166,9 +188,12 @@ function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
       preconditions: [
         "Registers can be loaded with the required API arguments via pop gadgets.",
         `The PUSHAD stack layout matches the ${apiName} stdcall ABI.`,
-        "ESP at pushad time points into the shellcode or NOP sled (used as lpAddress).",
+        `${sp} at pushad time points into the shellcode or NOP sled (used as lpAddress).`,
       ],
-    },
+    });
+  }
+
+  defs.push(
     {
       shape: "CALL_REGISTER",
       complexity: "HIGH",
@@ -176,8 +201,9 @@ function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
       assumptions: [],
       preconditions: [
         `The API address must be loaded into the dispatch register before call.`,
-        `A valid stdcall frame for ${apiName} must exist at [ESP] when call executes (return addr is pushed by call).`,
+        `A valid ${convention} frame for ${apiName} must exist at [${sp}] when call executes (return addr is pushed by call).`,
         "The call target must not clobber registers or stack state needed by the API.",
+        ...(arch.id === "x64" ? ["First four args must be in RCX, RDX, R8, R9 with 32-byte shadow space allocated."] : []),
       ],
     },
     {
@@ -187,11 +213,13 @@ function definitionsFor(strategy: ExploitStrategy): ShapeDefinition[] {
       assumptions: [],
       preconditions: [
         `The API address must be loaded into the dispatch register before jmp.`,
-        `ESP must point to: [RETURN_ADDR][arg1][arg2]... since jmp does not push a return address.`,
-        `The full ${apiName} stdcall frame must already be on the stack.`,
+        `${sp} must point to: [RETURN_ADDR][arg1][arg2]... since jmp does not push a return address.`,
+        `The full ${apiName} ${convention} frame must already be on the stack.`,
       ],
     },
-  ];
+  );
+
+  return defs;
 }
 
 export function normalizeExploitStrategy(value: string): ExploitStrategy | undefined {

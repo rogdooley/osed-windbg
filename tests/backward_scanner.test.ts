@@ -234,6 +234,105 @@ describe("backward scanner instruction decoder", () => {
     });
   });
 
+  describe("x64 REX prefix decoding", () => {
+    function decode64(bytes: number[]): string | undefined {
+      return tryDecodeInsn(Uint8Array.from(bytes), 0, 8)?.mnemonic;
+    }
+    function decodeLen64(bytes: number[]): number | undefined {
+      return tryDecodeInsn(Uint8Array.from(bytes), 0, 8)?.length;
+    }
+
+    it("treats 0x40-0x4F as REX prefixes, not inc/dec", () => {
+      expect(decode64([0x40, 0x50])).toBe("push rax");
+      expect(decode64([0x41, 0x50])).toBe("push r8");
+      expect(decode64([0x41, 0x58])).toBe("pop r8");
+      expect(decode64([0x41, 0x5f])).toBe("pop r15");
+    });
+
+    it("decodes REX.B push/pop for r8-r15", () => {
+      expect(decode64([0x41, 0x50])).toBe("push r8");
+      expect(decode64([0x41, 0x51])).toBe("push r9");
+      expect(decode64([0x41, 0x57])).toBe("push r15");
+      expect(decode64([0x41, 0x58])).toBe("pop r8");
+      expect(decode64([0x41, 0x5f])).toBe("pop r15");
+    });
+
+    it("decodes plain push/pop as 64-bit registers", () => {
+      expect(decode64([0x50])).toBe("push rax");
+      expect(decode64([0x53])).toBe("push rbx");
+      expect(decode64([0x58])).toBe("pop rax");
+      expect(decode64([0x5d])).toBe("pop rbp");
+    });
+
+    it("REX-prefixed instructions have correct length", () => {
+      expect(decodeLen64([0x41, 0x58])).toBe(2);
+      expect(decodeLen64([0x41, 0x50])).toBe(2);
+      expect(decodeLen64([0x50])).toBe(1);
+    });
+
+    it("decodes REX.B+R ALU with extended registers", () => {
+      // add r10, r9: REX 0x4D (W=1,R=1,B=1), opcode 01 (add r/m,r), ModRM C0|(1<<3)|2 = 0xCA
+      // rm=2|B=10→r10(dst), reg=1|R=9→r9(src)
+      expect(decode64([0x4d, 0x01, 0xca])).toBe("add r10, r9");
+      expect(decodeLen64([0x4d, 0x01, 0xca])).toBe(3);
+    });
+
+    it("decodes xor with extended registers", () => {
+      // xor r8, r8: REX 0x4D (W=1,R=1,B=1), opcode 31, ModRM C0|(r8=0<<3)|r8=0 = 0xC0
+      expect(decode64([0x4d, 0x31, 0xc0])).toBe("xor r8, r8");
+    });
+
+    it("decodes mov with REX for base registers", () => {
+      // mov rdx, rax: REX.W 0x48, opcode 89, ModRM C0|(rax=0<<3)|rdx=2 = 0xC2
+      expect(decode64([0x48, 0x89, 0xc2])).toBe("mov rdx, rax");
+    });
+
+    it("decodes xchg rax, r8 with REX.B", () => {
+      // REX.B = 0x41, opcode 0x90 = xchg rax, r8
+      expect(decode64([0x41, 0x90])).toBe("xchg rax, r8");
+    });
+
+    it("decodes group1 imm8 with REX.B for extended registers", () => {
+      // add r12, 0x20: REX.B 0x41, opcode 83, ModRM C0|(0<<3)|r12=4 = 0xC4, imm8=0x20
+      expect(decode64([0x41, 0x83, 0xc4, 0x20])).toBe("add r12, 0x20");
+      expect(decodeLen64([0x41, 0x83, 0xc4, 0x20])).toBe(4);
+    });
+
+    it("decodes neg/not with extended registers", () => {
+      // neg r8: REX.B 0x41, F7, ModRM C0|(3<<3)|0 = 0xD8
+      expect(decode64([0x41, 0xf7, 0xd8])).toBe("neg r8");
+      // not r9: REX.B 0x41, F7, ModRM C0|(2<<3)|1 = 0xD1
+      expect(decode64([0x41, 0xf7, 0xd1])).toBe("not r9");
+    });
+
+    it("decodes call/jmp with extended registers", () => {
+      // call r8: REX.B 0x41, FF, ModRM C0|(2<<3)|0 = 0xD0
+      expect(decode64([0x41, 0xff, 0xd0])).toBe("call r8");
+      // jmp r15: REX.B 0x41, FF, ModRM C0|(4<<3)|7 = 0xE7
+      expect(decode64([0x41, 0xff, 0xe7])).toBe("jmp r15");
+    });
+
+    it("does not decode pushad/popad in x64", () => {
+      expect(decode64([0x60])).toBeUndefined();
+      expect(decode64([0x61])).toBeUndefined();
+    });
+
+    it("ALU rax, imm32 uses rax in x64", () => {
+      expect(decode64([0x05, 0x20, 0x00, 0x00, 0x00])).toBe("add rax, 0x20");
+      expect(decode64([0x2d, 0xef, 0xbe, 0xad, 0xde])).toBe("sub rax, 0xdeadbeef");
+    });
+
+    it("leave and nop are arch-neutral", () => {
+      expect(decode64([0xc9])).toBe("leave");
+      expect(decode64([0x90])).toBe("nop");
+    });
+
+    it("REX with no effect still works", () => {
+      // REX.W 0x48 + nop 0x90 = xchg rax, rax, but rexB=0 and idx=0 so nop
+      expect(decode64([0x48, 0x90])).toBe("nop");
+    });
+  });
+
   describe("offset decoding", () => {
     it("decodes at non-zero offset", () => {
       const bytes = Uint8Array.from([0x90, 0x90, 0x01, 0xda]);

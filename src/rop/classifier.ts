@@ -1,6 +1,7 @@
 import { canonicalizeInstruction, canonicalizeInstructionSequence } from "../semantics/canonicalize";
-import { InstructionSemantic, SemanticSequence } from "../semantics/types";
+import { InstructionSemantic, SemanticSequence, Register } from "../semantics/types";
 import { AnalysisReason, RopCategory, RopGadget, ROP_SCHEMA_VERSION } from "./types";
+import { getArchConfig, isStackPointer, isGPRegister } from "../core/arch";
 
 function hasExactFlow(semantic: SemanticSequence, kind: "CALL" | "JUMP" | "RETURN"): boolean {
   return semantic.summary.flowEffects.values.exact.has(kind);
@@ -25,23 +26,25 @@ function zeroedRegisters(semantic: SemanticSequence): string[] {
 // `lea esp, [r+k]` / `leave` (esp := ebp+4). Driven by the net transform, so a
 // round trip like `xchg esp, eax ; xchg esp, eax` (net identity) is not a pivot.
 function pivotsStack(semantic: SemanticSequence): boolean {
-  const esp = semantic.summary.registerTransforms.esp;
-  return esp.kind === "affine" && esp.base !== "esp" && esp.base !== "none";
+  const arch = getArchConfig();
+  const sp = arch.stackPointer as Register;
+  const transform = semantic.summary.registerTransforms[sp];
+  if (!transform) return false;
+  return transform.kind === "affine" && transform.base !== sp && transform.base !== "none";
 }
 
 function isLoadRegister(step: InstructionSemantic): string | undefined {
   if (!step.supported) {
     return undefined;
   }
-  // Writing ESP is a pivot/adjust, not a general register load, so exclude it.
   if (step.instruction.mnemonic === "pop" && step.instruction.operands.length === 1) {
     const register = step.instruction.operands[0].trim().toLowerCase();
-    return register === "esp" ? undefined : register;
+    return isStackPointer(register) ? undefined : register;
   }
   if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
     const left = step.instruction.operands[0].trim().toLowerCase();
     const right = step.instruction.operands[1].trim().toLowerCase();
-    if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right && left !== "esp") {
+    if (isGPRegister(left) && isGPRegister(right) && left !== right && !isStackPointer(left)) {
       return left;
     }
   }
@@ -55,7 +58,7 @@ function isLoadRegister(step: InstructionSemantic): string | undefined {
 function adjustsStackExplicitly(step: InstructionSemantic): boolean {
   const ins = step.instruction;
   const destination = ins.operands[0]?.trim().toLowerCase();
-  if ((ins.mnemonic === "add" || ins.mnemonic === "sub") && destination === "esp") {
+  if ((ins.mnemonic === "add" || ins.mnemonic === "sub") && destination && isStackPointer(destination)) {
     return true;
   }
   return ins.mnemonic === "ret" && ins.operands.length >= 1;
@@ -110,7 +113,8 @@ export function classifySemanticSequence(semantic: SemanticSequence): { categori
 
   // Pivot classification is driven by the net ESP transform (see pivotsStack).
   if (pivotsStack(semantic)) {
-    addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", "esp becomes based on another register", evidence);
+    const sp = getArchConfig().stackPointer;
+    addCategory(categories, reasons, "STACK_PIVOT", "stack-pivot", `${sp} becomes based on another register`, evidence);
   }
 
   if (semantic.instructionSemantics.some((step) => step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2 && step.instruction.operands[0].includes("[") && !step.instruction.operands[1].includes("["))) {

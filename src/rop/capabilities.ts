@@ -1,6 +1,7 @@
 import { SemanticSequence } from "../semantics/types";
 import { AnalysisReason, CapabilityKind, RopCapability, RopGadget, RopIndex, RopCategory, RopQuery } from "./types";
 import { queryRopGadgets, summarizeCapabilities } from "./query";
+import { isStackPointer, isGPRegister } from "../core/arch";
 
 export interface CapabilityIndex {
   gadgets: RopGadget[];
@@ -116,10 +117,10 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
     }
     if (step.instruction.mnemonic === "mov" && step.instruction.operands.length === 2) {
       const [left, right] = operands;
-      if (/^[a-z]{3}$/.test(left) && /^[a-z]{3}$/.test(right) && left !== right) {
+      if (isGPRegister(left) && isGPRegister(right) && left !== right) {
         add({ kind: "MOVE_REGISTER", register: left, targetRegister: right, evidence: [text] });
         add({ kind: "REGISTER_TRANSFER", register: left, targetRegister: right, evidence: [text] });
-        if (left === "esp" || right === "esp") {
+        if (isStackPointer(left) || isStackPointer(right)) {
           add({ kind: "STACK_COPY", register: left, targetRegister: right, evidence: [text] });
         }
       }
@@ -134,7 +135,7 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
     }
     if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
       const [left, right] = operands;
-      if (left === "esp" || right === "esp") {
+      if (isStackPointer(left) || isStackPointer(right)) {
         add({ kind: "STACK_PIVOT", evidence: [text] });
       }
       add({ kind: "EXCHANGE_REGISTER", register: left, targetRegister: right, evidence: [text] });
@@ -161,7 +162,7 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
     const binary = binaryKind[step.instruction.mnemonic as keyof typeof binaryKind];
     if (binary && operands.length === 2) {
       add({ kind: binary, register: operands[0], targetRegister: operands[1], evidence: [text] });
-      if (operands[0] === "esp") {
+      if (isStackPointer(operands[0])) {
         add({ kind: "STACK_ADJUST", evidence: [text] });
       }
     }
