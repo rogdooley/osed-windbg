@@ -370,7 +370,12 @@ function renderStrategyAssessment(
   const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
   if (next.length > 0) {
     out.print("NEXT:");
-    for (const command of next) out.print(`  dx @$osed().${command}()`);
+    for (const command of next) {
+      const invocation = command === "memory" && landingEvidence.address !== undefined
+        ? `memory(${out.formatAddress(landingEvidence.address, pointerSize)})`
+        : `${command}()`;
+      out.print(`  dx @$osed().${invocation}`);
+    }
   }
   return { evidence, recommendations };
 }

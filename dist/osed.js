@@ -1892,7 +1892,10 @@ var osed_bundle = (() => {
     const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
     if (next.length > 0) {
       print("NEXT:");
-      for (const command2 of next) print(`  dx @$osed().${command2}()`);
+      for (const command2 of next) {
+        const invocation = command2 === "memory" && landingEvidence.address !== void 0 ? `memory(${formatAddress(landingEvidence.address, pointerSize)})` : `${command2}()`;
+        print(`  dx @$osed().${invocation}`);
+      }
     }
     return { evidence, recommendations };
   }
@@ -14883,10 +14886,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T23:45:53.512Z" : globalThis[key2];
+        value = true ? "2026-11-02T23:46:17.681Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7407c638478d" : globalThis[key2];
+        value = true ? "0c3ebd8875e0" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
