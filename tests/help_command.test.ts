@@ -139,7 +139,7 @@ describe("help command", () => {
     expect(seh.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "seh.visualize" })]));
   });
 
-  test("P1A search is deterministic, capped, and handles empty results", () => {
+  test("P1A search is comprehensive, category-grouped, and deterministic", () => {
     const logs: string[] = [];
     (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
       diagnostics: { debugLog: (line: string) => logs.push(line) },
@@ -147,12 +147,13 @@ describe("help command", () => {
     const help = createHelpCommand(new CommandRegistry());
     const result = help.execute({ command: "?rop" });
     expect(result.success).toBe(true);
-    expect(result.findings).toHaveLength(15);
-    expect(result.warnings[0]).toMatch(/^Showing 15 of \d+ matches\.$/);
+    expect(result.findings.length).toBeGreaterThan(15);
+    expect(result.warnings).toEqual([]);
     expect((result.findings as Array<{ name: string }>).map((entry) => entry.name)).toEqual(
       [...(result.findings as Array<{ name: string }>).map((entry) => entry.name)].sort((a, b) => a.localeCompare(b)),
     );
-    expect(logs.join("")).toContain("Showing 15 of");
+    expect(logs.join("")).toContain(`=== Search: rop (${result.findings.length} matches) ===`);
+    expect(logs.join("")).toContain("ROP");
 
     logs.length = 0;
     const noMatches = help.execute({ command: "?does-not-exist" });

@@ -6,7 +6,8 @@ grouped full inventory, `help("name")` for the short RUN-first reference, and
 
 P1A adds metadata-only navigation: `help("rop")`, `help("seh")`, and
 `help("sc")` group their commands by task; `help("?pivot")` searches names,
-summaries, descriptions, and keywords (showing at most 15 results); and an
+summaries, descriptions, and keywords, returning every match grouped by
+category with a total; and an
 unambiguous suffix such as `help("corpus.export")` opens its full command name.
 Ambiguous suffixes list their candidates in deterministic name order.
 

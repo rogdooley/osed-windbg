@@ -3,8 +3,6 @@ import * as out from "../core/output";
 import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../core/help_catalog";
 import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
 
-const SEARCH_LIMIT = 15;
-
 const categoryForName = (name: string): string => {
   if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
   if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
@@ -82,6 +80,15 @@ function searchDocuments(query: string, all: HelpDocument[]): HelpDocument[] {
     .some((value) => value.toLowerCase().includes(needle)));
 }
 
+function groupByCategory(entries: HelpDocument[]): Map<string, HelpDocument[]> {
+  const groups = new Map<string, HelpDocument[]>();
+  for (const entry of entries) {
+    const category = entry.category ?? categoryForName(entry.name);
+    groups.set(category, [...(groups.get(category) ?? []), entry]);
+  }
+  return groups;
+}
+
 function print(lines: string[]): void {
   for (const line of lines) out.print(line);
 }
@@ -112,9 +119,8 @@ export function createHelpCommand(registry: CommandRegistry): Command {
         const query = commandName.slice(1).trim();
         if (!query) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: ["Search query cannot be empty."] };
         const matches = searchDocuments(query, all);
-        const limited = matches.slice(0, SEARCH_LIMIT);
-        print(renderSearch(query, limited, matches.length));
-        return { command: "help", args: options, success: true, findings: limited, warnings: matches.length > limited.length ? [`Showing ${limited.length} of ${matches.length} matches.`] : [], errors: [] };
+        print(renderSearch(query, groupByCategory(matches), matches.length));
+        return { command: "help", args: options, success: true, findings: matches, warnings: [], errors: [] };
       }
       const namespace = namespaceDocuments(commandName, all);
       if (namespace) {

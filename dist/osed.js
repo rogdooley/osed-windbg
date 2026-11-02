@@ -10623,11 +10623,13 @@ var osed_bundle = (() => {
     lines.push("", ...wrapText('Use help("name") for RUN-first help or help("name", "full") for all details.', HELP_WIDTH));
     return lines;
   }
-  function renderSearch(query, entries, total) {
-    const lines = heading(`Search: ${query}`);
-    if (entries.length === 0) return [...lines, "No matching commands."];
-    lines.push(...renderListing(entries));
-    if (total > entries.length) lines.push("", `Showing ${entries.length} of ${total} matches. Refine the search term.`);
+  function renderSearch(query, groups, total) {
+    const lines = heading(`Search: ${query} (${total} ${total === 1 ? "match" : "matches"})`);
+    if (total === 0) return [...lines, "No matching commands."];
+    for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push("", category.toUpperCase());
+      lines.push(...renderListing(entries));
+    }
     return lines;
   }
   function renderCandidates(suffix, entries) {
@@ -10660,7 +10662,6 @@ var osed_bundle = (() => {
   }
 
   // src/commands/help.ts
-  var SEARCH_LIMIT = 15;
   var categoryForName = (name) => {
     if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
@@ -10734,6 +10735,15 @@ var osed_bundle = (() => {
       return [entry.name, entry.summary, entry.description, ...(_a = entry.keywords) != null ? _a : []].filter((value) => Boolean(value)).some((value) => value.toLowerCase().includes(needle));
     });
   }
+  function groupByCategory(entries) {
+    var _a, _b;
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
+      groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
+    }
+    return groups;
+  }
   function print2(lines) {
     for (const line of lines) print(line);
   }
@@ -10763,9 +10773,8 @@ var osed_bundle = (() => {
           const query = commandName.slice(1).trim();
           if (!query) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: ["Search query cannot be empty."] };
           const matches = searchDocuments(query, all);
-          const limited = matches.slice(0, SEARCH_LIMIT);
-          print2(renderSearch(query, limited, matches.length));
-          return { command: "help", args: options, success: true, findings: limited, warnings: matches.length > limited.length ? [`Showing ${limited.length} of ${matches.length} matches.`] : [], errors: [] };
+          print2(renderSearch(query, groupByCategory(matches), matches.length));
+          return { command: "help", args: options, success: true, findings: matches, warnings: [], errors: [] };
         }
         const namespace = namespaceDocuments(commandName, all);
         if (namespace) {
@@ -14675,10 +14684,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T23:28:56.524Z" : globalThis[key2];
+        value = true ? "2026-11-02T23:31:31.559Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "dcb594a38caf" : globalThis[key2];
+        value = true ? "e5e74bafca5e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

@@ -86,11 +86,13 @@ export function renderNamespace(name: string, groups: Map<string, HelpDocument[]
   return lines;
 }
 
-export function renderSearch(query: string, entries: HelpDocument[], total: number): string[] {
-  const lines = heading(`Search: ${query}`);
-  if (entries.length === 0) return [...lines, "No matching commands."];
-  lines.push(...renderListing(entries));
-  if (total > entries.length) lines.push("", `Showing ${entries.length} of ${total} matches. Refine the search term.`);
+export function renderSearch(query: string, groups: Map<string, HelpDocument[]>, total: number): string[] {
+  const lines = heading(`Search: ${query} (${total} ${total === 1 ? "match" : "matches"})`);
+  if (total === 0) return [...lines, "No matching commands."];
+  for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push("", category.toUpperCase());
+    lines.push(...renderListing(entries));
+  }
   return lines;
 }
 
