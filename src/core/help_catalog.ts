@@ -261,7 +261,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
     usage: "dx @$osed().rop.corpus.export(path?)",
     examples: [
-      'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file',
+      'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // Saves the current corpus to disk.',
       "dx @$osed().rop.corpus.export()                              // print JSON to the console",
     ],
     details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",

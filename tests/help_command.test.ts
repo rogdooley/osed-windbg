@@ -6,6 +6,7 @@ import { findHelpEntry, NAMESPACE_HELP_ENTRIES, normalizeHelpExamples } from "..
 import { HELP_WIDTH, renderListing, renderCompactDetail, renderFullDetail } from "../src/core/help_render";
 import { stripDml, table } from "../src/core/output";
 import { CommandRegistry } from "../src/core/registry";
+import { normalizeInvocation } from "../src/index";
 import { createShellcodeNamespace } from "../src/shellcode";
 
 describe("help command", () => {
@@ -41,11 +42,11 @@ describe("help command", () => {
     const list = help.execute({});
     expect(list.success).toBe(true);
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "sc.iat" })]));
-    expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "version" })]));
+    expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "rop.plan" })]));
     const rendered = logs.join("");
     expect(rendered).toContain("=== OSED Help ===");
     expect(rendered).toContain("PE-API");
-    expect(rendered).toContain("ALL COMMANDS → help(\"all\")");
+    expect(rendered).toContain('help("all")      Complete inventory');
 
     logs.length = 0;
     const all = help.execute({ command: "all" });
@@ -70,7 +71,8 @@ describe("help command", () => {
     for (const line of output) {
       if (!line.trimStart().startsWith("dx @$osed()")) expect(line.length).toBeLessThanOrEqual(HELP_WIDTH);
     }
-    expect(output).toContain('  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file');
+    expect(output).toContain('  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")');
+    expect(output).toContain("  Saves the current corpus to disk.");
     expect(renderListing([{ ...entry, name: "a.command.name.longer.than.the.listing.name.column" }])).toEqual([
       "a.command.name.longer.than.the.listing.name.column",
       "  Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
@@ -105,13 +107,28 @@ describe("help command", () => {
     const entry = findHelpEntry("rop.corpus.export")!;
     expect(renderCompactDetail(entry).join("\n")).toBe([
       "", "=== Help: rop.corpus.export ===", "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
-      "", "RUN", '  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file',
+      "", "RUN", '  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")', "  Saves the current corpus to disk.",
       "", "NEXT", "  rop.scan_live, rop.corpus.import, rop.corpus.validate", "", 'MORE → help("rop.corpus.export", "full")',
     ].join("\n"));
     const full = renderFullDetail(entry).join("\n");
     expect(full).toContain("DETAILS\n  Saves the gadgets you scanned this session");
-    expect(full).toContain('dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file');
+    expect(full).toContain('dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")\n  Saves the current corpus to disk.');
     expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.import, rop.corpus.validate");
+  });
+
+  test("public help invocation preserves the requested detail mode", () => {
+    const options = normalizeInvocation("help", ["rop.corpus.export", "full"]);
+    expect(options).toEqual({
+      command: "rop.corpus.export",
+      mode: "full",
+    });
+    const logs: string[] = [];
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+    };
+    expect(createHelpCommand(new CommandRegistry()).execute(options).success).toBe(true);
+    expect(logs.join("")).toContain("DETAILS");
+    expect(logs.join("")).toContain("EXAMPLES");
   });
 
   test("P1A namespace navigation is task-grouped and metadata-only", () => {
@@ -149,9 +166,10 @@ describe("help command", () => {
     expect(result.success).toBe(true);
     expect(result.findings.length).toBeGreaterThan(15);
     expect(result.warnings).toEqual([]);
-    expect((result.findings as Array<{ name: string }>).map((entry) => entry.name)).toEqual(
-      [...(result.findings as Array<{ name: string }>).map((entry) => entry.name)].sort((a, b) => a.localeCompare(b)),
-    );
+    const names = (result.findings as Array<{ name: string }>).map((entry) => entry.name);
+    const directCount = names.filter((name) => name.includes("rop")).length;
+    expect(names.slice(0, directCount).every((name) => name.includes("rop"))).toBe(true);
+    expect(names.slice(0, directCount)).toEqual([...names.slice(0, directCount)].sort((a, b) => a.localeCompare(b)));
     expect(logs.join("")).toContain(`=== Search: rop (${result.findings.length} matches) ===`);
     expect(logs.join("")).toContain("ROP");
 

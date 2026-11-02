@@ -16,10 +16,41 @@ const categoryForName = (name: string): string => {
   return "tools";
 };
 
-const toDocument = (entry: HelpEntry): HelpDocument => entry;
+const LISTING_SUMMARIES: Record<string, string> = {
+  "rop.scan": "Load gadgets into the semantic corpus",
+  "rop.scan_live": "Discover live gadgets",
+  "rop.query": "Search the gadget corpus",
+  "rop.capabilities": "Summarize observed corpus capabilities",
+  "rop.plan": "Evaluate feasible ROP strategies",
+  "rop.emit": "Select gadgets for a strategy",
+  "rop.synthesize": "Build a concrete stack layout",
+  "rop.construct": "Build register-load ROP recipes",
+  "rop.setup": "Stage registers for a call frame",
+  "rop.frame_write": "Construct stdcall frames in memory",
+  "rop.slot_call": "Call APIs through stable IAT slots",
+  "rop.generate": "Generate an API-call ROP chain",
+  "rop.verify": "Verify chain structure and side effects",
+  "rop.prove": "Validate debugger execution stepwise",
+  "rop.pivots": "Find and rank stack pivot gadgets",
+  "rop.corpus.export": "Save the semantic corpus to disk",
+  "rop.corpus.import": "Load a corpus as inactive evidence",
+  "rop.corpus.validate": "Validate corpus against live memory",
+  "rop.frame_va": "Build a VirtualAlloc stdcall frame",
+  "rop.frame_vp": "Build a VirtualProtect stdcall frame",
+  "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame",
+};
+
+function shortSummary(name: string, description: string, supplied?: string): string {
+  const source = supplied ?? LISTING_SUMMARIES[name] ?? description.split(/(?<=[.!?])\s/)[0] ?? description;
+  if (source.length <= 60) return source;
+  const truncated = source.slice(0, 60);
+  return `${truncated.slice(0, truncated.lastIndexOf(" ") || 60).trimEnd()}…`;
+}
+
+const toDocument = (entry: HelpEntry): HelpDocument => ({ ...entry, summary: shortSummary(entry.name, entry.description, entry.summary) });
 
 function registryDocument(command: Command): HelpDocument {
-  return { name: command.name, description: command.description, usage: command.usage, examples: command.examples, category: categoryForName(command.name) };
+  return { name: command.name, description: command.description, summary: shortSummary(command.name, command.description), usage: command.usage, examples: command.examples, category: categoryForName(command.name) };
 }
 
 function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]> {
@@ -33,6 +64,15 @@ function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]
     groups.set(category, [...(groups.get(category) ?? []), entry]);
   }
   return groups;
+}
+
+function overviewGroups(all: HelpDocument[]): Map<string, HelpDocument[]> {
+  const selected = new Set([
+    "triage", "landing", "stackmap", "findmsp", "pattern_create", "pattern_offset", "badchars", "modules", "memory", "code_caves",
+    "rop.scan_live", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove",
+    "seh", "seh_ppr", "encode", "egghunter", "sc.iat", "sc.resolve", "str.find", "fmt_build",
+  ]);
+  return groupByCategory(all.filter((entry) => selected.has(entry.name)));
 }
 
 function documents(registry: CommandRegistry): HelpDocument[] {
@@ -77,7 +117,11 @@ function searchDocuments(query: string, all: HelpDocument[]): HelpDocument[] {
   const needle = query.toLowerCase();
   return all.filter((entry) => [entry.name, entry.summary, entry.description, ...(entry.keywords ?? [])]
     .filter((value): value is string => Boolean(value))
-    .some((value) => value.toLowerCase().includes(needle)));
+    .some((value) => value.toLowerCase().includes(needle)))
+    .sort((a, b) => {
+      const score = (entry: HelpDocument) => entry.name.toLowerCase().includes(needle) ? 0 : 1;
+      return score(a) - score(b) || a.name.localeCompare(b.name);
+    });
 }
 
 function groupByCategory(entries: HelpDocument[]): Map<string, HelpDocument[]> {
@@ -104,7 +148,7 @@ export function createHelpCommand(registry: CommandRegistry): Command {
       const commandName = options.command as string | undefined;
       const mode = options.mode as string | undefined;
       if (!commandName) {
-        const groups = groupedDocuments(registry);
+        const groups = overviewGroups(documents(registry));
         print(renderOverview(groups));
         return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [], schema: { command: { type: "string", optional: true }, mode: { type: "string", optional: true } } };
       }

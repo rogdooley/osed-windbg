@@ -23,3 +23,7 @@ WinDbg; runtime example validation remains a separate, target-backed task.
 
 Categories are display metadata only. They do not affect command registration,
 dispatch, ROP corpus state, or debugger execution.
+
+Listings use a short summary contract: supplied summaries are preferred and a
+word-boundary first-sentence fallback is capped at 60 characters. `help()` is a
+small task overview; `help("all")` is the exhaustive grouped inventory.

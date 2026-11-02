@@ -2976,7 +2976,7 @@ function parseHexByteList(value: unknown): number[] | unknown {
   return parsed;
 }
 
-function normalizeInvocation(commandName: string, args: unknown[]): Record<string, unknown> {
+export function normalizeInvocation(commandName: string, args: unknown[]): Record<string, unknown> {
   if (args.length === 0 || (args.length === 1 && args[0] === undefined)) {
     return {};
   }
@@ -2987,7 +2987,7 @@ function normalizeInvocation(commandName: string, args: unknown[]): Record<strin
 
   switch (commandName) {
     case "help":
-      return { command: args[0] };
+      return { command: args[0], mode: args[1] };
     case "pattern_create":
       return { length: args[0], type: args[1] };
     case "pattern_offset":

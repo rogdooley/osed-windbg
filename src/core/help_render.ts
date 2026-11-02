@@ -2,6 +2,8 @@ import { HelpEntry, normalizeHelpExamples } from "./help_catalog";
 
 export const HELP_WIDTH = 80;
 const NAME_WIDTH = 23;
+const ROOT_CATEGORY_ORDER = ["crash", "payload", "target", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
+const ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
 
 export type HelpDocument = Pick<HelpEntry, "name" | "description" | "usage" | "examples" | "details" | "summary" | "category" | "arguments" | "prerequisites" | "limitations" | "seeAlso" | "keywords">;
 
@@ -37,10 +39,22 @@ function labelled(label: string, value: string): string[] {
 }
 
 function exampleLines(examples: HelpDocument["examples"]): string[] {
-  return normalizeHelpExamples(examples).flatMap((example) => [
-    ...(example.label ? wrapText(`${example.label}:`, HELP_WIDTH, "  ") : []),
-    `  ${example.command}`,
-  ]);
+  return normalizeHelpExamples(examples).flatMap((example) => {
+    const [command, note] = example.command.split(/\s+\/\/\s+/, 2);
+    return [
+      ...(example.label ? wrapText(`${example.label}:`, HELP_WIDTH, "  ") : []),
+      `  ${command}`,
+      ...(note ? wrapText(note, HELP_WIDTH, "  ") : []),
+    ];
+  });
+}
+
+function orderedGroups(groups: Map<string, HelpDocument[]>, order: string[] = ROOT_CATEGORY_ORDER): Array<[string, HelpDocument[]]> {
+  const rank = (name: string): number => {
+    const found = order.indexOf(name);
+    return found === -1 ? order.length : found;
+  };
+  return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
 export function renderListing(entries: HelpDocument[]): string[] {
@@ -59,17 +73,17 @@ export function renderOverview(groups: Map<string, HelpDocument[]>): string[] {
   const lines = heading("OSED Help");
   lines.push(...wrapText("Choose a task area, then use help(\"name\") for a quick command reference.", HELP_WIDTH));
   lines.push("", "QUICK START", "  help(\"triage\")  help(\"pattern_create\")  help(\"rop.scan_live\")");
-  for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [category, entries] of orderedGroups(groups)) {
     lines.push("", category.toUpperCase());
     lines.push(...renderListing(entries));
   }
-  lines.push("", "ALL COMMANDS → help(\"all\")");
+  lines.push("", "MORE", "  help(\"rop\")      All ROP commands", "  help(\"all\")      Complete inventory", "  help(\"?pivot\")   Search commands");
   return lines;
 }
 
 export function renderAll(groups: Map<string, HelpDocument[]>): string[] {
   const lines = heading("All OSED Commands");
-  for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [category, entries] of orderedGroups(groups)) {
     lines.push("", category.toUpperCase());
     lines.push(...renderListing(entries));
   }
@@ -78,7 +92,7 @@ export function renderAll(groups: Map<string, HelpDocument[]>): string[] {
 
 export function renderNamespace(name: string, groups: Map<string, HelpDocument[]>): string[] {
   const lines = heading(`Help: ${name}`);
-  for (const [task, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [task, entries] of orderedGroups(groups, name.toLowerCase() === "rop" ? ROP_TASK_ORDER : [])) {
     lines.push("", task.toUpperCase());
     lines.push(...renderListing(entries));
   }
@@ -89,7 +103,7 @@ export function renderNamespace(name: string, groups: Map<string, HelpDocument[]
 export function renderSearch(query: string, groups: Map<string, HelpDocument[]>, total: number): string[] {
   const lines = heading(`Search: ${query} (${total} ${total === 1 ? "match" : "matches"})`);
   if (total === 0) return [...lines, "No matching commands."];
-  for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [category, entries] of orderedGroups(groups)) {
     lines.push("", category.toUpperCase());
     lines.push(...renderListing(entries));
   }
@@ -106,7 +120,10 @@ export function renderCompactDetail(entry: HelpDocument): string[] {
   const examples = normalizeHelpExamples(entry.examples);
   const lines = heading(`Help: ${entry.name}`);
   lines.push(...wrapText(entry.summary ?? entry.description, HELP_WIDTH));
-  if (examples[0]) lines.push("", "RUN", `  ${examples[0].command}`);
+  if (examples[0]) {
+    const [command, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
+    lines.push("", "RUN", `  ${command}`, ...(note ? wrapText(note, HELP_WIDTH, "  ") : []));
+  }
   if (entry.prerequisites?.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
   if (entry.seeAlso?.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
   lines.push("", `MORE → help(\"${entry.name}\", \"full\")`);

@@ -38,7 +38,8 @@ var osed_bundle = (() => {
   // src/index.ts
   var index_exports = {};
   __export(index_exports, {
-    initializeScript: () => initializeScript
+    initializeScript: () => initializeScript,
+    normalizeInvocation: () => normalizeInvocation
   });
 
   // src/core/validation.ts
@@ -10303,7 +10304,7 @@ var osed_bundle = (() => {
       description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
       usage: "dx @$osed().rop.corpus.export(path?)",
       examples: [
-        'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file',
+        'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // Saves the current corpus to disk.',
         "dx @$osed().rop.corpus.export()                              // print JSON to the console"
       ],
       details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",
@@ -10551,6 +10552,8 @@ var osed_bundle = (() => {
   // src/core/help_render.ts
   var HELP_WIDTH = 80;
   var NAME_WIDTH = 23;
+  var ROOT_CATEGORY_ORDER = ["crash", "payload", "target", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
+  var ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
   function words(text) {
     return text.trim().split(/\s+/).filter(Boolean);
   }
@@ -10578,10 +10581,21 @@ var osed_bundle = (() => {
     return wrapText(value, HELP_WIDTH, " ".repeat(label.length)).map((line, index) => index === 0 ? `${label}${line.trimStart()}` : line);
   }
   function exampleLines(examples) {
-    return normalizeHelpExamples(examples).flatMap((example) => [
-      ...example.label ? wrapText(`${example.label}:`, HELP_WIDTH, "  ") : [],
-      `  ${example.command}`
-    ]);
+    return normalizeHelpExamples(examples).flatMap((example) => {
+      const [command2, note] = example.command.split(/\s+\/\/\s+/, 2);
+      return [
+        ...example.label ? wrapText(`${example.label}:`, HELP_WIDTH, "  ") : [],
+        `  ${command2}`,
+        ...note ? wrapText(note, HELP_WIDTH, "  ") : []
+      ];
+    });
+  }
+  function orderedGroups(groups, order = ROOT_CATEGORY_ORDER) {
+    const rank = (name) => {
+      const found = order.indexOf(name);
+      return found === -1 ? order.length : found;
+    };
+    return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   }
   function renderListing(entries) {
     return entries.flatMap((entry) => {
@@ -10599,16 +10613,16 @@ var osed_bundle = (() => {
     const lines = heading("OSED Help");
     lines.push(...wrapText('Choose a task area, then use help("name") for a quick command reference.', HELP_WIDTH));
     lines.push("", "QUICK START", '  help("triage")  help("pattern_create")  help("rop.scan_live")');
-    for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [category, entries] of orderedGroups(groups)) {
       lines.push("", category.toUpperCase());
       lines.push(...renderListing(entries));
     }
-    lines.push("", 'ALL COMMANDS \u2192 help("all")');
+    lines.push("", "MORE", '  help("rop")      All ROP commands', '  help("all")      Complete inventory', '  help("?pivot")   Search commands');
     return lines;
   }
   function renderAll(groups) {
     const lines = heading("All OSED Commands");
-    for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [category, entries] of orderedGroups(groups)) {
       lines.push("", category.toUpperCase());
       lines.push(...renderListing(entries));
     }
@@ -10616,7 +10630,7 @@ var osed_bundle = (() => {
   }
   function renderNamespace(name, groups) {
     const lines = heading(`Help: ${name}`);
-    for (const [task, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [task, entries] of orderedGroups(groups, name.toLowerCase() === "rop" ? ROP_TASK_ORDER : [])) {
       lines.push("", task.toUpperCase());
       lines.push(...renderListing(entries));
     }
@@ -10626,7 +10640,7 @@ var osed_bundle = (() => {
   function renderSearch(query, groups, total) {
     const lines = heading(`Search: ${query} (${total} ${total === 1 ? "match" : "matches"})`);
     if (total === 0) return [...lines, "No matching commands."];
-    for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [category, entries] of orderedGroups(groups)) {
       lines.push("", category.toUpperCase());
       lines.push(...renderListing(entries));
     }
@@ -10642,7 +10656,10 @@ var osed_bundle = (() => {
     const examples = normalizeHelpExamples(entry.examples);
     const lines = heading(`Help: ${entry.name}`);
     lines.push(...wrapText((_a = entry.summary) != null ? _a : entry.description, HELP_WIDTH));
-    if (examples[0]) lines.push("", "RUN", `  ${examples[0].command}`);
+    if (examples[0]) {
+      const [command2, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
+      lines.push("", "RUN", `  ${command2}`, ...note ? wrapText(note, HELP_WIDTH, "  ") : []);
+    }
     if ((_b = entry.prerequisites) == null ? void 0 : _b.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
     if ((_c = entry.seeAlso) == null ? void 0 : _c.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
     lines.push("", `MORE \u2192 help("${entry.name}", "full")`);
@@ -10674,9 +10691,39 @@ var osed_bundle = (() => {
     if (["egghunter", "encode", "nop"].includes(name)) return "shellcode";
     return "tools";
   };
-  var toDocument = (entry) => entry;
+  var LISTING_SUMMARIES = {
+    "rop.scan": "Load gadgets into the semantic corpus",
+    "rop.scan_live": "Discover live gadgets",
+    "rop.query": "Search the gadget corpus",
+    "rop.capabilities": "Summarize observed corpus capabilities",
+    "rop.plan": "Evaluate feasible ROP strategies",
+    "rop.emit": "Select gadgets for a strategy",
+    "rop.synthesize": "Build a concrete stack layout",
+    "rop.construct": "Build register-load ROP recipes",
+    "rop.setup": "Stage registers for a call frame",
+    "rop.frame_write": "Construct stdcall frames in memory",
+    "rop.slot_call": "Call APIs through stable IAT slots",
+    "rop.generate": "Generate an API-call ROP chain",
+    "rop.verify": "Verify chain structure and side effects",
+    "rop.prove": "Validate debugger execution stepwise",
+    "rop.pivots": "Find and rank stack pivot gadgets",
+    "rop.corpus.export": "Save the semantic corpus to disk",
+    "rop.corpus.import": "Load a corpus as inactive evidence",
+    "rop.corpus.validate": "Validate corpus against live memory",
+    "rop.frame_va": "Build a VirtualAlloc stdcall frame",
+    "rop.frame_vp": "Build a VirtualProtect stdcall frame",
+    "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame"
+  };
+  function shortSummary(name, description, supplied) {
+    var _a, _b;
+    const source = (_b = (_a = supplied != null ? supplied : LISTING_SUMMARIES[name]) != null ? _a : description.split(new RegExp("(?<=[.!?])\\s"))[0]) != null ? _b : description;
+    if (source.length <= 60) return source;
+    const truncated = source.slice(0, 60);
+    return `${truncated.slice(0, truncated.lastIndexOf(" ") || 60).trimEnd()}\u2026`;
+  }
+  var toDocument = (entry) => __spreadProps(__spreadValues({}, entry), { summary: shortSummary(entry.name, entry.description, entry.summary) });
   function registryDocument(command2) {
-    return { name: command2.name, description: command2.description, usage: command2.usage, examples: command2.examples, category: categoryForName(command2.name) };
+    return { name: command2.name, description: command2.description, summary: shortSummary(command2.name, command2.description), usage: command2.usage, examples: command2.examples, category: categoryForName(command2.name) };
   }
   function groupedDocuments(registry2) {
     var _a, _b;
@@ -10690,6 +10737,36 @@ var osed_bundle = (() => {
       groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
     }
     return groups;
+  }
+  function overviewGroups(all) {
+    const selected = /* @__PURE__ */ new Set([
+      "triage",
+      "landing",
+      "stackmap",
+      "findmsp",
+      "pattern_create",
+      "pattern_offset",
+      "badchars",
+      "modules",
+      "memory",
+      "code_caves",
+      "rop.scan_live",
+      "rop.query",
+      "rop.capabilities",
+      "rop.plan",
+      "rop.generate",
+      "rop.verify",
+      "rop.prove",
+      "seh",
+      "seh_ppr",
+      "encode",
+      "egghunter",
+      "sc.iat",
+      "sc.resolve",
+      "str.find",
+      "fmt_build"
+    ]);
+    return groupByCategory(all.filter((entry) => selected.has(entry.name)));
   }
   function documents(registry2) {
     return [...groupedDocuments(registry2).values()].flat().sort((a, b) => a.name.localeCompare(b.name));
@@ -10733,6 +10810,9 @@ var osed_bundle = (() => {
     return all.filter((entry) => {
       var _a;
       return [entry.name, entry.summary, entry.description, ...(_a = entry.keywords) != null ? _a : []].filter((value) => Boolean(value)).some((value) => value.toLowerCase().includes(needle));
+    }).sort((a, b) => {
+      const score = (entry) => entry.name.toLowerCase().includes(needle) ? 0 : 1;
+      return score(a) - score(b) || a.name.localeCompare(b.name);
     });
   }
   function groupByCategory(entries) {
@@ -10758,7 +10838,7 @@ var osed_bundle = (() => {
         const commandName = options.command;
         const mode = options.mode;
         if (!commandName) {
-          const groups = groupedDocuments(registry2);
+          const groups = overviewGroups(documents(registry2));
           print2(renderOverview(groups));
           return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [], schema: { command: { type: "string", optional: true }, mode: { type: "string", optional: true } } };
         }
@@ -14684,10 +14764,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T23:31:31.559Z" : globalThis[key2];
+        value = true ? "2026-11-02T23:38:46.734Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "e5e74bafca5e" : globalThis[key2];
+        value = true ? "bb63700dd8a9" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -18303,7 +18383,7 @@ var osed_bundle = (() => {
     }
     switch (commandName) {
       case "help":
-        return { command: args[0] };
+        return { command: args[0], mode: args[1] };
       case "pattern_create":
         return { length: args[0], type: args[1] };
       case "pattern_offset":
