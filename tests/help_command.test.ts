@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { createHelpCommand } from "../src/commands/help";
 import { createVersionCommand } from "../src/commands/version";
 import { toDxResult } from "../src/core/dx_result";
-import { findHelpEntry } from "../src/core/help_catalog";
+import { findHelpEntry, NAMESPACE_HELP_ENTRIES, normalizeHelpExamples } from "../src/core/help_catalog";
+import { HELP_WIDTH, renderListing, renderCompactDetail, renderFullDetail } from "../src/core/help_render";
 import { stripDml, table } from "../src/core/output";
 import { CommandRegistry } from "../src/core/registry";
 import { createShellcodeNamespace } from "../src/shellcode";
@@ -42,17 +43,75 @@ describe("help command", () => {
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "sc.iat" })]));
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "version" })]));
     const rendered = logs.join("");
-    expect(rendered).toContain("sc Namespace Helpers");
-    expect(rendered).toContain("Example");
-    expect(rendered).toContain("dx @$osed().sc.iat()");
+    expect(rendered).toContain("=== OSED Help ===");
+    expect(rendered).toContain("PE-API");
+    expect(rendered).toContain("ALL COMMANDS → help(\"all\")");
+
+    logs.length = 0;
+    const all = help.execute({ command: "all" });
+    expect(all.success).toBe(true);
+    expect(logs.join("")).toContain("=== All OSED Commands ===");
+    expect(logs.join("")).toContain("rop.corpus.export");
 
     const detail = help.execute({ command: "sc.iat" });
     expect(detail.success).toBe(true);
     expect(detail.findings).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "sc.iat" })]));
+    expect(logs.join("")).toContain("MORE → help(\"sc.iat\", \"full\")");
 
     const versionDetail = help.execute({ command: "version" });
     expect(versionDetail.success).toBe(true);
     expect(versionDetail.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "version" })]));
+    expect(logs.join("")).toContain("MORE → help(\"version\", \"full\")");
+  });
+
+  test("renderer keeps prose within 80 columns and preserves commands verbatim", () => {
+    const entry = findHelpEntry("rop.corpus.export")!;
+    const output = renderFullDetail(entry);
+    for (const line of output) {
+      if (!line.trimStart().startsWith("dx @$osed()")) expect(line.length).toBeLessThanOrEqual(HELP_WIDTH);
+    }
+    expect(output).toContain('  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file');
+    expect(renderListing([{ ...entry, name: "a.command.name.longer.than.the.listing.name.column" }])).toEqual([
+      "a.command.name.longer.than.the.listing.name.column",
+      "  Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+    ]);
+  });
+
+  test("legacy and labelled examples normalize without changing catalog entries", () => {
+    expect(normalizeHelpExamples([
+      "dx @$osed().help()",
+      { label: "full", command: 'dx @$osed().help("all")' },
+    ])).toEqual([
+      { command: "dx @$osed().help()" },
+      { label: "full", command: 'dx @$osed().help("all")' },
+    ]);
+  });
+
+  test("catalog references and examples have static documentation validity", () => {
+    const names = new Set(NAMESPACE_HELP_ENTRIES.map((entry) => entry.name));
+    for (const entry of NAMESPACE_HELP_ENTRIES) {
+      for (const target of entry.seeAlso ?? []) expect(names.has(target)).toBe(true);
+      for (const { command } of normalizeHelpExamples(entry.examples)) {
+        const match = /^dx @\$osed\(\)\.([A-Za-z_][A-Za-z0-9_.]*)\(/.exec(command);
+        expect(match).not.toBeNull();
+        expect(names.has(match![1])).toBe(true);
+        const expression = command.replace(/^dx @\$osed\(\)/, "osed()").replace(/\s*\/\/.*$/, "");
+        expect(() => new Function("osed", `return (${expression});`)).not.toThrow();
+      }
+    }
+  });
+
+  test("golden compact and full corpus help retains Windows paths and details", () => {
+    const entry = findHelpEntry("rop.corpus.export")!;
+    expect(renderCompactDetail(entry).join("\n")).toBe([
+      "", "=== Help: rop.corpus.export ===", "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+      "", "RUN", '  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file',
+      "", "NEXT", "  rop.scan_live, rop.corpus.import, rop.corpus.validate", "", 'MORE → help("rop.corpus.export", "full")',
+    ].join("\n"));
+    const full = renderFullDetail(entry).join("\n");
+    expect(full).toContain("DETAILS\n  Saves the gadgets you scanned this session");
+    expect(full).toContain('dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file');
+    expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.import, rop.corpus.validate");
   });
 
   test("shellcode helpers accept help without reading debugger state", () => {

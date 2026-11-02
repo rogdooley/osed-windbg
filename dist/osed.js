@@ -5177,16 +5177,16 @@ var osed_bundle = (() => {
   function gadgetStep2(g, comment) {
     return { kind: "gadget", address: firstKnownAddress(g), comment };
   }
-  function planWriteFrame(index, bufAddress, words, badchars = [], preferStable) {
+  function planWriteFrame(index, bufAddress, words2, badchars = [], preferStable) {
     const prevHint = getStableAddressHint();
     setStableAddressHint(preferStable != null ? preferStable : prevHint);
     try {
-      return planWriteFrameInner(index, bufAddress, words, badchars);
+      return planWriteFrameInner(index, bufAddress, words2, badchars);
     } finally {
       setStableAddressHint(prevHint);
     }
   }
-  function planWriteFrameInner(index, bufAddress, words, badchars) {
+  function planWriteFrameInner(index, bufAddress, words2, badchars) {
     var _a, _b, _c;
     const bc = new Set(badchars.map((b) => b & 255));
     const unsatisfied = [];
@@ -5202,7 +5202,7 @@ var osed_bundle = (() => {
     };
     if (stores.length === 0) unsatisfied.push("no `mov [eax], <reg> ; ret` store gadget");
     if (!popEax) unsatisfied.push("no clean `pop eax ; ret`");
-    if (words.length > 1 && !advance) unsatisfied.push("no `add eax, 4 ; ret` pointer-advance gadget");
+    if (words2.length > 1 && !advance) unsatisfied.push("no `add eax, 4 ; ret` pointer-advance gadget");
     if (!pivot) unsatisfied.push("no `xchg eax, esp` / `mov esp, eax` pivot gadget");
     if (unsatisfied.length > 0) {
       return { steps: [], unsatisfied, gadgets: {}, placeholders: [], stackBytes: 0, success: false };
@@ -5210,7 +5210,7 @@ var osed_bundle = (() => {
     const valRegs = stores.map((s) => s.reg);
     const memLoads = findMemLoads(index, valRegs);
     const resolved = [];
-    for (const word of words) {
+    for (const word of words2) {
       if (word.derefSlot !== void 0) {
         let done = false;
         for (const load of memLoads) {
@@ -5424,14 +5424,14 @@ var osed_bundle = (() => {
     if (!isAddressStable(popAddr)) unstable.push(`pop ${chain.ptrReg} @ ${hex2(Number(popAddr))}`);
     if (!isAddressStable(derefAddr)) unstable.push(`mov ${chain.valReg},[${chain.ptrReg}] @ ${hex2(Number(derefAddr))}`);
     if (!isAddressStable(jmpAddr)) unstable.push(`jmp ${chain.valReg} @ ${hex2(Number(jmpAddr))}`);
-    const words = [
+    const words2 = [
       { value: Number(popAddr) >>> 0, comment: `pop ${chain.ptrReg} ; ret (deref preamble)` },
       { value: slot >>> 0, comment: `IAT slot ${hex2(slot)}` },
       { value: Number(derefAddr) >>> 0, comment: `mov ${chain.valReg},[${chain.ptrReg}] ; ret (deref -> live API)` },
       { value: Number(jmpAddr) >>> 0, comment: `jmp ${chain.valReg} (dispatch)` },
       ...frame
     ];
-    const plan = planWriteFrame(index, bufAddress, words, badchars, preferStable);
+    const plan = planWriteFrame(index, bufAddress, words2, badchars, preferStable);
     return __spreadProps(__spreadValues({}, plan), {
       dispatch: {
         popPtr: popAddr,
@@ -8281,23 +8281,23 @@ var osed_bundle = (() => {
       return Array.from(this.state, (word) => word.toString(16).padStart(8, "0")).join("");
     }
     compress(block) {
-      const words = new Uint32Array(64);
+      const words2 = new Uint32Array(64);
       for (let index = 0; index < 16; index += 1) {
         const offset = index * 4;
-        words[index] = (block[offset] << 24 | block[offset + 1] << 16 | block[offset + 2] << 8 | block[offset + 3]) >>> 0;
+        words2[index] = (block[offset] << 24 | block[offset + 1] << 16 | block[offset + 2] << 8 | block[offset + 3]) >>> 0;
       }
       for (let index = 16; index < 64; index += 1) {
-        const left = words[index - 15];
-        const right = words[index - 2];
+        const left = words2[index - 15];
+        const right = words2[index - 2];
         const s0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ left >>> 3;
         const s1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ right >>> 10;
-        words[index] = words[index - 16] + s0 + words[index - 7] + s1 >>> 0;
+        words2[index] = words2[index - 16] + s0 + words2[index - 7] + s1 >>> 0;
       }
       let [a, b, c, d, e, f, g, h] = Array.from(this.state);
       for (let index = 0; index < 64; index += 1) {
         const s1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
         const choice = e & f ^ ~e & g;
-        const temp1 = h + s1 + choice + ROUND[index] + words[index] >>> 0;
+        const temp1 = h + s1 + choice + ROUND[index] + words2[index] >>> 0;
         const s0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
         const majority = a & b ^ a & c ^ b & c;
         const temp2 = s0 + majority >>> 0;
@@ -10082,6 +10082,9 @@ var osed_bundle = (() => {
   }
 
   // src/core/help_catalog.ts
+  function normalizeHelpExamples(examples) {
+    return examples.map((example) => typeof example === "string" ? { command: example } : example);
+  }
   var NAMESPACE_HELP_ENTRIES = [
     {
       name: "pattern.create",
@@ -10536,163 +10539,166 @@ var osed_bundle = (() => {
         Usage: entry.usage,
         Description: entry.description
       },
-      ...entry.examples.map((example) => ({
+      ...normalizeHelpExamples(entry.examples).map((example) => ({
         Helper: "example",
-        Usage: example,
+        Usage: example.command,
         Description: ""
       })),
       ...entry.seeAlso && entry.seeAlso.length > 0 ? [{ Helper: "see also", Usage: entry.seeAlso.join(", "), Description: "" }] : []
     ];
   }
 
-  // src/commands/help.ts
-  function createHelpCommand(registry2) {
-    const firstExample = (examples) => {
+  // src/core/help_render.ts
+  var HELP_WIDTH = 80;
+  var NAME_WIDTH = 23;
+  function words(text) {
+    return text.trim().split(/\s+/).filter(Boolean);
+  }
+  function wrapText(text, width = HELP_WIDTH, indent = "") {
+    const available = Math.max(1, width - indent.length);
+    const lines = [];
+    let line = "";
+    for (const word of words(text)) {
+      if (!line) {
+        line = word;
+      } else if (line.length + 1 + word.length <= available) {
+        line += ` ${word}`;
+      } else {
+        lines.push(`${indent}${line}`);
+        line = word;
+      }
+    }
+    if (line) lines.push(`${indent}${line}`);
+    return lines.length > 0 ? lines : [indent];
+  }
+  function heading(title) {
+    return ["", `=== ${title} ===`];
+  }
+  function labelled(label, value) {
+    return wrapText(value, HELP_WIDTH, " ".repeat(label.length)).map((line, index) => index === 0 ? `${label}${line.trimStart()}` : line);
+  }
+  function exampleLines(examples) {
+    return normalizeHelpExamples(examples).flatMap((example) => [
+      ...example.label ? wrapText(`${example.label}:`, HELP_WIDTH, "  ") : [],
+      `  ${example.command}`
+    ]);
+  }
+  function renderListing(entries) {
+    return entries.flatMap((entry) => {
       var _a;
-      return (_a = examples[0]) != null ? _a : "";
-    };
-    const clampCell = (text, max) => text.length > max ? `${text.slice(0, max - 3)}...` : text;
+      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      if (entry.name.length > NAME_WIDTH) {
+        return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
+      }
+      const descriptionWidth = HELP_WIDTH - NAME_WIDTH - 2;
+      const description = wrapText(summary, descriptionWidth);
+      return description.map((line, index) => `${index === 0 ? entry.name.padEnd(NAME_WIDTH) : " ".repeat(NAME_WIDTH)}  ${line}`);
+    });
+  }
+  function renderOverview(groups) {
+    const lines = heading("OSED Help");
+    lines.push(...wrapText('Choose a task area, then use help("name") for a quick command reference.', HELP_WIDTH));
+    lines.push("", "QUICK START", '  help("triage")  help("pattern_create")  help("rop.scan_live")');
+    for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push("", category.toUpperCase());
+      lines.push(...renderListing(entries));
+    }
+    lines.push("", 'ALL COMMANDS \u2192 help("all")');
+    return lines;
+  }
+  function renderAll(groups) {
+    const lines = heading("All OSED Commands");
+    for (const [category, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push("", category.toUpperCase());
+      lines.push(...renderListing(entries));
+    }
+    return lines;
+  }
+  function renderCompactDetail(entry) {
+    var _a, _b, _c;
+    const examples = normalizeHelpExamples(entry.examples);
+    const lines = heading(`Help: ${entry.name}`);
+    lines.push(...wrapText((_a = entry.summary) != null ? _a : entry.description, HELP_WIDTH));
+    if (examples[0]) lines.push("", "RUN", `  ${examples[0].command}`);
+    if ((_b = entry.prerequisites) == null ? void 0 : _b.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if ((_c = entry.seeAlso) == null ? void 0 : _c.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
+    lines.push("", `MORE \u2192 help("${entry.name}", "full")`);
+    return lines;
+  }
+  function renderFullDetail(entry) {
+    var _a, _b, _c, _d;
+    const lines = heading(`Help: ${entry.name}`);
+    lines.push("PURPOSE", ...wrapText(entry.description, HELP_WIDTH, "  "), "", "USAGE", `  ${entry.usage}`);
+    if (entry.details) lines.push("", "DETAILS", ...wrapText(entry.details, HELP_WIDTH, "  "));
+    if ((_a = entry.arguments) == null ? void 0 : _a.length) lines.push("", "ARGUMENTS", ...entry.arguments.flatMap((argument) => labelled(`  ${argument.name}${argument.required ? "" : "?"}: `, argument.description)));
+    if ((_b = entry.prerequisites) == null ? void 0 : _b.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if ((_c = entry.limitations) == null ? void 0 : _c.length) lines.push("", "LIMITATIONS", ...entry.limitations.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
+    if (entry.examples.length) lines.push("", "EXAMPLES", ...exampleLines(entry.examples));
+    if ((_d = entry.seeAlso) == null ? void 0 : _d.length) lines.push("", "SEE ALSO", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
+    return lines;
+  }
+
+  // src/commands/help.ts
+  var categoryForName = (name) => {
+    if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
+    if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
+    if (name.startsWith("sc.")) return "pe-api";
+    if (name.startsWith("str.")) return "strings";
+    if (name.startsWith("fmt.")) return "format";
+    if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_find"].includes(name)) return "payload";
+    if (["triage", "landing", "stackmap", "findmsp"].includes(name)) return "crash";
+    if (["modules", "memory", "code_caves", "find_mem_bytes", "find_ptr", "find_stack_bytes", "find_bytes"].includes(name)) return "target";
+    if (["egghunter", "encode", "nop"].includes(name)) return "shellcode";
+    return "tools";
+  };
+  var toDocument = (entry) => entry;
+  function registryDocument(command2) {
+    return { name: command2.name, description: command2.description, usage: command2.usage, examples: command2.examples, category: categoryForName(command2.name) };
+  }
+  function groupedDocuments(registry2) {
+    var _a, _b;
+    const documents = /* @__PURE__ */ new Map();
+    for (const command2 of registry2.getAll()) documents.set(command2.name, registryDocument(command2));
+    for (const entry of NAMESPACE_HELP_ENTRIES) documents.set(entry.name, toDocument(entry));
+    documents.delete("rop");
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of [...documents.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
+      groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
+    }
+    return groups;
+  }
+  function print2(lines) {
+    for (const line of lines) print(line);
+  }
+  function createHelpCommand(registry2) {
     return {
       name: "help",
       description: "List commands or show detailed command help.",
-      usage: "dx @$osed().help(command?)",
-      examples: ["dx @$osed().help()", 'dx @$osed().help("badchars")', 'dx @$osed().help("sc.iat")'],
-      schema: {
-        command: { type: "string" }
-      },
+      usage: "dx @$osed().help(command?, mode?)",
+      examples: ["dx @$osed().help()", 'dx @$osed().help("all")', 'dx @$osed().help("sc.iat", "full")'],
+      schema: { command: { type: "string" }, mode: { type: "string" } },
       execute(options) {
-        var _a;
         const commandName = options.command;
+        const mode = options.mode;
         if (!commandName) {
-          const commands = registry2.getAll().filter((command3) => command3.name !== "rop");
-          section("OSED Commands");
-          table(
-            [
-              { key: "name", header: "Command", width: 16 },
-              { key: "description", header: "Description", width: 40 },
-              { key: "example", header: "Example", width: 34 }
-            ],
-            commands.map((command3) => ({
-              name: command3.name,
-              description: clampCell(command3.description, 40),
-              example: firstExample(command3.examples)
-            }))
-          );
-          const groups = /* @__PURE__ */ new Map();
-          for (const entry of NAMESPACE_HELP_ENTRIES) {
-            const group = entry.name.includes(".") ? entry.name.split(".")[0] : "other";
-            groups.set(group, [...(_a = groups.get(group)) != null ? _a : [], entry]);
-          }
-          for (const [group, entries] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-            section(`${group} Namespace Helpers`);
-            table(
-              [
-                { key: "name", header: "Helper", width: 22 },
-                { key: "description", header: "Description", width: 56 },
-                { key: "example", header: "Example", width: 34 }
-              ],
-              entries.map((entry) => ({
-                name: entry.name,
-                description: clampCell(entry.description, 56),
-                example: firstExample(entry.examples)
-              }))
-            );
-          }
-          info('Use help("name") for details, e.g. dx @$osed().help("sc.iat").');
-          info('Most helpers also accept "help" as the first argument, e.g. dx @$osed().sc.iat("help").');
-          whyItMatters("Fast command discovery lowers debugger friction during exploit iteration.");
-          return {
-            command: "help",
-            args: options,
-            success: true,
-            findings: [
-              ...commands.map((command3) => ({
-                name: command3.name,
-                description: command3.description,
-                usage: command3.usage,
-                examples: command3.examples,
-                schema: command3.schema
-              })),
-              ...NAMESPACE_HELP_ENTRIES
-            ],
-            warnings: [],
-            errors: [],
-            schema: {
-              command: { type: "string", optional: true }
-            }
-          };
+          const groups = groupedDocuments(registry2);
+          print2(renderOverview(groups));
+          return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [], schema: { command: { type: "string", optional: true }, mode: { type: "string", optional: true } } };
         }
+        if (commandName.toLowerCase() === "all") {
+          const groups = groupedDocuments(registry2);
+          print2(renderAll(groups));
+          return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [] };
+        }
+        if (mode && mode.toLowerCase() !== "full") return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown help mode '${mode}'. Use 'full'.`] };
         const command2 = registry2.get(commandName);
         const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
-        if (!command2 && !helper) {
-          return {
-            command: "help",
-            args: options,
-            success: false,
-            findings: [],
-            warnings: [],
-            errors: [`Unknown command '${commandName}'.`]
-          };
-        }
-        if (helper) {
-          section(`Help: ${helper.name}`);
-          info(helper.description);
-          if (helper.details) {
-            info(helper.details);
-          }
-          info(`Usage: ${helper.usage}`);
-          info("Examples:");
-          for (const example of helper.examples) {
-            print(`  ${example}`);
-          }
-          if (helper.seeAlso && helper.seeAlso.length > 0) {
-            info(`See also: ${helper.seeAlso.join(", ")}`);
-            info(`  View any with help("name"), e.g. dx @$osed().help("${helper.seeAlso[0]}").`);
-          }
-          whyItMatters("Inline helper documentation keeps namespace workflows discoverable at the debugger prompt.");
-          return {
-            command: "help",
-            args: options,
-            success: true,
-            findings: helpRows(helper),
-            warnings: [],
-            errors: []
-          };
-        }
-        if (!command2) {
-          return {
-            command: "help",
-            args: options,
-            success: false,
-            findings: [],
-            warnings: [],
-            errors: [`Unknown command '${commandName}'.`]
-          };
-        }
-        section(`Help: ${command2.name}`);
-        info(command2.description);
-        info(`Usage: ${command2.usage}`);
-        for (const example of command2.examples) {
-          print(`  ${example}`);
-        }
-        whyItMatters("Inline help prevents context switching and keeps exploit workflow focused.");
-        return {
-          command: "help",
-          args: options,
-          success: true,
-          findings: [
-            {
-              name: command2.name,
-              description: command2.description,
-              usage: command2.usage,
-              examples: command2.examples,
-              schema: command2.schema
-            }
-          ],
-          warnings: [],
-          errors: [],
-          schema: command2.schema
-        };
+        if (!command2 && !helper) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown command '${commandName}'.`] };
+        const document = helper ? toDocument(helper) : registryDocument(command2);
+        print2((mode == null ? void 0 : mode.toLowerCase()) === "full" ? renderFullDetail(document) : renderCompactDetail(document));
+        if (helper) return { command: "help", args: options, success: true, findings: helpRows(helper), warnings: [], errors: [] };
+        return { command: "help", args: options, success: true, findings: [{ name: command2.name, description: command2.description, usage: command2.usage, examples: command2.examples, schema: command2.schema }], warnings: [], errors: [], schema: command2.schema };
       }
     };
   }
@@ -14574,10 +14580,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T13:29:55.903Z" : globalThis[key2];
+        value = true ? "2026-11-02T14:02:10.232Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "aac628e3a105" : globalThis[key2];
+        value = true ? "2f5d346325ae" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -17301,17 +17307,17 @@ var osed_bundle = (() => {
       const bufToken = typeof args[0] === "string" ? args[0].trim() : void 0;
       const wordsSpec = typeof args[1] === "string" ? args[1] : void 0;
       const badchars = Array.isArray(parseHexByteList(args[2])) ? parseHexByteList(args[2]) : [];
-      const words = (wordsSpec != null ? wordsSpec : "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
-      if (!bufToken || words.length === 0) {
+      const words2 = (wordsSpec != null ? wordsSpec : "").split(/[\s,]+/).filter((w) => w.length > 0).map(parseFrameWordToken);
+      if (!bufToken || words2.length === 0) {
         const rows2 = [{ Error: 'rop.frame_write requires a buffer and ordered frame words, e.g. rop.frame_write("BUF", "VIRTUALALLOC POST_CALL 0x0 0x1000 0x3000 0x40", "00 0A 0D")' }];
         renderRows("ROP Write Frame", rows2);
         setResult({ command: "rop.frame_write", args: {}, success: false, findings: [], warnings: [], errors: ["Missing buffer or frame words."] });
         return toDxResult("ROP Write Frame", rows2);
       }
       const buf = /^0x[0-9a-fA-F]+$/.test(bufToken) ? { value: parseInt(bufToken, 16) >>> 0 } : { placeholder: bufToken.toUpperCase() };
-      const plan = planWriteFrame(currentRopCorpus, buf, words, badchars, buildStableAddressPredicate());
+      const plan = planWriteFrame(currentRopCorpus, buf, words2, badchars, buildStableAddressPredicate());
       section("ROP Write Frame (no PUSHAD)");
-      for (const w of words) {
+      for (const w of words2) {
         if (w.assumedHex) warn(`Frame word "${w.comment.split(" ")[0]}" had no 0x prefix \u2014 assumed hex ${hex32(BigInt(w.value))}. Add 0x to be explicit.`);
       }
       if (plan.success) {
@@ -17319,7 +17325,7 @@ var osed_bundle = (() => {
         info(`Store: ${g.store !== void 0 ? hex32(g.store) : "?"} | Advance: ${g.advance !== void 0 ? hex32(g.advance) : "n/a"} | Pivot: ${g.pivot !== void 0 ? hex32(g.pivot) : "?"} | Stack: ${plan.stackBytes} bytes`);
         if (plan.placeholders.length > 0) info(`Define before use: ${plan.placeholders.join(", ")}`);
         info("Frame layout (built in BUF, then ESP pivots onto it):");
-        words.forEach((w, i) => {
+        words2.forEach((w, i) => {
           var _a2;
           const shown = w.derefSlot !== void 0 ? `*${hex32(w.derefSlot)}` : (_a2 = w.placeholder) != null ? _a2 : hex32(w.value);
           print(`  BUF+0x${(i * 4).toString(16).padStart(2, "0")} = ${shown}  (${i === 0 ? "API (ret dispatches here)" : i === 1 ? "post-call target \u2014 MUST be executable" : `arg${i - 1}`})`);
@@ -17341,7 +17347,7 @@ var osed_bundle = (() => {
       renderRows("ROP Write Frame", rows);
       setResult({
         command: "rop.frame_write",
-        args: { buf: bufToken, words: words.length, badchars },
+        args: { buf: bufToken, words: words2.length, badchars },
         success: plan.success,
         findings: [{ steps: plan.steps, gadgets: plan.gadgets, placeholders: plan.placeholders }],
         warnings: plan.unsatisfied,
