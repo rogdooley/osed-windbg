@@ -1,9 +1,9 @@
 import { Command, CommandRegistry, CommandResult } from "../core/registry";
 import * as out from "../core/output";
-import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES } from "../core/help_catalog";
+import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, normalizeHelpExamples, HelpExample } from "../core/help_catalog";
 
 export function createHelpCommand(registry: CommandRegistry): Command {
-  const firstExample = (examples: string[]): string => examples[0] ?? "";
+  const firstExample = (examples: HelpExample[]): string => normalizeHelpExamples(examples)[0]?.command ?? "";
   // Keep listing cells within their column width so one long description
   // cannot expand the column and push the Example column off-screen.
   // The full description stays available via help("name").
@@ -103,8 +103,8 @@ export function createHelpCommand(registry: CommandRegistry): Command {
         }
         out.info(`Usage: ${helper.usage}`);
         out.info("Examples:");
-        for (const example of helper.examples) {
-          out.print(`  ${example}`);
+        for (const example of normalizeHelpExamples(helper.examples)) {
+          out.print(`  ${example.command}`);
         }
         if (helper.seeAlso && helper.seeAlso.length > 0) {
           out.info(`See also: ${helper.seeAlso.join(", ")}`);

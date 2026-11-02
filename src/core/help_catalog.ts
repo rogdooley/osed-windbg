@@ -1,14 +1,47 @@
+export type HelpExample = string | {
+  label?: string;
+  command: string;
+};
+
+export type HelpArgument = {
+  name: string;
+  description: string;
+  required?: boolean;
+};
+
 export type HelpEntry = {
   name: string;
   description: string;
+  /** Short listing text; description remains the detailed explanation. */
+  summary?: string;
+  /** Display-only grouping. It never changes command dispatch. */
+  category?: string;
   usage: string;
-  examples: string[];
+  /** Legacy strings and labelled examples coexist during incremental migration. */
+  examples: HelpExample[];
   // Optional, shown only in the detail view (help("name")): a plain-language
   // note on what the command is for and where it fits a workflow.
   details?: string;
+  arguments?: HelpArgument[];
+  prerequisites?: string[];
+  limitations?: string[];
   // Optional related helpers to suggest as likely next steps.
   seeAlso?: string[];
+  keywords?: string[];
 };
+
+export type NormalizedHelpExample = {
+  label?: string;
+  command: string;
+};
+
+/**
+ * Normalize only at the documentation boundary so existing catalog entries can
+ * remain simple strings until richer prose is worth authoring.
+ */
+export function normalizeHelpExamples(examples: HelpExample[]): NormalizedHelpExample[] {
+  return examples.map((example) => typeof example === "string" ? { command: example } : example);
+}
 
 export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
@@ -466,9 +499,9 @@ export function helpRows(entry: HelpEntry): Array<Record<string, string>> {
       Usage: entry.usage,
       Description: entry.description,
     },
-    ...entry.examples.map((example) => ({
+    ...normalizeHelpExamples(entry.examples).map((example) => ({
       Helper: "example",
-      Usage: example,
+      Usage: example.command,
       Description: "",
     })),
     ...(entry.seeAlso && entry.seeAlso.length > 0
