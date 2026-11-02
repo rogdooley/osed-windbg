@@ -3,6 +3,11 @@ export type HelpEntry = {
   description: string;
   usage: string;
   examples: string[];
+  // Optional, shown only in the detail view (help("name")): a plain-language
+  // note on what the command is for and where it fits a workflow.
+  details?: string;
+  // Optional related helpers to suggest as likely next steps.
+  seeAlso?: string[];
 };
 
 export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
@@ -80,6 +85,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.scan(\"0x1000: pop eax ; ret ;\")",
       'dx @$osed().rop.scan(rpOutput, "00 0A 0D")',
     ],
+    seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"],
   },
   {
     name: "rop.scan_live",
@@ -91,6 +97,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
       'dx @$osed().rop.scan_live({module:"crypto", append:true})',
     ],
+    seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"],
   },
   {
     name: "rop.query",
@@ -178,6 +185,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
       'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})',
     ],
+    seeAlso: ["rop.scan_live", "rop.verify", "rop.prove"],
   },
   {
     name: "rop.verify",
@@ -188,6 +196,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       'dx @$osed().rop.verify({badchars: "00 0A 0D"})                    // verify last result with explicit badchars',
       'dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF", badchars: "00 0A 0D"})',
     ],
+    seeAlso: ["rop.generate", "rop.prove"],
   },
   {
     name: "rop.prove",
@@ -201,6 +210,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       'dx @$osed().rop.prove({action:"cancel", orphans:true})',
       'dx @$osed().rop.prove({action:"export", path:"C:\\\\notes\\\\proof.json"})',
     ],
+    seeAlso: ["rop.generate", "rop.verify"],
   },
   {
     name: "rop.export",
@@ -210,24 +220,35 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.export(1)",
       'dx @$osed().rop.export(1, "C:\\\\exploit\\\\rop.py")',
     ],
+    details: "Turns an emitted plan (from rop.emit) into a ready-to-paste Python exploit stub. Needs a plan id — run rop.plan then rop.emit first. This exports a single chain as Python; to save the whole gadget corpus for reuse, use rop.corpus.export instead.",
+    seeAlso: ["rop.plan", "rop.emit", "rop.corpus.export"],
   },
   {
     name: "rop.corpus.export",
     description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
     usage: "dx @$osed().rop.corpus.export(path?)",
-    examples: ['dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")'],
+    examples: [
+      'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file',
+      "dx @$osed().rop.corpus.export()                              // print JSON to the console",
+    ],
+    details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",
+    seeAlso: ["rop.scan_live", "rop.corpus.import", "rop.corpus.validate"],
   },
   {
     name: "rop.corpus.import",
     description: "Imports a corpus as stale evidence. Run rop.corpus.validate() before querying or planning.",
     usage: "dx @$osed().rop.corpus.import(path)",
     examples: ['dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")'],
+    details: "Loads a corpus you previously saved with rop.corpus.export, avoiding a full re-scan. The imported corpus is INACTIVE until you run rop.corpus.validate() against the live target — gadget addresses are only trustworthy if the modules still map where they did when you exported. Querying or planning is blocked until validation succeeds.",
+    seeAlso: ["rop.corpus.validate", "rop.corpus.export"],
   },
   {
     name: "rop.corpus.validate",
     description: "Validates imported module mappings and sampled gadget bytes before enabling the corpus.",
     usage: "dx @$osed().rop.corpus.validate()",
     examples: ["dx @$osed().rop.corpus.validate()"],
+    details: "Activates a corpus loaded by rop.corpus.import, but only if it still matches the live target: it re-reads the recorded module bases and sampled gadget bytes and refuses if anything moved or changed (e.g. a relocated DLL). On success the corpus becomes active for query/plan/generate; on failure it reports exactly what drifted so you can re-scan instead.",
+    seeAlso: ["rop.corpus.import", "rop.scan_live", "rop.query"],
   },
   {
     name: "rop.pivots",
@@ -450,5 +471,8 @@ export function helpRows(entry: HelpEntry): Array<Record<string, string>> {
       Usage: example,
       Description: "",
     })),
+    ...(entry.seeAlso && entry.seeAlso.length > 0
+      ? [{ Helper: "see also", Usage: entry.seeAlso.join(", "), Description: "" }]
+      : []),
   ];
 }

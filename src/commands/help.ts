@@ -98,9 +98,17 @@ export function createHelpCommand(registry: CommandRegistry): Command {
       if (helper) {
         out.section(`Help: ${helper.name}`);
         out.info(helper.description);
+        if (helper.details) {
+          out.info(helper.details);
+        }
         out.info(`Usage: ${helper.usage}`);
+        out.info("Examples:");
         for (const example of helper.examples) {
           out.print(`  ${example}`);
+        }
+        if (helper.seeAlso && helper.seeAlso.length > 0) {
+          out.info(`See also: ${helper.seeAlso.join(", ")}`);
+          out.info(`  View any with help("name"), e.g. dx @$osed().help("${helper.seeAlso[0]}").`);
         }
         out.whyItMatters("Inline helper documentation keeps namespace workflows discoverable at the debugger prompt.");
 

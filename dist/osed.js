@@ -10156,7 +10156,8 @@ var osed_bundle = (() => {
       examples: [
         'dx @$osed().rop.scan("0x1000: pop eax ; ret ;")',
         'dx @$osed().rop.scan(rpOutput, "00 0A 0D")'
-      ]
+      ],
+      seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"]
     },
     {
       name: "rop.scan_live",
@@ -10167,7 +10168,8 @@ var osed_bundle = (() => {
         'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
         'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
         'dx @$osed().rop.scan_live({module:"crypto", append:true})'
-      ]
+      ],
+      seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"]
     },
     {
       name: "rop.query",
@@ -10254,7 +10256,8 @@ var osed_bundle = (() => {
         'dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
         'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
         'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})'
-      ]
+      ],
+      seeAlso: ["rop.scan_live", "rop.verify", "rop.prove"]
     },
     {
       name: "rop.verify",
@@ -10264,7 +10267,8 @@ var osed_bundle = (() => {
         "dx @$osed().rop.verify()                                          // verify last rop.generate result",
         'dx @$osed().rop.verify({badchars: "00 0A 0D"})                    // verify last result with explicit badchars',
         'dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF", badchars: "00 0A 0D"})'
-      ]
+      ],
+      seeAlso: ["rop.generate", "rop.prove"]
     },
     {
       name: "rop.prove",
@@ -10277,7 +10281,8 @@ var osed_bundle = (() => {
         'dx @$osed().rop.prove({action:"status"})',
         'dx @$osed().rop.prove({action:"cancel", orphans:true})',
         'dx @$osed().rop.prove({action:"export", path:"C:\\\\notes\\\\proof.json"})'
-      ]
+      ],
+      seeAlso: ["rop.generate", "rop.verify"]
     },
     {
       name: "rop.export",
@@ -10286,25 +10291,36 @@ var osed_bundle = (() => {
       examples: [
         "dx @$osed().rop.export(1)",
         'dx @$osed().rop.export(1, "C:\\\\exploit\\\\rop.py")'
-      ]
+      ],
+      details: "Turns an emitted plan (from rop.emit) into a ready-to-paste Python exploit stub. Needs a plan id \u2014 run rop.plan then rop.emit first. This exports a single chain as Python; to save the whole gadget corpus for reuse, use rop.corpus.export instead.",
+      seeAlso: ["rop.plan", "rop.emit", "rop.corpus.export"]
     },
     {
       name: "rop.corpus.export",
       description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
       usage: "dx @$osed().rop.corpus.export(path?)",
-      examples: ['dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")']
+      examples: [
+        'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // save to a file',
+        "dx @$osed().rop.corpus.export()                              // print JSON to the console"
+      ],
+      details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",
+      seeAlso: ["rop.scan_live", "rop.corpus.import", "rop.corpus.validate"]
     },
     {
       name: "rop.corpus.import",
       description: "Imports a corpus as stale evidence. Run rop.corpus.validate() before querying or planning.",
       usage: "dx @$osed().rop.corpus.import(path)",
-      examples: ['dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")']
+      examples: ['dx @$osed().rop.corpus.import("C:\\\\notes\\\\rop-corpus.json")'],
+      details: "Loads a corpus you previously saved with rop.corpus.export, avoiding a full re-scan. The imported corpus is INACTIVE until you run rop.corpus.validate() against the live target \u2014 gadget addresses are only trustworthy if the modules still map where they did when you exported. Querying or planning is blocked until validation succeeds.",
+      seeAlso: ["rop.corpus.validate", "rop.corpus.export"]
     },
     {
       name: "rop.corpus.validate",
       description: "Validates imported module mappings and sampled gadget bytes before enabling the corpus.",
       usage: "dx @$osed().rop.corpus.validate()",
-      examples: ["dx @$osed().rop.corpus.validate()"]
+      examples: ["dx @$osed().rop.corpus.validate()"],
+      details: "Activates a corpus loaded by rop.corpus.import, but only if it still matches the live target: it re-reads the recorded module bases and sampled gadget bytes and refuses if anything moved or changed (e.g. a relocated DLL). On success the corpus becomes active for query/plan/generate; on failure it reports exactly what drifted so you can re-scan instead.",
+      seeAlso: ["rop.corpus.import", "rop.scan_live", "rop.query"]
     },
     {
       name: "rop.pivots",
@@ -10524,7 +10540,8 @@ var osed_bundle = (() => {
         Helper: "example",
         Usage: example,
         Description: ""
-      }))
+      })),
+      ...entry.seeAlso && entry.seeAlso.length > 0 ? [{ Helper: "see also", Usage: entry.seeAlso.join(", "), Description: "" }] : []
     ];
   }
 
@@ -10620,9 +10637,17 @@ var osed_bundle = (() => {
         if (helper) {
           section(`Help: ${helper.name}`);
           info(helper.description);
+          if (helper.details) {
+            info(helper.details);
+          }
           info(`Usage: ${helper.usage}`);
+          info("Examples:");
           for (const example of helper.examples) {
             print(`  ${example}`);
+          }
+          if (helper.seeAlso && helper.seeAlso.length > 0) {
+            info(`See also: ${helper.seeAlso.join(", ")}`);
+            info(`  View any with help("name"), e.g. dx @$osed().help("${helper.seeAlso[0]}").`);
           }
           whyItMatters("Inline helper documentation keeps namespace workflows discoverable at the debugger prompt.");
           return {
@@ -14549,10 +14574,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T12:34:10.077Z" : globalThis[key2];
+        value = true ? "2026-11-02T13:29:55.903Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "670ff1f0f7c1" : globalThis[key2];
+        value = true ? "aac628e3a105" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
