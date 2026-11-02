@@ -4,6 +4,12 @@
 grouped full inventory, `help("name")` for the short RUN-first reference, and
 `help("name", "full")` for purpose, usage, details, examples, and references.
 
+P1A adds metadata-only navigation: `help("rop")`, `help("seh")`, and
+`help("sc")` group their commands by task; `help("?pivot")` searches names,
+summaries, descriptions, and keywords (showing at most 15 results); and an
+unambiguous suffix such as `help("corpus.export")` opens its full command name.
+Ambiguous suffixes list their candidates in deterministic name order.
+
 The renderer is a pure formatter: it does not inspect or mutate debugger state.
 Commands are emitted as indivisible lines so a copyable command is never wrapped
 or truncated. Prose wraps at 80 columns.

@@ -3,7 +3,7 @@ import { HelpEntry, normalizeHelpExamples } from "./help_catalog";
 export const HELP_WIDTH = 80;
 const NAME_WIDTH = 23;
 
-export type HelpDocument = Pick<HelpEntry, "name" | "description" | "usage" | "examples" | "details" | "summary" | "category" | "arguments" | "prerequisites" | "limitations" | "seeAlso">;
+export type HelpDocument = Pick<HelpEntry, "name" | "description" | "usage" | "examples" | "details" | "summary" | "category" | "arguments" | "prerequisites" | "limitations" | "seeAlso" | "keywords">;
 
 function words(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
@@ -73,6 +73,30 @@ export function renderAll(groups: Map<string, HelpDocument[]>): string[] {
     lines.push("", category.toUpperCase());
     lines.push(...renderListing(entries));
   }
+  return lines;
+}
+
+export function renderNamespace(name: string, groups: Map<string, HelpDocument[]>): string[] {
+  const lines = heading(`Help: ${name}`);
+  for (const [task, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push("", task.toUpperCase());
+    lines.push(...renderListing(entries));
+  }
+  lines.push("", ...wrapText("Use help(\"name\") for RUN-first help or help(\"name\", \"full\") for all details.", HELP_WIDTH));
+  return lines;
+}
+
+export function renderSearch(query: string, entries: HelpDocument[], total: number): string[] {
+  const lines = heading(`Search: ${query}`);
+  if (entries.length === 0) return [...lines, "No matching commands."];
+  lines.push(...renderListing(entries));
+  if (total > entries.length) lines.push("", `Showing ${entries.length} of ${total} matches. Refine the search term.`);
+  return lines;
+}
+
+export function renderCandidates(suffix: string, entries: HelpDocument[]): string[] {
+  const lines = heading(`Ambiguous help: ${suffix}`);
+  lines.push("Multiple commands match this suffix:", ...renderListing(entries));
   return lines;
 }
 

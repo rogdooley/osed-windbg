@@ -114,6 +114,72 @@ describe("help command", () => {
     expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.import, rop.corpus.validate");
   });
 
+  test("P1A namespace navigation is task-grouped and metadata-only", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+    };
+    const help = createHelpCommand(new CommandRegistry());
+    const rop = help.execute({ command: "rop" });
+    expect(rop.success).toBe(true);
+    expect(rop.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "rop.scan_live" }), expect.objectContaining({ name: "rop.corpus.export" })]));
+    expect(logs.join("")).toContain("DISCOVERY");
+    expect(logs.join("")).toContain("PERSISTENCE");
+    expect(logs.join("").split("\n").every((line) => line.length <= HELP_WIDTH)).toBe(true);
+
+    logs.length = 0;
+    const sc = help.execute({ command: "sc" });
+    expect(sc.success).toBe(true);
+    expect(logs.join("")).toContain("IMPORTS");
+    expect(logs.join("")).toContain("API RESOLUTION");
+
+    logs.length = 0;
+    const seh = help.execute({ command: "seh" });
+    expect(seh.success).toBe(true);
+    expect(seh.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "seh.visualize" })]));
+  });
+
+  test("P1A search is deterministic, capped, and handles empty results", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+    };
+    const help = createHelpCommand(new CommandRegistry());
+    const result = help.execute({ command: "?rop" });
+    expect(result.success).toBe(true);
+    expect(result.findings).toHaveLength(15);
+    expect(result.warnings[0]).toMatch(/^Showing 15 of \d+ matches\.$/);
+    expect((result.findings as Array<{ name: string }>).map((entry) => entry.name)).toEqual(
+      [...(result.findings as Array<{ name: string }>).map((entry) => entry.name)].sort((a, b) => a.localeCompare(b)),
+    );
+    expect(logs.join("")).toContain("Showing 15 of");
+
+    logs.length = 0;
+    const noMatches = help.execute({ command: "?does-not-exist" });
+    expect(noMatches.success).toBe(true);
+    expect(noMatches.findings).toEqual([]);
+    expect(logs.join("")).toContain("No matching commands.");
+    expect(help.execute({ command: "?" }).errors).toEqual(["Search query cannot be empty."]);
+  });
+
+  test("P1A resolves unambiguous suffixes and reports deterministic candidates", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: { diagnostics: { debugLog: (line: string) => void } } }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+    };
+    const help = createHelpCommand(new CommandRegistry());
+    const resolved = help.execute({ command: "corpus.export" });
+    expect(resolved.success).toBe(true);
+    expect(resolved.findings).toEqual(expect.arrayContaining([expect.objectContaining({ Helper: "rop.corpus.export" })]));
+    expect(logs.join("")).toContain("=== Help: rop.corpus.export ===");
+
+    logs.length = 0;
+    const ambiguous = help.execute({ command: "export" });
+    expect(ambiguous.success).toBe(false);
+    expect((ambiguous.findings as Array<{ name: string }>).map((entry) => entry.name)).toEqual(["rop.corpus.export", "rop.export", "sc.export"]);
+    expect(logs.join("")).toContain("=== Ambiguous help: export ===");
+  });
+
   test("shellcode helpers accept help without reading debugger state", () => {
     const sc = createShellcodeNamespace();
     const result = sc.iat("help");

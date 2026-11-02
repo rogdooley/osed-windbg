@@ -1,7 +1,9 @@
 import { Command, CommandRegistry, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../core/help_catalog";
-import { HelpDocument, renderAll, renderCompactDetail, renderFullDetail, renderOverview } from "../core/help_render";
+import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
+
+const SEARCH_LIMIT = 15;
 
 const categoryForName = (name: string): string => {
   if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
@@ -35,6 +37,51 @@ function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]
   return groups;
 }
 
+function documents(registry: CommandRegistry): HelpDocument[] {
+  return [...groupedDocuments(registry).values()].flat().sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function namespaceTask(name: string, entry: HelpDocument): string {
+  if (name === "rop") {
+    if (["rop.scan", "rop.scan_live", "rop.query", "rop.capabilities", "rop.pivots", "rop.find", "rop_find"].includes(entry.name)) return "discovery";
+    if (["rop.plan", "rop.emit", "rop.synthesize"].includes(entry.name)) return "planning";
+    if (["rop.verify", "rop.prove"].includes(entry.name)) return "validation";
+    if (entry.name.startsWith("rop.corpus.")) return "persistence";
+    if (entry.name === "rop.export") return "export";
+    if (["retn", "add_esp"].includes(entry.name)) return "control flow";
+    return "construction";
+  }
+  if (name === "sc") {
+    if (entry.name.startsWith("sc.iat")) return "imports";
+    if (["sc.exports", "sc.export", "sc.exportat", "sc.exportdir", "sc.exportwalk", "sc.resolve", "sc.hash", "sc.hashes", "sc.hashresolve", "sc.algorithms"].includes(entry.name)) return "api resolution";
+    return "pe and modules";
+  }
+  return "commands";
+}
+
+function namespaceDocuments(name: string, all: HelpDocument[]): Map<string, HelpDocument[]> | undefined {
+  const normalized = name.toLowerCase();
+  const matches = all.filter((entry) => {
+    if (normalized === "rop") return (entry.category ?? categoryForName(entry.name)) === "rop";
+    if (normalized === "seh") return (entry.category ?? categoryForName(entry.name)) === "seh";
+    return entry.name.startsWith(`${normalized}.`);
+  });
+  if (matches.length === 0) return undefined;
+  const groups = new Map<string, HelpDocument[]>();
+  for (const entry of matches) {
+    const task = namespaceTask(normalized, entry);
+    groups.set(task, [...(groups.get(task) ?? []), entry]);
+  }
+  return groups;
+}
+
+function searchDocuments(query: string, all: HelpDocument[]): HelpDocument[] {
+  const needle = query.toLowerCase();
+  return all.filter((entry) => [entry.name, entry.summary, entry.description, ...(entry.keywords ?? [])]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => value.toLowerCase().includes(needle)));
+}
+
 function print(lines: string[]): void {
   for (const line of lines) out.print(line);
 }
@@ -60,9 +107,40 @@ export function createHelpCommand(registry: CommandRegistry): Command {
         return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [] };
       }
       if (mode && mode.toLowerCase() !== "full") return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown help mode '${mode}'. Use 'full'.`] };
+      const all = documents(registry);
+      if (commandName.startsWith("?")) {
+        const query = commandName.slice(1).trim();
+        if (!query) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: ["Search query cannot be empty."] };
+        const matches = searchDocuments(query, all);
+        const limited = matches.slice(0, SEARCH_LIMIT);
+        print(renderSearch(query, limited, matches.length));
+        return { command: "help", args: options, success: true, findings: limited, warnings: matches.length > limited.length ? [`Showing ${limited.length} of ${matches.length} matches.`] : [], errors: [] };
+      }
+      const namespace = namespaceDocuments(commandName, all);
+      if (namespace) {
+        print(renderNamespace(commandName, namespace));
+        return { command: "help", args: options, success: true, findings: [...namespace.values()].flat(), warnings: [], errors: [] };
+      }
       const command = registry.get(commandName);
       const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
-      if (!command && !helper) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown command '${commandName}'.`] };
+      if (!command && !helper) {
+        const suffix = commandName.toLowerCase();
+        const matches = all.filter((entry) => entry.name.toLowerCase().endsWith(`.${suffix}`));
+        if (matches.length === 1) {
+          const resolved = matches[0];
+          const resolvedHelper = findHelpEntry(resolved.name);
+          const resolvedCommand = registry.get(resolved.name);
+          print(mode?.toLowerCase() === "full" ? renderFullDetail(resolved) : renderCompactDetail(resolved));
+          return resolvedHelper
+            ? { command: "help", args: options, success: true, findings: helpRows(resolvedHelper), warnings: [], errors: [] }
+            : { command: "help", args: options, success: true, findings: [{ name: resolvedCommand!.name, description: resolvedCommand!.description, usage: resolvedCommand!.usage, examples: resolvedCommand!.examples, schema: resolvedCommand!.schema }], warnings: [], errors: [], schema: resolvedCommand!.schema as Record<string, unknown> };
+        }
+        if (matches.length > 1) {
+          print(renderCandidates(commandName, matches));
+          return { command: "help", args: options, success: false, findings: matches, warnings: [], errors: [`'${commandName}' matches multiple commands.`] };
+        }
+        return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown command '${commandName}'.`] };
+      }
       const document = helper ? toDocument(helper) : registryDocument(command!);
       print(mode?.toLowerCase() === "full" ? renderFullDetail(document) : renderCompactDetail(document));
       if (helper) return { command: "help", args: options, success: true, findings: helpRows(helper), warnings: [], errors: [] };

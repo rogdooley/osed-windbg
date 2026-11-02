@@ -10614,6 +10614,27 @@ var osed_bundle = (() => {
     }
     return lines;
   }
+  function renderNamespace(name, groups) {
+    const lines = heading(`Help: ${name}`);
+    for (const [task, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push("", task.toUpperCase());
+      lines.push(...renderListing(entries));
+    }
+    lines.push("", ...wrapText('Use help("name") for RUN-first help or help("name", "full") for all details.', HELP_WIDTH));
+    return lines;
+  }
+  function renderSearch(query, entries, total) {
+    const lines = heading(`Search: ${query}`);
+    if (entries.length === 0) return [...lines, "No matching commands."];
+    lines.push(...renderListing(entries));
+    if (total > entries.length) lines.push("", `Showing ${entries.length} of ${total} matches. Refine the search term.`);
+    return lines;
+  }
+  function renderCandidates(suffix, entries) {
+    const lines = heading(`Ambiguous help: ${suffix}`);
+    lines.push("Multiple commands match this suffix:", ...renderListing(entries));
+    return lines;
+  }
   function renderCompactDetail(entry) {
     var _a, _b, _c;
     const examples = normalizeHelpExamples(entry.examples);
@@ -10639,6 +10660,7 @@ var osed_bundle = (() => {
   }
 
   // src/commands/help.ts
+  var SEARCH_LIMIT = 15;
   var categoryForName = (name) => {
     if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
@@ -10657,16 +10679,60 @@ var osed_bundle = (() => {
   }
   function groupedDocuments(registry2) {
     var _a, _b;
-    const documents = /* @__PURE__ */ new Map();
-    for (const command2 of registry2.getAll()) documents.set(command2.name, registryDocument(command2));
-    for (const entry of NAMESPACE_HELP_ENTRIES) documents.set(entry.name, toDocument(entry));
-    documents.delete("rop");
+    const documents2 = /* @__PURE__ */ new Map();
+    for (const command2 of registry2.getAll()) documents2.set(command2.name, registryDocument(command2));
+    for (const entry of NAMESPACE_HELP_ENTRIES) documents2.set(entry.name, toDocument(entry));
+    documents2.delete("rop");
     const groups = /* @__PURE__ */ new Map();
-    for (const entry of [...documents.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of [...documents2.values()].sort((a, b) => a.name.localeCompare(b.name))) {
       const category = (_a = entry.category) != null ? _a : categoryForName(entry.name);
       groups.set(category, [...(_b = groups.get(category)) != null ? _b : [], entry]);
     }
     return groups;
+  }
+  function documents(registry2) {
+    return [...groupedDocuments(registry2).values()].flat().sort((a, b) => a.name.localeCompare(b.name));
+  }
+  function namespaceTask(name, entry) {
+    if (name === "rop") {
+      if (["rop.scan", "rop.scan_live", "rop.query", "rop.capabilities", "rop.pivots", "rop.find", "rop_find"].includes(entry.name)) return "discovery";
+      if (["rop.plan", "rop.emit", "rop.synthesize"].includes(entry.name)) return "planning";
+      if (["rop.verify", "rop.prove"].includes(entry.name)) return "validation";
+      if (entry.name.startsWith("rop.corpus.")) return "persistence";
+      if (entry.name === "rop.export") return "export";
+      if (["retn", "add_esp"].includes(entry.name)) return "control flow";
+      return "construction";
+    }
+    if (name === "sc") {
+      if (entry.name.startsWith("sc.iat")) return "imports";
+      if (["sc.exports", "sc.export", "sc.exportat", "sc.exportdir", "sc.exportwalk", "sc.resolve", "sc.hash", "sc.hashes", "sc.hashresolve", "sc.algorithms"].includes(entry.name)) return "api resolution";
+      return "pe and modules";
+    }
+    return "commands";
+  }
+  function namespaceDocuments(name, all) {
+    var _a;
+    const normalized = name.toLowerCase();
+    const matches = all.filter((entry) => {
+      var _a2, _b;
+      if (normalized === "rop") return ((_a2 = entry.category) != null ? _a2 : categoryForName(entry.name)) === "rop";
+      if (normalized === "seh") return ((_b = entry.category) != null ? _b : categoryForName(entry.name)) === "seh";
+      return entry.name.startsWith(`${normalized}.`);
+    });
+    if (matches.length === 0) return void 0;
+    const groups = /* @__PURE__ */ new Map();
+    for (const entry of matches) {
+      const task = namespaceTask(normalized, entry);
+      groups.set(task, [...(_a = groups.get(task)) != null ? _a : [], entry]);
+    }
+    return groups;
+  }
+  function searchDocuments(query, all) {
+    const needle = query.toLowerCase();
+    return all.filter((entry) => {
+      var _a;
+      return [entry.name, entry.summary, entry.description, ...(_a = entry.keywords) != null ? _a : []].filter((value) => Boolean(value)).some((value) => value.toLowerCase().includes(needle));
+    });
   }
   function print2(lines) {
     for (const line of lines) print(line);
@@ -10692,9 +10758,38 @@ var osed_bundle = (() => {
           return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [] };
         }
         if (mode && mode.toLowerCase() !== "full") return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown help mode '${mode}'. Use 'full'.`] };
+        const all = documents(registry2);
+        if (commandName.startsWith("?")) {
+          const query = commandName.slice(1).trim();
+          if (!query) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: ["Search query cannot be empty."] };
+          const matches = searchDocuments(query, all);
+          const limited = matches.slice(0, SEARCH_LIMIT);
+          print2(renderSearch(query, limited, matches.length));
+          return { command: "help", args: options, success: true, findings: limited, warnings: matches.length > limited.length ? [`Showing ${limited.length} of ${matches.length} matches.`] : [], errors: [] };
+        }
+        const namespace = namespaceDocuments(commandName, all);
+        if (namespace) {
+          print2(renderNamespace(commandName, namespace));
+          return { command: "help", args: options, success: true, findings: [...namespace.values()].flat(), warnings: [], errors: [] };
+        }
         const command2 = registry2.get(commandName);
         const helper = findHelpEntry(commandName === "rop" ? "rop.find" : commandName);
-        if (!command2 && !helper) return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown command '${commandName}'.`] };
+        if (!command2 && !helper) {
+          const suffix = commandName.toLowerCase();
+          const matches = all.filter((entry) => entry.name.toLowerCase().endsWith(`.${suffix}`));
+          if (matches.length === 1) {
+            const resolved = matches[0];
+            const resolvedHelper = findHelpEntry(resolved.name);
+            const resolvedCommand = registry2.get(resolved.name);
+            print2((mode == null ? void 0 : mode.toLowerCase()) === "full" ? renderFullDetail(resolved) : renderCompactDetail(resolved));
+            return resolvedHelper ? { command: "help", args: options, success: true, findings: helpRows(resolvedHelper), warnings: [], errors: [] } : { command: "help", args: options, success: true, findings: [{ name: resolvedCommand.name, description: resolvedCommand.description, usage: resolvedCommand.usage, examples: resolvedCommand.examples, schema: resolvedCommand.schema }], warnings: [], errors: [], schema: resolvedCommand.schema };
+          }
+          if (matches.length > 1) {
+            print2(renderCandidates(commandName, matches));
+            return { command: "help", args: options, success: false, findings: matches, warnings: [], errors: [`'${commandName}' matches multiple commands.`] };
+          }
+          return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown command '${commandName}'.`] };
+        }
         const document = helper ? toDocument(helper) : registryDocument(command2);
         print2((mode == null ? void 0 : mode.toLowerCase()) === "full" ? renderFullDetail(document) : renderCompactDetail(document));
         if (helper) return { command: "help", args: options, success: true, findings: helpRows(helper), warnings: [], errors: [] };
@@ -14580,10 +14675,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T14:02:10.232Z" : globalThis[key2];
+        value = true ? "2026-11-02T23:28:56.524Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "2f5d346325ae" : globalThis[key2];
+        value = true ? "dcb594a38caf" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
