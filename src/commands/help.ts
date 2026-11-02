@@ -4,6 +4,11 @@ import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES } from "../core/help_ca
 
 export function createHelpCommand(registry: CommandRegistry): Command {
   const firstExample = (examples: string[]): string => examples[0] ?? "";
+  // Keep listing cells within their column width so one long description
+  // cannot expand the column and push the Example column off-screen.
+  // The full description stays available via help("name").
+  const clampCell = (text: string, max: number): string =>
+    text.length > max ? `${text.slice(0, max - 3)}...` : text;
 
   return {
     name: "help",
@@ -27,7 +32,7 @@ export function createHelpCommand(registry: CommandRegistry): Command {
           ],
           commands.map((command) => ({
             name: command.name,
-            description: command.description,
+            description: clampCell(command.description, 40),
             example: firstExample(command.examples),
           })),
         );
@@ -46,7 +51,7 @@ export function createHelpCommand(registry: CommandRegistry): Command {
             ],
             entries.map((entry) => ({
               name: entry.name,
-              description: entry.description,
+              description: clampCell(entry.description, 56),
               example: firstExample(entry.examples),
             })),
           );

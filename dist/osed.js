@@ -10534,6 +10534,7 @@ var osed_bundle = (() => {
       var _a;
       return (_a = examples[0]) != null ? _a : "";
     };
+    const clampCell = (text, max) => text.length > max ? `${text.slice(0, max - 3)}...` : text;
     return {
       name: "help",
       description: "List commands or show detailed command help.",
@@ -10556,7 +10557,7 @@ var osed_bundle = (() => {
             ],
             commands.map((command3) => ({
               name: command3.name,
-              description: command3.description,
+              description: clampCell(command3.description, 40),
               example: firstExample(command3.examples)
             }))
           );
@@ -10575,7 +10576,7 @@ var osed_bundle = (() => {
               ],
               entries.map((entry) => ({
                 name: entry.name,
-                description: entry.description,
+                description: clampCell(entry.description, 56),
                 example: firstExample(entry.examples)
               }))
             );
@@ -14548,10 +14549,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-10-25T20:48:13.508Z" : globalThis[key2];
+        value = true ? "2026-11-02T12:34:10.077Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c9f26eae0671" : globalThis[key2];
+        value = true ? "670ff1f0f7c1" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
