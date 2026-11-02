@@ -1544,6 +1544,84 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/core/exploit_strategy_advisor.ts
+  function adviseExploitStrategy(evidence) {
+    var _a;
+    const recommendations = [];
+    const stale = [evidence.instructionPointerControlled, evidence.stackControlled, evidence.landingRegionExecutable, evidence.depEnabled, evidence.aslrEnabled].some((item) => item.targetId !== void 0 && evidence.currentTargetId !== void 0 && item.targetId !== evidence.currentTargetId);
+    if (stale) {
+      return [{
+        strategy: "Refresh exploitation evidence",
+        rationale: "Evidence belongs to a different target instance and must not guide this assessment.",
+        confidence: "unknown",
+        nextCommands: ["triage"]
+      }];
+    }
+    if (evidence.instructionPointerControlled.value !== true) {
+      recommendations.push({
+        strategy: evidence.instructionPointerControlled.value === false ? "Establish instruction-pointer control" : "Inspect crash control evidence",
+        rationale: evidence.instructionPointerControlled.value === false ? "Observed evidence does not demonstrate instruction-pointer control." : "Instruction-pointer control is unknown.",
+        confidence: evidence.instructionPointerControlled.value === false ? "observed" : "unknown",
+        nextCommands: ["triage", "findmsp", "landing"]
+      });
+      return recommendations;
+    }
+    if (evidence.landingRegionExecutable.value === true) {
+      recommendations.push({
+        strategy: "Investigate direct execution",
+        rationale: "The intended landing region is observed executable; control-flow reachability remains unverified.",
+        confidence: "inferred",
+        nextCommands: ["landing", "badchars", "find_ptr"]
+      });
+    } else if (evidence.landingRegionExecutable.value === false) {
+      if (((_a = evidence.executableAlternativeAvailable) == null ? void 0 : _a.value) === true) {
+        recommendations.push({
+          strategy: "Evaluate an executable landing alternative",
+          rationale: "The current landing region is observed non-executable, while an executable alternative was observed.",
+          confidence: "inferred",
+          nextCommands: ["landing", "code_caves", "find_ptr"]
+        });
+      } else {
+        recommendations.push({
+          strategy: "Investigate execution-permission alternatives",
+          rationale: "The current landing region is observed non-executable; direct execution there would violate its protection.",
+          confidence: "observed",
+          nextCommands: ["memory", "landing", "code_caves"]
+        });
+        recommendations.push({
+          strategy: "Evaluate protection-changing techniques",
+          rationale: "A DEP bypass may be relevant only if no viable executable landing region is established.",
+          confidence: "inferred",
+          nextCommands: ["rop.scan_live", "rop.capabilities"]
+        });
+      }
+    } else {
+      recommendations.push({
+        strategy: "Inspect landing memory protection",
+        rationale: "The execution permission of the intended landing region is unknown.",
+        confidence: "unknown",
+        nextCommands: ["memory", "landing"]
+      });
+    }
+    if (evidence.aslrEnabled.value === true) {
+      recommendations.push({
+        strategy: "Validate address stability",
+        rationale: "ASLR is observed enabled; usable target addresses require module-mapping evidence.",
+        confidence: "observed",
+        nextCommands: ["modules", "sc.modules"]
+      });
+    }
+    if (evidence.corpusStatus === "inactive" || evidence.corpusStatus === "absent") {
+      recommendations.push({
+        strategy: "Treat ROP capability as unestablished",
+        rationale: evidence.corpusStatus === "inactive" ? "The imported corpus is inactive until validation against the live target succeeds." : "No active gadget corpus has been observed.",
+        confidence: "observed",
+        nextCommands: evidence.corpusStatus === "inactive" ? ["rop.corpus.validate"] : ["rop.scan_live"]
+      });
+    }
+    return recommendations;
+  }
+
   // src/commands/triage.ts
   function safeGet2(value, key2) {
     if (!value || typeof value !== "object") {
@@ -1790,6 +1868,34 @@ var osed_bundle = (() => {
       return { byte, count, first };
     });
   }
+  function strategyEvidence(value, source) {
+    return { value, source, observedAt: Date.now() };
+  }
+  function renderStrategyAssessment(pointerSize, ipControlled, landingEvidence, stackExecutable, depEnforced) {
+    var _a;
+    const evidence = {
+      instructionPointerControlled: strategyEvidence(ipControlled, ipControlled ? "pattern match or crash state" : "crash state"),
+      stackControlled: strategyEvidence(landingEvidence.observations.some((item) => item.kind === "cyclic_pattern_match"), "landing analysis"),
+      landingRegionExecutable: strategyEvidence(stackExecutable, ((_a = landingEvidence.memory) == null ? void 0 : _a.source) === "vprot" ? "VirtualQuery" : "memory protection unavailable"),
+      depEnabled: strategyEvidence(depEnforced, depEnforced === null ? "unknown" : "stack protection observation"),
+      aslrEnabled: strategyEvidence(null, "not assessed by triage strategy snapshot"),
+      executableAlternativeAvailable: strategyEvidence(null, "not scanned by triage"),
+      corpusStatus: "unknown"
+    };
+    const recommendations = adviseExploitStrategy(evidence);
+    section("EXPLOIT STRATEGY");
+    print(`CONTROL: ${ipControlled ? pointerSize === 8 ? "RIP controlled" : "EIP controlled" : "not demonstrated"} [${evidence.instructionPointerControlled.source}]`);
+    if (landingEvidence.address !== void 0) print(`Landing: ${formatAddress(landingEvidence.address, pointerSize)}`);
+    print(`Access: ${stackExecutable === true ? "executable" : stackExecutable === false ? "non-executable" : "unknown"} [${evidence.landingRegionExecutable.source}]`);
+    const primary = recommendations[0];
+    print(`Assessment: ${primary.rationale}`);
+    const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
+    if (next.length > 0) {
+      print("NEXT:");
+      for (const command2 of next) print(`  dx @$osed().${command2}()`);
+    }
+    return { evidence, recommendations };
+  }
   function createTriageCommand() {
     return {
       name: "triage",
@@ -1803,7 +1909,7 @@ var osed_bundle = (() => {
         stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f, _g;
         const pointerSize = getPointerSize();
         const regs = readRegisters(pointerSize);
         const patternLength = options.patternLength;
@@ -1920,6 +2026,7 @@ var osed_bundle = (() => {
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
         if (seh.warning) warnings.push(seh.warning);
+        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_f = stackProt == null ? void 0 : stackProt.executable) != null ? _f : null, (_g = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _g : null);
         const findings = [
           {
             control: {
@@ -1941,7 +2048,8 @@ var osed_bundle = (() => {
             gadgets,
             modules,
             badchars: badcharStats,
-            exception: regs.exceptionCode
+            exception: regs.exceptionCode,
+            strategy
           }
         ];
         return {
@@ -14775,10 +14883,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T23:42:44.949Z" : globalThis[key2];
+        value = true ? "2026-11-02T23:45:53.512Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "2e86768fcd2c" : globalThis[key2];
+        value = true ? "7407c638478d" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

@@ -6,6 +6,7 @@ import { decodeOffsetNeedle, generateCyclicPattern, generateMsfPattern } from ".
 import { LandingEvidence, landing } from "../analysis/landing";
 import { readSehRecords, resolveTeb32Address } from "../analysis/seh";
 import { findModuleByAddress, listModulesWithMitigations, ModuleMitigation } from "./modules";
+import { adviseExploitStrategy, type Evidence, type ExploitEvidence, type StrategyRecommendation } from "../core/exploit_strategy_advisor";
 
 export type RegisterSnapshot = {
   ip?: bigint;
@@ -339,6 +340,41 @@ function quickBadcharScan(bytes: Uint8Array | undefined, badchars: number[]): Ar
   });
 }
 
+function strategyEvidence(value: boolean | null, source: string): Evidence<boolean> {
+  return { value, source, observedAt: Date.now() };
+}
+
+function renderStrategyAssessment(
+  pointerSize: 4 | 8,
+  ipControlled: boolean,
+  landingEvidence: LandingEvidence,
+  stackExecutable: boolean | null,
+  depEnforced: boolean | null,
+): { evidence: ExploitEvidence; recommendations: StrategyRecommendation[] } {
+  const evidence: ExploitEvidence = {
+    instructionPointerControlled: strategyEvidence(ipControlled, ipControlled ? "pattern match or crash state" : "crash state"),
+    stackControlled: strategyEvidence(landingEvidence.observations.some((item) => item.kind === "cyclic_pattern_match"), "landing analysis"),
+    landingRegionExecutable: strategyEvidence(stackExecutable, landingEvidence.memory?.source === "vprot" ? "VirtualQuery" : "memory protection unavailable"),
+    depEnabled: strategyEvidence(depEnforced, depEnforced === null ? "unknown" : "stack protection observation"),
+    aslrEnabled: strategyEvidence(null, "not assessed by triage strategy snapshot"),
+    executableAlternativeAvailable: strategyEvidence(null, "not scanned by triage"),
+    corpusStatus: "unknown",
+  };
+  const recommendations = adviseExploitStrategy(evidence);
+  out.section("EXPLOIT STRATEGY");
+  out.print(`CONTROL: ${ipControlled ? (pointerSize === 8 ? "RIP controlled" : "EIP controlled") : "not demonstrated"} [${evidence.instructionPointerControlled.source}]`);
+  if (landingEvidence.address !== undefined) out.print(`Landing: ${out.formatAddress(landingEvidence.address, pointerSize)}`);
+  out.print(`Access: ${stackExecutable === true ? "executable" : stackExecutable === false ? "non-executable" : "unknown"} [${evidence.landingRegionExecutable.source}]`);
+  const primary = recommendations[0];
+  out.print(`Assessment: ${primary.rationale}`);
+  const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
+  if (next.length > 0) {
+    out.print("NEXT:");
+    for (const command of next) out.print(`  dx @$osed().${command}()`);
+  }
+  return { evidence, recommendations };
+}
+
 export function createTriageCommand(): Command {
   return {
     name: "triage",
@@ -484,6 +520,8 @@ export function createTriageCommand(): Command {
       else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
       if (seh.warning) warnings.push(seh.warning);
 
+      const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, stackProt?.executable ?? null, stackProt?.depEnforced ?? null);
+
       const findings = [
         {
           control: {
@@ -506,6 +544,7 @@ export function createTriageCommand(): Command {
           modules,
           badchars: badcharStats,
           exception: regs.exceptionCode,
+          strategy,
         },
       ];
 
