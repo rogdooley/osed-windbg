@@ -4,11 +4,11 @@ import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../c
 import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
 
 const categoryForName = (name: string): string => {
-  if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
+  if (name.startsWith("rop") || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
   if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
   if (name.startsWith("sc.")) return "pe-api";
   if (name.startsWith("str.")) return "strings";
-  if (name.startsWith("fmt.")) return "format";
+  if (name.startsWith("fmt.") || name === "fmt_build" || name === "fmt_offset") return "format";
   if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_find"].includes(name)) return "payload";
   if (["triage", "landing", "stackmap", "findmsp"].includes(name)) return "crash";
   if (["modules", "memory", "code_caves", "find_mem_bytes", "find_ptr", "find_stack_bytes", "find_bytes"].includes(name)) return "target";
@@ -17,6 +17,9 @@ const categoryForName = (name: string): string => {
 };
 
 const LISTING_SUMMARIES: Record<string, string> = {
+  findmsp: "Find cyclic-pattern offsets across crash state",
+  landing: "Analyze controlled execution and landing options",
+  stackmap: "Classify stack slots and identify ROP space",
   "rop.scan": "Load gadgets into the semantic corpus",
   "rop.scan_live": "Discover live gadgets",
   "rop.query": "Search the gadget corpus",
@@ -38,6 +41,11 @@ const LISTING_SUMMARIES: Record<string, string> = {
   "rop.frame_va": "Build a VirtualAlloc stdcall frame",
   "rop.frame_vp": "Build a VirtualProtect stdcall frame",
   "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame",
+  "rop.chain_va": "Build a VirtualAlloc PUSHAD chain",
+  "rop.chain_vp": "Build a VirtualProtect PUSHAD chain",
+  "rop.chain_wpm": "Build a WriteProcessMemory PUSHAD chain",
+  "rop.export": "Export gadgets and chain as Python",
+  "sc.iat": "Inspect imported APIs and IAT entries",
 };
 
 function shortSummary(name: string, description: string, supplied?: string): string {
@@ -102,6 +110,9 @@ function namespaceDocuments(name: string, all: HelpDocument[]): Map<string, Help
   const matches = all.filter((entry) => {
     if (normalized === "rop") return (entry.category ?? categoryForName(entry.name)) === "rop";
     if (normalized === "seh") return (entry.category ?? categoryForName(entry.name)) === "seh";
+    if (["crash", "payload", "target", "shellcode", "pe-api", "strings", "format", "tools"].includes(normalized)) {
+      return (entry.category ?? categoryForName(entry.name)) === normalized;
+    }
     return entry.name.startsWith(`${normalized}.`);
   });
   if (matches.length === 0) return undefined;

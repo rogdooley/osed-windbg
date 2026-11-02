@@ -72,7 +72,7 @@ export function renderListing(entries: HelpDocument[]): string[] {
 export function renderOverview(groups: Map<string, HelpDocument[]>): string[] {
   const lines = heading("OSED Help");
   lines.push(...wrapText("Choose a task area, then use help(\"name\") for a quick command reference.", HELP_WIDTH));
-  lines.push("", "QUICK START", "  help(\"triage\")  help(\"pattern_create\")  help(\"rop.scan_live\")");
+  lines.push("", "QUICK START", "  dx @$osed().triage()", "", "DISCOVER", "  help(\"crash\")     Crash analysis commands", "  help(\"rop\")       ROP discovery and construction", "  help(\"?pivot\")    Search commands", "  help(\"all\")       Complete inventory");
   for (const [category, entries] of orderedGroups(groups)) {
     lines.push("", category.toUpperCase());
     lines.push(...renderListing(entries));

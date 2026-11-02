@@ -10612,7 +10612,7 @@ var osed_bundle = (() => {
   function renderOverview(groups) {
     const lines = heading("OSED Help");
     lines.push(...wrapText('Choose a task area, then use help("name") for a quick command reference.', HELP_WIDTH));
-    lines.push("", "QUICK START", '  help("triage")  help("pattern_create")  help("rop.scan_live")');
+    lines.push("", "QUICK START", "  dx @$osed().triage()", "", "DISCOVER", '  help("crash")     Crash analysis commands', '  help("rop")       ROP discovery and construction', '  help("?pivot")    Search commands', '  help("all")       Complete inventory');
     for (const [category, entries] of orderedGroups(groups)) {
       lines.push("", category.toUpperCase());
       lines.push(...renderListing(entries));
@@ -10680,11 +10680,11 @@ var osed_bundle = (() => {
 
   // src/commands/help.ts
   var categoryForName = (name) => {
-    if (name.startsWith("rop") || name === "retn" || name === "add_esp") return "rop";
+    if (name.startsWith("rop") || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
     if (name === "seh" || name === "seh_ppr" || name.startsWith("seh.")) return "seh";
     if (name.startsWith("sc.")) return "pe-api";
     if (name.startsWith("str.")) return "strings";
-    if (name.startsWith("fmt.")) return "format";
+    if (name.startsWith("fmt.") || name === "fmt_build" || name === "fmt_offset") return "format";
     if (name.startsWith("pattern") || ["badchars", "badchar_array", "badchar_find"].includes(name)) return "payload";
     if (["triage", "landing", "stackmap", "findmsp"].includes(name)) return "crash";
     if (["modules", "memory", "code_caves", "find_mem_bytes", "find_ptr", "find_stack_bytes", "find_bytes"].includes(name)) return "target";
@@ -10692,6 +10692,9 @@ var osed_bundle = (() => {
     return "tools";
   };
   var LISTING_SUMMARIES = {
+    findmsp: "Find cyclic-pattern offsets across crash state",
+    landing: "Analyze controlled execution and landing options",
+    stackmap: "Classify stack slots and identify ROP space",
     "rop.scan": "Load gadgets into the semantic corpus",
     "rop.scan_live": "Discover live gadgets",
     "rop.query": "Search the gadget corpus",
@@ -10712,7 +10715,12 @@ var osed_bundle = (() => {
     "rop.corpus.validate": "Validate corpus against live memory",
     "rop.frame_va": "Build a VirtualAlloc stdcall frame",
     "rop.frame_vp": "Build a VirtualProtect stdcall frame",
-    "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame"
+    "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame",
+    "rop.chain_va": "Build a VirtualAlloc PUSHAD chain",
+    "rop.chain_vp": "Build a VirtualProtect PUSHAD chain",
+    "rop.chain_wpm": "Build a WriteProcessMemory PUSHAD chain",
+    "rop.export": "Export gadgets and chain as Python",
+    "sc.iat": "Inspect imported APIs and IAT entries"
   };
   function shortSummary(name, description, supplied) {
     var _a, _b;
@@ -10792,9 +10800,12 @@ var osed_bundle = (() => {
     var _a;
     const normalized = name.toLowerCase();
     const matches = all.filter((entry) => {
-      var _a2, _b;
+      var _a2, _b, _c;
       if (normalized === "rop") return ((_a2 = entry.category) != null ? _a2 : categoryForName(entry.name)) === "rop";
       if (normalized === "seh") return ((_b = entry.category) != null ? _b : categoryForName(entry.name)) === "seh";
+      if (["crash", "payload", "target", "shellcode", "pe-api", "strings", "format", "tools"].includes(normalized)) {
+        return ((_c = entry.category) != null ? _c : categoryForName(entry.name)) === normalized;
+      }
       return entry.name.startsWith(`${normalized}.`);
     });
     if (matches.length === 0) return void 0;
@@ -14764,10 +14775,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T23:38:46.734Z" : globalThis[key2];
+        value = true ? "2026-11-02T23:42:44.949Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "bb63700dd8a9" : globalThis[key2];
+        value = true ? "2e86768fcd2c" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
