@@ -45,6 +45,14 @@ export function normalizeHelpExamples(examples: HelpExample[]): NormalizedHelpEx
 
 export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
+    name: "leak.classify",
+    summary: "Classify a pointer value without dereferencing it.",
+    description: "Classifies a supplied pointer value against loaded modules and memory regions. It does not inspect a pointer stored at an address and does not establish an information disclosure.",
+    usage: "dx @$osed().leak.classify(value)",
+    examples: ["dx @$osed().leak.classify(0x76A31240)"],
+    limitations: ["Classification is debugger-observed evidence, not proof that an application exposes the value."],
+  },
+  {
     name: "pattern.create",
     description: "Generates cyclic pattern text.",
     usage: "dx @$osed().pattern.create(length, type?)",

@@ -10214,6 +10214,14 @@ var osed_bundle = (() => {
   }
   var NAMESPACE_HELP_ENTRIES = [
     {
+      name: "leak.classify",
+      summary: "Classify a pointer value without dereferencing it.",
+      description: "Classifies a supplied pointer value against loaded modules and memory regions. It does not inspect a pointer stored at an address and does not establish an information disclosure.",
+      usage: "dx @$osed().leak.classify(value)",
+      examples: ["dx @$osed().leak.classify(0x76A31240)"],
+      limitations: ["Classification is debugger-observed evidence, not proof that an application exposes the value."]
+    },
+    {
       name: "pattern.create",
       description: "Generates cyclic pattern text.",
       usage: "dx @$osed().pattern.create(length, type?)",
@@ -14901,10 +14909,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T01:41:23.561Z" : globalThis[key2];
+        value = true ? "2026-11-03T02:14:39.409Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "0080a4b9e71e" : globalThis[key2];
+        value = true ? "3ead2a8f47b4" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15944,6 +15952,52 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/core/leak_evidence.ts
+  function classifyPointer(value, pointerSize, findModule, inspectMemory) {
+    if (value === BigInt(0)) return { value, pointerSize, provenance: "debugger_observed", kind: "null" };
+    const module = findModule(value);
+    const memory = inspectMemory(value);
+    if (module) return { value, pointerSize, provenance: "debugger_observed", kind: "module_pointer", module: { name: module.name, rva: value - module.base, aslr: module.aslr }, memory };
+    return { value, pointerSize, provenance: "debugger_observed", kind: memory.source === "unavailable" ? "unmapped" : "memory_pointer", memory };
+  }
+
+  // src/commands/leak.ts
+  function createLeakClassifyCommand() {
+    return {
+      name: "leak_classify",
+      description: "Classify a pointer value without dereferencing it.",
+      usage: "dx @$osed().leak_classify(value)",
+      examples: ["dx @$osed().leak_classify(0x76A31240)"],
+      schema: { value: { type: ["number", "string"], required: true } },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        const value = normalizeAddress(options.value);
+        const result3 = classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion);
+        section("POINTER CLASSIFICATION");
+        print("VALUE");
+        print("  Address: " + formatAddress(value, pointerSize));
+        print("  Architecture: x" + String(pointerSize * 8));
+        if (result3.module || result3.memory) print("TARGET");
+        if (result3.module) {
+          print("  Module: " + ((_a = result3.module.name.split(/[\\\\/]/).pop()) != null ? _a : result3.module.name));
+          print("  Module RVA: 0x" + result3.module.rva.toString(16).toUpperCase().padStart(pointerSize * 2, "0"));
+          print("  ASLR: " + result3.module.aslr);
+        }
+        if (result3.memory) {
+          print("  Protection: " + (result3.memory.executable === true ? "executable" : result3.memory.executable === false ? "non-executable" : "unknown"));
+          print("  Region: " + result3.memory.regionType);
+        }
+        print("PROVENANCE");
+        print("  " + result3.provenance);
+        print("ASSESSMENT");
+        print(result3.kind === "module_pointer" ? "  Valid pointer into a loaded module." : result3.kind === "null" ? "  Null pointer." : result3.kind === "memory_pointer" ? "  Pointer into a mapped memory region." : "  No mapped target established.");
+        print("  No information disclosure established.");
+        return { command: "leak_classify", args: options, success: true, findings: [result3], warnings: [], errors: [] };
+      }
+    };
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
@@ -16202,6 +16256,7 @@ var osed_bundle = (() => {
       createFindStackBytesCommand(),
       createLandingCommand(),
       createStackmapCommand(),
+      createLeakClassifyCommand(),
       createMathCommand(),
       createVersionCommand(),
       ...createStringCommands(),
@@ -18340,6 +18395,12 @@ var osed_bundle = (() => {
       verify: executeRopVerify,
       prove: executeRopProve
     };
+    api.leak = {
+      classify: (...args) => {
+        if (args.length === 1 && args[0] === "help") return helperHelp("leak.classify");
+        return invoke("leak_classify", args);
+      }
+    };
     api.rop_find = (...args) => invoke("rop", args);
     api.exploit = {
       state: executeExploitState,
@@ -18646,6 +18707,8 @@ var osed_bundle = (() => {
       case "memory":
       case "landing":
         return { address: args[0] };
+      case "leak_classify":
+        return { value: args[0] };
       default:
         return { value: args[0] };
     }

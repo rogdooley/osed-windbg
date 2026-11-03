@@ -66,6 +66,7 @@ import { createStringCommands } from "./commands/strings";
 import { createFindStackBytesCommand } from "./commands/find_stack_bytes";
 import { createFindMemBytesCommand } from "./commands/find_mem_bytes";
 import { createStackmapCommand } from "./commands/stackmap";
+import { createLeakClassifyCommand } from "./commands/leak";
 import type { SerializedLandingEvidence } from "./analysis/landing";
 import { ProofController, ProofSessionStore, WinDbgProofAdapter, type ProofPlanInput } from "./rop/proof";
 
@@ -384,6 +385,7 @@ function registerAll(): void {
     createFindStackBytesCommand(),
     createLandingCommand(),
     createStackmapCommand(),
+    createLeakClassifyCommand(),
     createMathCommand(),
     createVersionCommand(),
     ...createStringCommands(),
@@ -2783,6 +2785,12 @@ function bindApi(): OsedApi {
     verify: executeRopVerify,
     prove: executeRopProve,
   };
+  api.leak = {
+    classify: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("leak.classify");
+      return invoke("leak_classify", args);
+    },
+  };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
   api.exploit = {
@@ -3117,6 +3125,8 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "memory":
     case "landing":
       return { address: args[0] };
+    case "leak_classify":
+      return { value: args[0] };
     default:
       return { value: args[0] };
   }
