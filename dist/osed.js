@@ -14914,10 +14914,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T02:19:57.659Z" : globalThis[key2];
+        value = true ? "2026-11-03T02:23:06.570Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7305ad155477" : globalThis[key2];
+        value = true ? "e3d8d410b572" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16200,9 +16200,24 @@ var osed_bundle = (() => {
     const raw = (_e = (_d = (_c = (_b = (_a = hostAny.namespace) == null ? void 0 : _a.Debugger) == null ? void 0 : _b.Utility) == null ? void 0 : _c.FileSystem) == null ? void 0 : _d.CreateFile) == null ? void 0 : _e.call(_d, path, "CreateAlways");
     if (!raw) throw new Error("WinDbg host filesystem is unavailable.");
     const file = raw;
-    if (typeof file.WriteLine !== "function") throw new Error("WinDbg host file does not support WriteLine.");
+    if (typeof file.WriteBytes !== "function") throw new Error("WinDbg host file does not support WriteBytes.");
     try {
-      for (const line of content.replace(/\r\n/g, "\n").split("\n")) file.WriteLine(line);
+      const bytes = [];
+      for (let index = 0; index < content.length; index += 1) {
+        let code = content.charCodeAt(index);
+        if (code >= 55296 && code <= 56319 && index + 1 < content.length) {
+          const low = content.charCodeAt(index + 1);
+          if (low >= 56320 && low <= 57343) {
+            code = 65536 + (code - 55296 << 10) + (low - 56320);
+            index += 1;
+          }
+        }
+        if (code <= 127) bytes.push(code);
+        else if (code <= 2047) bytes.push(192 | code >> 6, 128 | code & 63);
+        else if (code <= 65535) bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
+        else bytes.push(240 | code >> 18, 128 | code >> 12 & 63, 128 | code >> 6 & 63, 128 | code & 63);
+      }
+      file.WriteBytes(bytes);
     } finally {
       (_f = file.Close) == null ? void 0 : _f.call(file);
     }

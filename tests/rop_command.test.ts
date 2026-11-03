@@ -313,6 +313,45 @@ describe("rop_suggest command", () => {
     expect(api.last_result().success).toBe(true);
   });
 
+  test("corpus export writes UTF-8 bytes through the WinDbg file object", () => {
+    const writes: number[] = [];
+    let closed = false;
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: () => undefined },
+      currentProcess: { Is64Bit: false, Modules: [] },
+      namespace: {
+        Debugger: {
+          Utility: {
+            FileSystem: {
+              CreateFile: () => ({
+                WriteBytes: (bytes: Iterable<number>) => writes.push(...bytes),
+                Close: () => { closed = true; },
+              }),
+            },
+          },
+        },
+      },
+    };
+
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        rop: {
+          scan: (text: string) => unknown;
+          corpus: { export: (path: string) => unknown };
+        };
+        last_result: () => { success: boolean };
+      };
+    }).osed;
+
+    api.rop.scan("0x00401000: pop eax ; ret ;");
+    api.rop.corpus.export("C:\\temp\\corpus.json");
+
+    expect(api.last_result().success).toBe(true);
+    expect(closed).toBe(true);
+    expect(new TextDecoder().decode(new Uint8Array(writes))).toContain("\"version\"");
+  });
+
   test("find_stack_bytes finds live stack hits without searching heap memory", () => {
     const stackPointer = BigInt("0x12ff00");
     const stackBase = BigInt("0x130000");

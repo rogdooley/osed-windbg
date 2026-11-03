@@ -316,10 +316,27 @@ function writeProofText(path: string, content: string): void {
   };
   const raw = hostAny.namespace?.Debugger?.Utility?.FileSystem?.CreateFile?.(path, "CreateAlways");
   if (!raw) throw new Error("WinDbg host filesystem is unavailable.");
-  const file = raw as { WriteLine?: (line: string) => void; Close?: () => void };
-  if (typeof file.WriteLine !== "function") throw new Error("WinDbg host file does not support WriteLine.");
+  const file = raw as { WriteBytes?: (bytes: Iterable<number>) => void; Close?: () => void };
+  if (typeof file.WriteBytes !== "function") throw new Error("WinDbg host file does not support WriteBytes.");
   try {
-    for (const line of content.replace(/\r\n/g, "\n").split("\n")) file.WriteLine(line);
+    // WinDbg File objects are byte streams.  Do not assume a TextWriter is
+    // available on every JS provider version.
+    const bytes: number[] = [];
+    for (let index = 0; index < content.length; index += 1) {
+      let code = content.charCodeAt(index);
+      if (code >= 0xd800 && code <= 0xdbff && index + 1 < content.length) {
+        const low = content.charCodeAt(index + 1);
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+          index += 1;
+        }
+      }
+      if (code <= 0x7f) bytes.push(code);
+      else if (code <= 0x7ff) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+      else if (code <= 0xffff) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+      else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+    file.WriteBytes(bytes);
   } finally {
     file.Close?.();
   }

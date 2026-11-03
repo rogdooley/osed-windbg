@@ -14,6 +14,7 @@ declare const host: {
         FileSystem?: {
           OpenFile?(path: string): unknown;
           CreateFile?(path: string, disposition: string): unknown;
+          CreateTextWriter?(fileOrPath: unknown, encoding?: "Ascii" | "Utf8" | "Utf16"): unknown;
         };
       };
     };
