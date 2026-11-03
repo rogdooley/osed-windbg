@@ -419,6 +419,46 @@ describe("rop_suggest command", () => {
     expect(logs.at(-1)).toBe("\n");
   });
 
+  test("query and pivot tables keep the sequence prominent and expose metadata only in verbose mode", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+      currentProcess: { Is64Bit: false, Modules: [] },
+    };
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        rop: {
+          scan: (text: string) => unknown;
+          query: (field: string, value: string, executableOnly?: boolean, verbose?: boolean) => unknown;
+          pivots: () => unknown;
+        };
+      };
+    }).osed;
+
+    const longSequence = "add ebx, eax ; mov [esi], eax ; pop ebp ; ret";
+    api.rop.scan(`0x00401000: ${longSequence} ;`);
+    api.rop.query("capability", "MEMORY_WRITE");
+    const compact = logs.join("");
+    expect(compact).toMatch(/Address\s+Sequence\s+Capability\s+Stack\s+Score/);
+    expect(compact).toContain(longSequence);
+    expect(compact).toContain("+8");
+    expect(compact).not.toMatch(/\bMemoryWrites\b/);
+
+    logs.length = 0;
+    api.rop.query("capability", "MEMORY_WRITE", false, true);
+    const verbose = logs.join("");
+    expect(verbose).toMatch(/Score\s+Module\s+Terminator\s+Reads\s+Writes\s+MemoryReads\s+MemoryWrites/);
+    expect(verbose).toContain(longSequence);
+
+    logs.length = 0;
+    api.rop.scan("0x00402000: leave ; ret ;");
+    api.rop.pivots();
+    const pivots = logs.join("");
+    expect(pivots).toMatch(/Address\s+Sequence\s+Type\s+Stack\s+Score/);
+    expect(pivots).toMatch(/leave ; ret\s+\S+\s+DYN/);
+  });
+
   test("find_stack_bytes finds live stack hits without searching heap memory", () => {
     const stackPointer = BigInt("0x12ff00");
     const stackBase = BigInt("0x130000");

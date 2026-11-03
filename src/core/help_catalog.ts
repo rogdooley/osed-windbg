@@ -143,8 +143,9 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.query",
     description: "Filters the loaded semantic ROP corpus.",
-    usage: "dx @$osed().rop.query(field, value, executableOnly?)",
-    examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("writes", "eax")'],
+    usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
+    examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query({capability:"MEMORY_WRITE", verbose:true})'],
+    details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities.",
   },
   {
     name: "rop.capabilities",
@@ -307,12 +308,14 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.pivots",
     description: "Finds, classifies, and ranks stack pivot gadgets from the semantic corpus. Optionally filters by source register or minimum ESP adjustment.",
-    usage: "dx @$osed().rop.pivots(register?, minDelta?)",
+    usage: "dx @$osed().rop.pivots(register?, minDelta?, verbose?)",
     examples: [
       "dx @$osed().rop.pivots()",
       'dx @$osed().rop.pivots("eax")',
       "dx @$osed().rop.pivots(undefined, 0x100)",
+      "dx @$osed().rop.pivots({register:\"eax\", verbose:true})",
     ],
+    details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata.",
   },
   {
     name: "rop.chain",

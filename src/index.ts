@@ -497,7 +497,22 @@ function bindApi(): OsedApi {
     return parts.length > 0 ? `${field.confidence.toLowerCase()}(${parts.join("; ")})` : "none";
   };
 
-  const queryRows = (query: RopQuery): Array<Record<string, string>> => {
+  const gadgetStackDisplay = (gadget: CapabilityIndex["gadgets"][number]): string => {
+    if (gadget.categories.includes("STACK_PIVOT")) return "DYN";
+    const field = gadget.semanticSummary.summary.stackDelta;
+    if (field.values.unknown || field.values.conservative.size > 0 || field.values.exact.size !== 1) return "?";
+    const value = [...field.values.exact][0];
+    return value > 0 ? `+${value}` : String(value);
+  };
+
+  const primaryCapability = (gadget: CapabilityIndex["gadgets"][number]): string => {
+    if (gadget.categories.includes("STACK_PIVOT")) return "STACK_PIVOT";
+    return gadget.capabilities.find((capability) => capability.kind === "MEMORY_WRITE")?.kind
+      ?? gadget.capabilities[0]?.kind
+      ?? "?";
+  };
+
+  const queryRows = (query: RopQuery, verbose = false): Array<Record<string, string>> => {
     if (!currentRopCorpus) {
       return [{ Error: NO_ROP_CORPUS_MESSAGE }];
     }
@@ -506,10 +521,17 @@ function bindApi(): OsedApi {
     const pointerSize = getPointerSize();
     return gadgets.map((gadget) => {
       const location = gadget.locations[0];
-      return {
+      const compact = {
         Address: location?.virtualAddress !== undefined ? formatAddress(BigInt(location.virtualAddress), pointerSize) : "n/a",
-        Module: location?.module ?? "n/a",
+        Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+        Capability: primaryCapability(gadget),
+        Stack: gadgetStackDisplay(gadget),
         Score: gadget.score.toString(),
+      };
+      if (!verbose) return compact;
+      return {
+        ...compact,
+        Module: location?.module ?? "n/a",
         Terminator: [...gadget.semanticSummary.summary.flowEffects.values.exact].join(", ") || "none",
         Reads: formatSemanticField(gadget.semanticSummary.summary.reads),
         Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
@@ -517,7 +539,6 @@ function bindApi(): OsedApi {
         MemoryWrites: formatSemanticField(gadget.semanticSummary.summary.memoryWrites),
         StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
         Capabilities: gadget.capabilities.map((capability) => capability.kind).join(", "),
-        Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
       };
     });
   };
@@ -908,6 +929,7 @@ function bindApi(): OsedApi {
       return helperHelp("rop.query");
     }
     let query: RopQuery | undefined;
+    let verbose = false;
     let fieldError: string | undefined;
     const listFields: Array<keyof RopQuery> = [
       "reads",
@@ -939,7 +961,9 @@ function bindApi(): OsedApi {
       memoryread: "memoryRead",
     };
     if (isPlainObject(args[0])) {
-      query = args[0] as RopQuery;
+      const { verbose: requestedVerbose, ...queryFields } = args[0];
+      verbose = requestedVerbose === true;
+      query = queryFields as RopQuery;
     } else if (typeof args[0] === "string" && args[1] !== undefined) {
       const raw = args[0].trim();
       const field = (fieldAliases[raw.toLowerCase()] ?? raw) as keyof RopQuery;
@@ -953,6 +977,7 @@ function bindApi(): OsedApi {
       if (query && args[2] !== undefined) {
         query.executableOnly = Boolean(args[2]);
       }
+      verbose = args[3] === true;
     }
     if (!query) {
       const message = fieldError ?? "rop.query requires a supported field and value. Supported: " + [...listFields, ...scalarFields].join(", ") + ".";
@@ -985,11 +1010,11 @@ function bindApi(): OsedApi {
     if (queryStale) return queryStale;
 
     const gadgets = currentRopCorpus.query(query);
-    const rows = queryRows(query);
+    const rows = queryRows(query, verbose);
     renderRows("ROP Query", rows);
     setResult({
       command: "rop.query",
-      args: query as Record<string, unknown>,
+      args: { ...query as Record<string, unknown>, verbose },
       success: true,
       findings: gadgets,
       warnings: [],
@@ -1421,11 +1446,12 @@ function bindApi(): OsedApi {
     }
     const pivotsStale = staleCorpusGuard("ROP Pivots", "rop.pivots");
     if (pivotsStale) return pivotsStale;
-    const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1] };
+    const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1], verbose: args[2] === true };
     const filterRegister = typeof options.register === "string"
       ? options.register.toLowerCase().trim()
       : undefined;
     const minDelta = typeof options.minDelta === "number" ? options.minDelta : undefined;
+    const verbose = options.verbose === true;
 
     const candidates = currentRopCorpus.gadgets
       .filter((g) =>
@@ -1451,15 +1477,19 @@ function bindApi(): OsedApi {
       }
 
       const addrHex = `0x${addr.toString(16).toUpperCase().padStart(8, "0")}`;
-      rows.push({
+      const compact = {
         Address: addrHex,
+        Sequence: seq,
         Type: source,
+        Stack: gadgetStackDisplay(gadget),
+        Score: gadget.score.toString(),
+      };
+      rows.push(verbose ? {
+        ...compact,
         Source: sourceRegister ?? (adjustment !== undefined ? `ESP ${adjustment >= 0 ? "+" : ""}${adjustment}` : "indirect"),
         Clobbers: clobbers.join(", "),
         Module: module,
-        Sequence: seq,
-        Score: gadget.score.toString(),
-      });
+      } : compact);
     }
 
     const title = `ROP Pivots (${rows.length} found)`;

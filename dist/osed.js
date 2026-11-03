@@ -21,6 +21,18 @@ var osed_bundle = (() => {
     return a;
   };
   var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+  var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+      if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+        target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(source)) {
+        if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+          target[prop] = source[prop];
+      }
+    return target;
+  };
   var __export = (target, all) => {
     for (var name in all)
       __defProp(target, name, { get: all[name], enumerable: true });
@@ -10317,8 +10329,9 @@ var osed_bundle = (() => {
     {
       name: "rop.query",
       description: "Filters the loaded semantic ROP corpus.",
-      usage: "dx @$osed().rop.query(field, value, executableOnly?)",
-      examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("writes", "eax")']
+      usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
+      examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query({capability:"MEMORY_WRITE", verbose:true})'],
+      details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities."
     },
     {
       name: "rop.capabilities",
@@ -10481,12 +10494,14 @@ var osed_bundle = (() => {
     {
       name: "rop.pivots",
       description: "Finds, classifies, and ranks stack pivot gadgets from the semantic corpus. Optionally filters by source register or minimum ESP adjustment.",
-      usage: "dx @$osed().rop.pivots(register?, minDelta?)",
+      usage: "dx @$osed().rop.pivots(register?, minDelta?, verbose?)",
       examples: [
         "dx @$osed().rop.pivots()",
         'dx @$osed().rop.pivots("eax")',
-        "dx @$osed().rop.pivots(undefined, 0x100)"
-      ]
+        "dx @$osed().rop.pivots(undefined, 0x100)",
+        'dx @$osed().rop.pivots({register:"eax", verbose:true})'
+      ],
+      details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata."
     },
     {
       name: "rop.chain",
@@ -14927,10 +14942,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T03:48:04.225Z" : globalThis[key2];
+        value = true ? "2026-11-03T04:57:21.655Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "9954f815dd6a" : globalThis[key2];
+        value = true ? "ac006baa69fc" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16497,7 +16512,19 @@ var osed_bundle = (() => {
       }
       return parts.length > 0 ? `${field.confidence.toLowerCase()}(${parts.join("; ")})` : "none";
     };
-    const queryRows = (query) => {
+    const gadgetStackDisplay = (gadget) => {
+      if (gadget.categories.includes("STACK_PIVOT")) return "DYN";
+      const field = gadget.semanticSummary.summary.stackDelta;
+      if (field.values.unknown || field.values.conservative.size > 0 || field.values.exact.size !== 1) return "?";
+      const value = [...field.values.exact][0];
+      return value > 0 ? `+${value}` : String(value);
+    };
+    const primaryCapability = (gadget) => {
+      var _a, _b, _c, _d;
+      if (gadget.categories.includes("STACK_PIVOT")) return "STACK_PIVOT";
+      return (_d = (_c = (_a = gadget.capabilities.find((capability2) => capability2.kind === "MEMORY_WRITE")) == null ? void 0 : _a.kind) != null ? _c : (_b = gadget.capabilities[0]) == null ? void 0 : _b.kind) != null ? _d : "?";
+    };
+    const queryRows = (query, verbose = false) => {
       if (!currentRopCorpus) {
         return [{ Error: NO_ROP_CORPUS_MESSAGE }];
       }
@@ -16506,19 +16533,24 @@ var osed_bundle = (() => {
       return gadgets.map((gadget) => {
         var _a;
         const location = gadget.locations[0];
-        return {
+        const compact = {
           Address: (location == null ? void 0 : location.virtualAddress) !== void 0 ? formatAddress(BigInt(location.virtualAddress), pointerSize) : "n/a",
+          Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+          Capability: primaryCapability(gadget),
+          Stack: gadgetStackDisplay(gadget),
+          Score: gadget.score.toString()
+        };
+        if (!verbose) return compact;
+        return __spreadProps(__spreadValues({}, compact), {
           Module: (_a = location == null ? void 0 : location.module) != null ? _a : "n/a",
-          Score: gadget.score.toString(),
           Terminator: [...gadget.semanticSummary.summary.flowEffects.values.exact].join(", ") || "none",
           Reads: formatSemanticField(gadget.semanticSummary.summary.reads),
           Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
           MemoryReads: formatSemanticField(gadget.semanticSummary.summary.memoryReads),
           MemoryWrites: formatSemanticField(gadget.semanticSummary.summary.memoryWrites),
           StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
-          Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", "),
-          Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; ")
-        };
+          Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", ")
+        });
       });
     };
     const capabilityRows = () => {
@@ -16863,11 +16895,12 @@ var osed_bundle = (() => {
       return toDxResult("ROP Corpus Validate", rows);
     };
     const executeRopQuery = (...args) => {
-      var _a;
+      var _b;
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.query");
       }
       let query;
+      let verbose = false;
       let fieldError;
       const listFields = [
         "reads",
@@ -16898,10 +16931,12 @@ var osed_bundle = (() => {
         memoryread: "memoryRead"
       };
       if (isPlainObject(args[0])) {
-        query = args[0];
+        const _a = args[0], { verbose: requestedVerbose } = _a, queryFields = __objRest(_a, ["verbose"]);
+        verbose = requestedVerbose === true;
+        query = queryFields;
       } else if (typeof args[0] === "string" && args[1] !== void 0) {
         const raw = args[0].trim();
-        const field = (_a = fieldAliases[raw.toLowerCase()]) != null ? _a : raw;
+        const field = (_b = fieldAliases[raw.toLowerCase()]) != null ? _b : raw;
         if (listFields.includes(field)) {
           query = { [field]: [args[1]] };
         } else if (scalarFields.includes(field)) {
@@ -16912,6 +16947,7 @@ var osed_bundle = (() => {
         if (query && args[2] !== void 0) {
           query.executableOnly = Boolean(args[2]);
         }
+        verbose = args[3] === true;
       }
       if (!query) {
         const message = fieldError != null ? fieldError : "rop.query requires a supported field and value. Supported: " + [...listFields, ...scalarFields].join(", ") + ".";
@@ -16943,11 +16979,11 @@ var osed_bundle = (() => {
       const queryStale = staleCorpusGuard("ROP Query", "rop.query");
       if (queryStale) return queryStale;
       const gadgets = currentRopCorpus.query(query);
-      const rows = queryRows(query);
+      const rows = queryRows(query, verbose);
       renderRows("ROP Query", rows);
       setResult({
         command: "rop.query",
-        args: query,
+        args: __spreadProps(__spreadValues({}, query), { verbose }),
         success: true,
         findings: gadgets,
         warnings: [],
@@ -17345,9 +17381,10 @@ var osed_bundle = (() => {
       }
       const pivotsStale = staleCorpusGuard("ROP Pivots", "rop.pivots");
       if (pivotsStale) return pivotsStale;
-      const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1] };
+      const options = isPlainObject(args[0]) ? args[0] : { register: args[0], minDelta: args[1], verbose: args[2] === true };
       const filterRegister = typeof options.register === "string" ? options.register.toLowerCase().trim() : void 0;
       const minDelta = typeof options.minDelta === "number" ? options.minDelta : void 0;
+      const verbose = options.verbose === true;
       const candidates2 = currentRopCorpus.gadgets.filter((g) => g.capabilities.some((c) => c.kind === "STACK_PIVOT" || c.kind === "STACK_ADJUST") && firstKnownAddress(g) !== void 0).sort((a, b) => {
         const aLen = a.instructions.length;
         const bLen = b.instructions.length;
@@ -17365,15 +17402,18 @@ var osed_bundle = (() => {
           if (adjustment === void 0 || Math.abs(adjustment) < minDelta) continue;
         }
         const addrHex = `0x${addr.toString(16).toUpperCase().padStart(8, "0")}`;
-        rows.push({
+        const compact = {
           Address: addrHex,
+          Sequence: seq,
           Type: source,
+          Stack: gadgetStackDisplay(gadget),
+          Score: gadget.score.toString()
+        };
+        rows.push(verbose ? __spreadProps(__spreadValues({}, compact), {
           Source: sourceRegister != null ? sourceRegister : adjustment !== void 0 ? `ESP ${adjustment >= 0 ? "+" : ""}${adjustment}` : "indirect",
           Clobbers: clobbers.join(", "),
-          Module: module,
-          Sequence: seq,
-          Score: gadget.score.toString()
-        });
+          Module: module
+        }) : compact);
       }
       const title = `ROP Pivots (${rows.length} found)`;
       section(title);
