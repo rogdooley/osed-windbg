@@ -1772,6 +1772,10 @@ var osed_bundle = (() => {
     if (module.safeseh === "disabled") score += 30;
     return score;
   }
+  function moduleLabel(name) {
+    var _a;
+    return (_a = name.split(/[\\/]/).filter(Boolean).pop()) != null ? _a : name;
+  }
   var TRIAGE_ASLR_TAIL_LIMIT = 6;
   function selectTriageModules(scored) {
     const ranked = [...scored].sort((a, b) => b.score - a.score);
@@ -1787,7 +1791,7 @@ var osed_bundle = (() => {
         return formatAddress(address, getPointerSize());
       }
       const delta = address - mod.base;
-      return `${mod.name}+0x${delta.toString(16).toUpperCase()}`;
+      return `${moduleLabel(mod.name)}+0x${delta.toString(16).toUpperCase()}`;
     };
     const jmpHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 228])).hits;
     const callHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 16384 }, Uint8Array.from([255, 212])).hits;
@@ -1820,7 +1824,13 @@ var osed_bundle = (() => {
         break;
       }
     }
-    const uniq = (values) => [...new Set(values.map((v) => v.toString()))].map((v) => BigInt(v));
+    const uniq = (values) => [...new Set(values.map((v) => v.toString()))].map((v) => BigInt(v)).sort((left, right) => {
+      const rank = (address) => {
+        var _a;
+        return ((_a = findModuleByAddress(address)) == null ? void 0 : _a.aslr) === "disabled" ? 0 : 1;
+      };
+      return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
+    });
     return {
       jmp: uniq(jmpHits).slice(0, 5).map(fmt),
       call: uniq(callHits).slice(0, 5).map(fmt),
@@ -1995,26 +2005,24 @@ var osed_bundle = (() => {
         table(
           [
             { key: "module", header: "Module", width: 20 },
-            { key: "score", header: "Score", width: 6 },
-            { key: "aslr", header: "ASLR", width: 8 },
-            { key: "nxcompat", header: "NX_COMPAT", width: 10 },
-            { key: "safeseh", header: "SafeSEH", width: 8 },
-            { key: "system", header: "System", width: 8 }
+            { key: "score", header: "Score", width: 5 },
+            { key: "aslr", header: "ASLR", width: 4 },
+            { key: "nxcompat", header: "NX", width: 3 },
+            { key: "safeseh", header: "SafeSEH", width: 8 }
           ],
           modules.map((item) => ({
-            module: item.module,
+            module: moduleLabel(item.module),
             score: `${item.score}`,
-            aslr: item.aslr,
-            nxcompat: item.nxcompat,
-            safeseh: item.safeseh,
-            system: item.system ? "yes" : "no"
+            aslr: item.aslr === "disabled" ? "Off" : item.aslr === "enabled" ? "On" : "?",
+            nxcompat: item.nxcompat === "disabled" ? "Off" : item.nxcompat === "enabled" ? "On" : "?",
+            safeseh: item.safeseh === "disabled" ? "Off" : item.safeseh === "enabled" ? "On" : "?"
           }))
         );
-        section("BADCHAR QUICK SCAN");
+        section("BYTE OBSERVATIONS");
         table(
           [
             { key: "byte", header: "Byte", width: 8 },
-            { key: "count", header: "Count", width: 6 },
+            { key: "count", header: "Occurrences", width: 11 },
             { key: "first", header: "FirstOff", width: 8 }
           ],
           badcharStats.map((entry) => ({
@@ -2023,6 +2031,7 @@ var osed_bundle = (() => {
             first: entry.first !== void 0 ? `${entry.first}` : "n/a"
           }))
         );
+        print("No bad characters confirmed by this scan; compare transmitted and received bytes.");
         const warnings = [];
         warnings.push(...(_e = (_d = landingEvidence.memory) == null ? void 0 : _d.warnings) != null ? _e : []);
         if (landingEvidence.address === void 0) warnings.push(landingEvidence.recommendation);
@@ -14886,10 +14895,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-02T23:46:17.681Z" : globalThis[key2];
+        value = true ? "2026-11-03T01:34:02.523Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "0c3ebd8875e0" : globalThis[key2];
+        value = true ? "5d72c907e315" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

@@ -213,6 +213,10 @@ function scoreModule(module: ModuleMitigation): number {
   return score;
 }
 
+function moduleLabel(name: string): string {
+  return name.split(/[\\/]/).filter(Boolean).pop() ?? name;
+}
+
 export type ScoredModule = {
   module: string;
   score: number;
@@ -246,7 +250,7 @@ function scanGadgets(pointerSize: 4 | 8, moduleFilter?: string): { jmp: string[]
       return out.formatAddress(address, getPointerSize());
     }
     const delta = address - mod.base;
-    return `${mod.name}+0x${delta.toString(16).toUpperCase()}`;
+    return `${moduleLabel(mod.name)}+0x${delta.toString(16).toUpperCase()}`;
   };
 
   const jmpHits = scanPattern({ module: moduleFilter, executableOnly: true, maxResults: 12, chunkSize: 0x4000 }, Uint8Array.from([0xff, 0xe4])).hits;
@@ -285,7 +289,12 @@ function scanGadgets(pointerSize: 4 | 8, moduleFilter?: string): { jmp: string[]
     }
   }
 
-  const uniq = (values: bigint[]) => [...new Set(values.map((v) => v.toString()))].map((v) => BigInt(v));
+  const uniq = (values: bigint[]) => [...new Set(values.map((v) => v.toString()))]
+    .map((v) => BigInt(v))
+    .sort((left, right) => {
+      const rank = (address: bigint) => findModuleByAddress(address)?.aslr === "disabled" ? 0 : 1;
+      return rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0);
+    });
 
   return {
     jmp: uniq(jmpHits).slice(0, 5).map(fmt),
@@ -488,27 +497,25 @@ export function createTriageCommand(): Command {
       out.table(
         [
           { key: "module", header: "Module", width: 20 },
-          { key: "score", header: "Score", width: 6 },
-          { key: "aslr", header: "ASLR", width: 8 },
-          { key: "nxcompat", header: "NX_COMPAT", width: 10 },
+          { key: "score", header: "Score", width: 5 },
+          { key: "aslr", header: "ASLR", width: 4 },
+          { key: "nxcompat", header: "NX", width: 3 },
           { key: "safeseh", header: "SafeSEH", width: 8 },
-          { key: "system", header: "System", width: 8 },
         ],
         modules.map((item) => ({
-          module: item.module,
+          module: moduleLabel(item.module),
           score: `${item.score}`,
-          aslr: item.aslr,
-          nxcompat: item.nxcompat,
-          safeseh: item.safeseh,
-          system: item.system ? "yes" : "no",
+          aslr: item.aslr === "disabled" ? "Off" : item.aslr === "enabled" ? "On" : "?",
+          nxcompat: item.nxcompat === "disabled" ? "Off" : item.nxcompat === "enabled" ? "On" : "?",
+          safeseh: item.safeseh === "disabled" ? "Off" : item.safeseh === "enabled" ? "On" : "?",
         })),
       );
 
-      out.section("BADCHAR QUICK SCAN");
+      out.section("BYTE OBSERVATIONS");
       out.table(
         [
           { key: "byte", header: "Byte", width: 8 },
-          { key: "count", header: "Count", width: 6 },
+          { key: "count", header: "Occurrences", width: 11 },
           { key: "first", header: "FirstOff", width: 8 },
         ],
         badcharStats.map((entry) => ({
@@ -517,6 +524,7 @@ export function createTriageCommand(): Command {
           first: entry.first !== undefined ? `${entry.first}` : "n/a",
         })),
       );
+      out.print("No bad characters confirmed by this scan; compare transmitted and received bytes.");
 
       const warnings: string[] = [];
       warnings.push(...(landingEvidence.memory?.warnings ?? []));
