@@ -14927,10 +14927,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T03:30:53.693Z" : globalThis[key2];
+        value = true ? "2026-11-03T03:36:31.490Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "e4f8e1d7dc80" : globalThis[key2];
+        value = true ? "5048b7c0979a" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16039,7 +16039,7 @@ var osed_bundle = (() => {
     const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
     if (pivot) {
       const instructionText = gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ");
-      const register2 = (_a = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
+      const register2 = gadget.instructions.some((instruction) => instruction.mnemonic === "leave") ? "ebp" : (_a = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
       return "PIVOT(" + ((_b = register2 == null ? void 0 : register2.toUpperCase()) != null ? _b : "?") + ")";
     }
     const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register.toUpperCase()))];
@@ -16769,7 +16769,7 @@ var osed_bundle = (() => {
       if (path) writeProofText(path, text);
       const rows = [{ Status: path ? "written" : "ready", File: path != null ? path : "(console)", Gadgets: currentRopCorpus.gadgets.length.toString() }];
       renderRows("ROP Corpus Export", rows);
-      if (!path) print(text);
+      if (!path) print(text + "\n");
       setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
       return toDxResult("ROP Corpus Export", rows);
     };

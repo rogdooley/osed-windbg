@@ -14,6 +14,7 @@ describe("ROP corpus report", () => {
       "0x10001267: jmp esp ;",
       "0x1000121e: pop esi ; pop edi ; ret ;",
       "0x10001263: mov esp, ebp ; pop ebp ; ret ;",
+      "0x10001270: leave ; ret ;",
     ].join("\n"));
     const report = formatCorpusReport(index, {
       pointerSize: 4,
@@ -27,9 +28,10 @@ describe("ROP corpus report", () => {
     expect(report).toContain("Corpus: LIVE | Validation: SAMPLED");
     expect(report).toContain("Badchars: 00 0A 0D");
     expect(report).toMatch(/0x1000121E\s+\+00121E\s+pop esi ; pop edi ; ret\s+LOAD\(ESI,EDI\)\s+\+12/);
-    expect(report).toContain("Base: 0x10000000 | ASLR: OFF | Gadgets: 3");
+    expect(report).toContain("Base: 0x10000000 | ASLR: OFF | Gadgets: 4");
     expect(report).toMatch(/0x10001263\s+\+001263\s+mov esp, ebp ; pop ebp ; ret\s+PIVOT\(EBP\)\s+DYN/);
-    expect(report.split("\n").filter((line) => line.startsWith("0x")).length).toBe(3);
+    expect(report).toMatch(/0x10001270\s+\+001270\s+leave ; ret\s+PIVOT\(EBP\)\s+DYN/);
+    expect(report.split("\n").filter((line) => line.startsWith("0x")).length).toBe(4);
     expect(report.indexOf("0x1000121E")).toBeLessThan(report.indexOf("0x10001263"));
   });
 

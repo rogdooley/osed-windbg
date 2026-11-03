@@ -801,7 +801,7 @@ function bindApi(): OsedApi {
     if (path) writeProofText(path, text);
     const rows = [{ Status: path ? "written" : "ready", File: path ?? "(console)", Gadgets: currentRopCorpus.gadgets.length.toString() }];
     renderRows("ROP Corpus Export", rows);
-    if (!path) out.print(text);
+    if (!path) out.print(text + "\n");
     setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
     return toDxResult("ROP Corpus Export", rows);
   };

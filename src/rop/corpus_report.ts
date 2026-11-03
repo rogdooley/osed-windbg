@@ -39,7 +39,9 @@ function capabilityLabel(gadget: RopGadget): string {
   const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
   if (pivot) {
     const instructionText = gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ");
-    const register = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)?.[1];
+    const register = gadget.instructions.some((instruction) => instruction.mnemonic === "leave")
+      ? "ebp"
+      : instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)?.[1];
     return "PIVOT(" + (register?.toUpperCase() ?? "?") + ")";
   }
   const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register!.toUpperCase()))];
