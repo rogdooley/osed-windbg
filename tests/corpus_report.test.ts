@@ -13,21 +13,22 @@ describe("ROP corpus report", () => {
     const index = corpus([
       "0x10001267: jmp esp ;",
       "0x1000121e: pop esi ; pop edi ; ret ;",
-      "0x10001263: xchg esp, eax ; ret ;",
+      "0x10001263: mov esp, ebp ; pop ebp ; ret ;",
     ].join("\n"));
     const report = formatCorpusReport(index, {
       pointerSize: 4,
       origin: "live",
       validation: "sampled",
       badchars: [0, 0x0a, 0x0d],
-      modules: [{ name: "osedhelper.dll", base: BigInt(0x10000000), aslr: "disabled" }],
+      modules: [{ name: "osedhelper", base: BigInt(0x10000000), aslr: "disabled" }],
     });
 
     expect(report).toContain("Architecture: x86");
     expect(report).toContain("Corpus: LIVE | Validation: SAMPLED");
     expect(report).toContain("Badchars: 00 0A 0D");
-    expect(report).toContain("0x1000121E  +00121E  pop esi ; pop edi ; ret  LOAD(ESI,EDI)  +12");
-    expect(report).toMatch(/0x10001263\s+\+001263\s+xchg esp, eax ; ret\s+PIVOT\(EAX\)\s+DYN/);
+    expect(report).toMatch(/0x1000121E\s+\+00121E\s+pop esi ; pop edi ; ret\s+LOAD\(ESI,EDI\)\s+\+12/);
+    expect(report).toContain("Base: 0x10000000 | ASLR: OFF | Gadgets: 3");
+    expect(report).toMatch(/0x10001263\s+\+001263\s+mov esp, ebp ; pop ebp ; ret\s+PIVOT\(EBP\)\s+DYN/);
     expect(report.split("\n").filter((line) => line.startsWith("0x")).length).toBe(3);
     expect(report.indexOf("0x1000121E")).toBeLessThan(report.indexOf("0x10001263"));
   });

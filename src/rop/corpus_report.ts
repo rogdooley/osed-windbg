@@ -1,5 +1,5 @@
 import type { CapabilityIndex } from "./capabilities";
-import type { RopCapability, RopGadget } from "./types";
+import type { RopGadget } from "./types";
 
 export type CorpusReportOrigin = "live" | "rpplus" | "imported";
 export type CorpusReportValidation = "sampled" | "unverified" | "unknown";
@@ -24,14 +24,26 @@ function normalizedIdentity(value: string | undefined): string {
   return (value ?? "?").replace(/\\/g, "/").split("/").pop()!.toLowerCase();
 }
 
-function capabilityLabel(capabilities: RopCapability[]): string {
-  const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register!.toUpperCase()))];
-  if (loads.length > 0) return "LOAD(" + loads.join(",") + ")";
+function normalizedStem(value: string | undefined): string {
+  return normalizedIdentity(value).replace(/\.(dll|exe|ocx|sys)$/i, "");
+}
+
+function matchingModule(modules: CorpusReportModule[], name: string | undefined): CorpusReportModule | undefined {
+  const identity = normalizedIdentity(name);
+  return modules.find((module) => normalizedIdentity(module.name) === identity)
+    ?? modules.find((module) => normalizedStem(module.name) === normalizedStem(name));
+}
+
+function capabilityLabel(gadget: RopGadget): string {
+  const capabilities = gadget.capabilities;
   const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
   if (pivot) {
-    const register = pivot.evidence.join(" ").match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)?.[1];
+    const instructionText = gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ");
+    const register = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)?.[1];
     return "PIVOT(" + (register?.toUpperCase() ?? "?") + ")";
   }
+  const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register!.toUpperCase()))];
+  if (loads.length > 0) return "LOAD(" + loads.join(",") + ")";
   const jump = capabilities.find((cap) => cap.kind === "DISPATCH_JMP_REGISTER");
   if (jump) return "JMP(" + (jump.register?.toUpperCase() ?? "?") + ")";
   const write = capabilities.find((cap) => cap.kind === "MEMORY_WRITE");
@@ -66,7 +78,7 @@ function originLabel(origin: CorpusReportOrigin): string {
 
 export function formatCorpusReport(index: CapabilityIndex, options: CorpusReportOptions): string {
   const addressWidth = options.pointerSize * 2;
-  const moduleMetadata = new Map((options.modules ?? []).map((module) => [normalizedIdentity(module.name), module]));
+  const modules = options.modules ?? [];
   const groups = new Map<string, Array<{ gadget: RopGadget; locationIndex: number }>>();
   for (const gadget of index.gadgets) {
     gadget.locations.forEach((location, locationIndex) => {
@@ -91,7 +103,7 @@ export function formatCorpusReport(index: CapabilityIndex, options: CorpusReport
   }
 
   for (const [identity, entries] of [...groups.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
-    const metadata = moduleMetadata.get(identity);
+    const metadata = matchingModule(modules, entries[0].gadget.locations[entries[0].locationIndex].module);
     const moduleName = metadata?.name ?? entries[0].gadget.locations[entries[0].locationIndex].module ?? "?";
     const rows: ReportRow[] = entries.map(({ gadget, locationIndex }) => {
       const location = gadget.locations[locationIndex];
@@ -100,7 +112,7 @@ export function formatCorpusReport(index: CapabilityIndex, options: CorpusReport
         va,
         rva: va === undefined || metadata?.base === undefined ? undefined : va - metadata.base,
         instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
-        capability: capabilityLabel(gadget.capabilities),
+        capability: capabilityLabel(gadget),
         esp: espDelta(gadget),
       };
     }).sort((left, right) =>

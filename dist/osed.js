@@ -14927,10 +14927,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T03:19:26.121Z" : globalThis[key2];
+        value = true ? "2026-11-03T03:30:53.693Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "81844931766a" : globalThis[key2];
+        value = true ? "e4f8e1d7dc80" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16025,15 +16025,25 @@ var osed_bundle = (() => {
   function normalizedIdentity(value) {
     return (value != null ? value : "?").replace(/\\/g, "/").split("/").pop().toLowerCase();
   }
-  function capabilityLabel(capabilities) {
+  function normalizedStem(value) {
+    return normalizedIdentity(value).replace(/\.(dll|exe|ocx|sys)$/i, "");
+  }
+  function matchingModule(modules, name) {
+    var _a;
+    const identity = normalizedIdentity(name);
+    return (_a = modules.find((module) => normalizedIdentity(module.name) === identity)) != null ? _a : modules.find((module) => normalizedStem(module.name) === normalizedStem(name));
+  }
+  function capabilityLabel(gadget) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
-    const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register.toUpperCase()))];
-    if (loads.length > 0) return "LOAD(" + loads.join(",") + ")";
+    const capabilities = gadget.capabilities;
     const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
     if (pivot) {
-      const register2 = (_a = pivot.evidence.join(" ").match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
+      const instructionText = gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ");
+      const register2 = (_a = instructionText.match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
       return "PIVOT(" + ((_b = register2 == null ? void 0 : register2.toUpperCase()) != null ? _b : "?") + ")";
     }
+    const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register.toUpperCase()))];
+    if (loads.length > 0) return "LOAD(" + loads.join(",") + ")";
     const jump = capabilities.find((cap) => cap.kind === "DISPATCH_JMP_REGISTER");
     if (jump) return "JMP(" + ((_d = (_c = jump.register) == null ? void 0 : _c.toUpperCase()) != null ? _d : "?") + ")";
     const write2 = capabilities.find((cap) => cap.kind === "MEMORY_WRITE");
@@ -16063,7 +16073,7 @@ var osed_bundle = (() => {
   function formatCorpusReport(index, options) {
     var _a, _b, _c;
     const addressWidth = options.pointerSize * 2;
-    const moduleMetadata = new Map(((_a = options.modules) != null ? _a : []).map((module) => [normalizedIdentity(module.name), module]));
+    const modules = (_a = options.modules) != null ? _a : [];
     const groups = /* @__PURE__ */ new Map();
     for (const gadget of index.gadgets) {
       gadget.locations.forEach((location, locationIndex) => {
@@ -16087,7 +16097,7 @@ var osed_bundle = (() => {
       return lines.join("\n");
     }
     for (const [identity, entries] of [...groups.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
-      const metadata = moduleMetadata.get(identity);
+      const metadata = matchingModule(modules, entries[0].gadget.locations[entries[0].locationIndex].module);
       const moduleName = (_c = (_b = metadata == null ? void 0 : metadata.name) != null ? _b : entries[0].gadget.locations[entries[0].locationIndex].module) != null ? _c : "?";
       const rows = entries.map(({ gadget, locationIndex }) => {
         const location = gadget.locations[locationIndex];
@@ -16096,7 +16106,7 @@ var osed_bundle = (() => {
           va,
           rva: va === void 0 || (metadata == null ? void 0 : metadata.base) === void 0 ? void 0 : va - metadata.base,
           instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
-          capability: capabilityLabel(gadget.capabilities),
+          capability: capabilityLabel(gadget),
           esp: espDelta(gadget)
         };
       }).sort((left, right) => {
