@@ -1,6 +1,7 @@
 export type EvidenceFlag = boolean | null;
 
 export type MemoryRegionType = "image" | "mapped" | "private" | "unknown";
+export type MemoryState = "commit" | "reserve" | "free" | "unknown";
 
 export interface RawMemoryRegion {
   baseAddress?: bigint;
@@ -23,6 +24,7 @@ export interface MemoryRegionEvidence {
   guarded: EvidenceFlag;
   noAccess: EvidenceFlag;
   committed: EvidenceFlag;
+  state: MemoryState;
   regionType: MemoryRegionType;
   raw: {
     state?: number;
@@ -45,6 +47,7 @@ export interface SerializedMemoryRegionEvidence {
   guarded: EvidenceFlag;
   noAccess: EvidenceFlag;
   committed: EvidenceFlag;
+  state: MemoryState;
   regionType: MemoryRegionType;
   raw: {
     state?: number;
@@ -66,6 +69,8 @@ const PAGE_EXECUTE_READWRITE = 0x40;
 const PAGE_EXECUTE_WRITECOPY = 0x80;
 const PAGE_GUARD = 0x100;
 const MEM_COMMIT = 0x1000;
+const MEM_RESERVE = 0x2000;
+const MEM_FREE = 0x10000;
 const MEM_PRIVATE = 0x20000;
 const MEM_MAPPED = 0x40000;
 const MEM_IMAGE = 0x1000000;
@@ -90,6 +95,7 @@ export function serializeMemoryRegionEvidence(evidence: MemoryRegionEvidence): S
     guarded: evidence.guarded,
     noAccess: evidence.noAccess,
     committed: evidence.committed,
+    state: evidence.state,
     regionType: evidence.regionType,
     raw: { ...evidence.raw },
     source: evidence.source,
@@ -125,6 +131,13 @@ export function normalizeMemoryRegion(address: bigint, raw: RawMemoryRegion, sou
   if (raw.type === MEM_IMAGE) regionType = "image";
   else if (raw.type === MEM_MAPPED) regionType = "mapped";
   else if (raw.type === MEM_PRIVATE) regionType = "private";
+  const state: MemoryState = raw.state === MEM_COMMIT
+    ? "commit"
+    : raw.state === MEM_RESERVE
+      ? "reserve"
+      : raw.state === MEM_FREE
+        ? "free"
+        : "unknown";
 
   return {
     address,
@@ -137,6 +150,7 @@ export function normalizeMemoryRegion(address: bigint, raw: RawMemoryRegion, sou
     guarded: protection === undefined ? null : (protection & PAGE_GUARD) !== 0,
     noAccess: !knownProtection ? null : base === PAGE_NOACCESS,
     committed: raw.state === undefined ? null : raw.state === MEM_COMMIT,
+    state,
     regionType,
     raw: {
       state: raw.state,

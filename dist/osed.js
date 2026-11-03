@@ -910,6 +910,8 @@ var osed_bundle = (() => {
   var PAGE_EXECUTE_WRITECOPY = 128;
   var PAGE_GUARD = 256;
   var MEM_COMMIT = 4096;
+  var MEM_RESERVE = 8192;
+  var MEM_FREE = 65536;
   var MEM_PRIVATE = 131072;
   var MEM_MAPPED = 262144;
   var MEM_IMAGE = 16777216;
@@ -931,6 +933,7 @@ var osed_bundle = (() => {
       guarded: evidence.guarded,
       noAccess: evidence.noAccess,
       committed: evidence.committed,
+      state: evidence.state,
       regionType: evidence.regionType,
       raw: __spreadValues({}, evidence.raw),
       source: evidence.source,
@@ -957,6 +960,7 @@ var osed_bundle = (() => {
     if (raw.type === MEM_IMAGE) regionType = "image";
     else if (raw.type === MEM_MAPPED) regionType = "mapped";
     else if (raw.type === MEM_PRIVATE) regionType = "private";
+    const state = raw.state === MEM_COMMIT ? "commit" : raw.state === MEM_RESERVE ? "reserve" : raw.state === MEM_FREE ? "free" : "unknown";
     return {
       address,
       baseAddress: raw.baseAddress,
@@ -968,6 +972,7 @@ var osed_bundle = (() => {
       guarded: protection === void 0 ? null : (protection & PAGE_GUARD) !== 0,
       noAccess: !knownProtection ? null : base === PAGE_NOACCESS,
       committed: raw.state === void 0 ? null : raw.state === MEM_COMMIT,
+      state,
       regionType,
       raw: {
         state: raw.state,
@@ -14909,10 +14914,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T02:14:39.409Z" : globalThis[key2];
+        value = true ? "2026-11-03T02:19:57.659Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "3ead2a8f47b4" : globalThis[key2];
+        value = true ? "7305ad155477" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15958,7 +15963,8 @@ var osed_bundle = (() => {
     const module = findModule(value);
     const memory = inspectMemory(value);
     if (module) return { value, pointerSize, provenance: "debugger_observed", kind: "module_pointer", module: { name: module.name, rva: value - module.base, aslr: module.aslr }, memory };
-    return { value, pointerSize, provenance: "debugger_observed", kind: memory.source === "unavailable" ? "unmapped" : "memory_pointer", memory };
+    const kind = memory.source === "unavailable" || memory.state === "unknown" ? "unknown" : memory.state === "free" ? "unmapped" : memory.state === "reserve" ? "reserved" : "memory_pointer";
+    return { value, pointerSize, provenance: "debugger_observed", kind, memory };
   }
 
   // src/commands/leak.ts
@@ -15977,21 +15983,25 @@ var osed_bundle = (() => {
         section("POINTER CLASSIFICATION");
         print("VALUE");
         print("  Address: " + formatAddress(value, pointerSize));
-        print("  Architecture: x" + String(pointerSize * 8));
+        print("  Architecture: " + (pointerSize === 4 ? "x86" : "x64"));
+        print("  Pointer width: " + String(pointerSize * 8) + " bits");
         if (result3.module || result3.memory) print("TARGET");
+        print("  Classification: " + (result3.kind === "module_pointer" ? "Loaded module" : result3.kind === "memory_pointer" ? "Mapped memory" : result3.kind === "reserved" ? "Reserved memory" : result3.kind === "unmapped" ? "Unmapped" : result3.kind === "null" ? "Null pointer" : "Unknown"));
         if (result3.module) {
           print("  Module: " + ((_a = result3.module.name.split(/[\\\\/]/).pop()) != null ? _a : result3.module.name));
           print("  Module RVA: 0x" + result3.module.rva.toString(16).toUpperCase().padStart(pointerSize * 2, "0"));
           print("  ASLR: " + result3.module.aslr);
         }
         if (result3.memory) {
-          print("  Protection: " + (result3.memory.executable === true ? "executable" : result3.memory.executable === false ? "non-executable" : "unknown"));
-          print("  Region: " + result3.memory.regionType);
+          print("  State: " + (result3.memory.state === "commit" ? "MEM_COMMIT" : result3.memory.state === "reserve" ? "MEM_RESERVE" : result3.memory.state === "free" ? "MEM_FREE" : "unknown"));
+          print("  Type: " + (result3.memory.regionType === "unknown" ? "unknown" : "MEM_" + result3.memory.regionType.toUpperCase()));
+          print("  Protection: " + (result3.memory.raw.protection === void 0 ? "unknown" : decodeProtectValue(result3.memory.raw.protection).name));
+          print("  Executable: " + (result3.memory.executable === true ? "Yes" : result3.memory.executable === false ? "No" : "Unknown"));
         }
         print("PROVENANCE");
         print("  " + result3.provenance);
         print("ASSESSMENT");
-        print(result3.kind === "module_pointer" ? "  Valid pointer into a loaded module." : result3.kind === "null" ? "  Null pointer." : result3.kind === "memory_pointer" ? "  Pointer into a mapped memory region." : "  No mapped target established.");
+        print(result3.kind === "module_pointer" ? "  Valid pointer into a loaded module." : result3.kind === "null" ? "  Null pointer." : result3.kind === "memory_pointer" ? "  Address resolves to committed memory." : result3.kind === "reserved" ? "  Address is reserved but not committed." : result3.kind === "unmapped" ? "  Address does not resolve to mapped memory." : "  Memory state could not be established.");
         print("  No information disclosure established.");
         return { command: "leak_classify", args: options, success: true, findings: [result3], warnings: [], errors: [] };
       }
