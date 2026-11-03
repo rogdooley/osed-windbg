@@ -832,7 +832,10 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.corpus.report", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
       return toDxResult("ROP Corpus Report", [{ Error: "Could not write '" + path + "': " + message }]);
     }
-    if (!path) out.print(text);
+    // Leave a blank debugger-console line before dx renders this command's
+    // result object; a single debugLog newline can otherwise be coalesced
+    // with the returned DxResult on the final gadget row.
+    if (!path) out.print(text + "\n");
     const rows = [{ Status: path ? "written" : "printed", File: path ?? "(console)", Gadgets: index.gadgets.length.toString() }];
     if (path) renderRows("ROP Corpus Report", rows);
     setResult({

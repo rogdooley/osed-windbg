@@ -395,6 +395,30 @@ describe("rop_suggest command", () => {
     expect(api.last_result()).toMatchObject({ success: false, errors: ["access denied"] });
   });
 
+  test("corpus report leaves a console boundary before its returned DxResult", () => {
+    const logs: string[] = [];
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
+      currentProcess: { Is64Bit: false, Modules: [] },
+    };
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        rop: {
+          scan: (text: string) => unknown;
+          corpus: { report: () => unknown };
+        };
+      };
+    }).osed;
+
+    api.rop.scan("0x00401000: pop ebp ; ret ;");
+    api.rop.corpus.report();
+
+    const report = logs.find((line) => line.includes("=== OSED ROP CORPUS ==="));
+    expect(report).toBeDefined();
+    expect(report).toMatch(/pop ebp ; ret\s+LOAD\(EBP\)\s+\+8\n\n$/);
+  });
+
   test("find_stack_bytes finds live stack hits without searching heap memory", () => {
     const stackPointer = BigInt("0x12ff00");
     const stackBase = BigInt("0x130000");

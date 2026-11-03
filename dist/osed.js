@@ -14927,10 +14927,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T03:36:31.490Z" : globalThis[key2];
+        value = true ? "2026-11-03T03:42:45.288Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "5048b7c0979a" : globalThis[key2];
+        value = true ? "9ed6963e6905" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16797,7 +16797,7 @@ var osed_bundle = (() => {
         setResult({ command: "rop.corpus.report", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
         return toDxResult("ROP Corpus Report", [{ Error: "Could not write '" + path + "': " + message }]);
       }
-      if (!path) print(text);
+      if (!path) print(text + "\n");
       const rows = [{ Status: path ? "written" : "printed", File: path != null ? path : "(console)", Gadgets: index.gadgets.length.toString() }];
       if (path) renderRows("ROP Corpus Report", rows);
       setResult({
