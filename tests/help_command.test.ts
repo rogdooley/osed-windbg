@@ -108,12 +108,12 @@ describe("help command", () => {
     expect(renderCompactDetail(entry).join("\n")).toBe([
       "", "=== Help: rop.corpus.export ===", "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
       "", "RUN", '  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")', "  Saves the current corpus to disk.",
-      "", "NEXT", "  rop.scan_live, rop.corpus.import, rop.corpus.validate", "", 'MORE → help("rop.corpus.export", "full")',
+      "", "NEXT", "  rop.scan_live, rop.corpus.report, rop.corpus.import, rop.corpus.validate", "", 'MORE → help("rop.corpus.export", "full")',
     ].join("\n"));
     const full = renderFullDetail(entry).join("\n");
     expect(full).toContain("DETAILS\n  Saves the gadgets you scanned this session");
     expect(full).toContain('dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")\n  Saves the current corpus to disk.');
-    expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.import, rop.corpus.validate");
+    expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.report, rop.corpus.import, rop.corpus.validate");
   });
 
   test("public help invocation preserves the requested detail mode", () => {

@@ -69,6 +69,7 @@ import { createStackmapCommand } from "./commands/stackmap";
 import { createLeakClassifyCommand } from "./commands/leak";
 import type { SerializedLandingEvidence } from "./analysis/landing";
 import { ProofController, ProofSessionStore, WinDbgProofAdapter, type ProofPlanInput } from "./rop/proof";
+import { formatCorpusReport, type CorpusReportModule, type CorpusReportOrigin, type CorpusReportValidation } from "./rop/corpus_report";
 
 declare const self: Record<string, unknown> | undefined;
 
@@ -81,6 +82,9 @@ let osed: OsedApi = {};
 let lastResult: CommandResult | undefined;
 let currentRopCorpus: CapabilityIndex | undefined;
 let pendingImportedCorpus: ImportedCorpus | undefined;
+let corpusOrigin: CorpusReportOrigin = "rpplus";
+let corpusValidation: CorpusReportValidation = "unknown";
+let corpusBadchars: number[] | undefined;
 let corpusGeneration = 0;
 let nextRopPlanId = 1;
 const ropPlans = new Map<number, { plan: RopStrategyPlan; generation: number }>();
@@ -92,6 +96,7 @@ interface CorpusModuleEntry {
   reason?: string;
   /** Module base at scan time; used to detect a rebase (relaunch) that invalidates gadget addresses. */
   base?: bigint;
+  aslr?: "enabled" | "disabled" | "unknown";
 }
 let corpusModules: CorpusModuleEntry[] = [];
 const ropEmitter = new RankedSemanticEmitter();
@@ -248,13 +253,24 @@ function resetCorpusModules(): void {
   corpusModules = [];
 }
 
+function corpusReportModules(): CorpusReportModule[] {
+  return corpusModules.map((module) => ({
+    name: module.name,
+    base: module.base,
+    aslr: module.aslr ?? "unknown",
+  }));
+}
+
 // Current live base of a module by name, or undefined for the "<all>" scan or
 // an unresolved name. Used to capture scan-time bases and detect rebases.
-function moduleBaseByName(name: string): bigint | undefined {
+function moduleInfoByName(name: string) {
   if (!name || name === "<all>") return undefined;
   const matches = listModulesWithMitigations(name);
-  const exact = matches.find((m) => m.name.toLowerCase() === name.toLowerCase()) ?? matches[0];
-  return exact?.base;
+  return matches.find((m) => m.name.toLowerCase() === name.toLowerCase()) ?? matches[0];
+}
+
+function moduleBaseByName(name: string): bigint | undefined {
+  return moduleInfoByName(name)?.base;
 }
 
 // Predicate that returns false for addresses inside a module currently loaded
@@ -546,6 +562,9 @@ function bindApi(): OsedApi {
 
   const scanCorpus = (text: string, options: RPPlusProviderOptions = {}, badchars?: number[]): DxResult => {
     pendingImportedCorpus = undefined;
+    corpusOrigin = "rpplus";
+    corpusValidation = "unknown";
+    corpusBadchars = badchars ? [...badchars] : [];
     invalidateCorpusPlans();
     resetCorpusModules();
     const raw = buildCapabilityIndexFromRpPlusText(text, options);
@@ -587,6 +606,9 @@ function bindApi(): OsedApi {
     append: boolean,
   ): DxResult => {
     pendingImportedCorpus = undefined;
+    corpusOrigin = "live";
+    corpusValidation = "sampled";
+    corpusBadchars = Array.isArray(options.badchars) ? [...options.badchars] : [];
     const discoveries = modules.map((module) => discoverLiveGadgets({ ...options, module }));
     const discoveredIndexes = discoveries.map((discovery) =>
       buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
@@ -621,7 +643,8 @@ function bindApi(): OsedApi {
         if (reason) warnings.push(reason);
       }
       const modName = mod ?? "<all>";
-      const base = moduleBaseByName(modName);
+      const moduleInfo = moduleInfoByName(modName);
+      const base = moduleInfo?.base;
       const existing = corpusModules.find((m) => m.name === modName);
       if (existing) {
         existing.accepted = accepted;
@@ -629,6 +652,7 @@ function bindApi(): OsedApi {
         existing.usable = accepted > 0;
         existing.reason = reason;
         existing.base = base;
+        existing.aslr = moduleInfo?.aslr;
       } else {
         corpusModules.push({
           name: modName,
@@ -637,6 +661,7 @@ function bindApi(): OsedApi {
           usable: accepted > 0,
           reason,
           base,
+          aslr: moduleInfo?.aslr,
         });
       }
     }
@@ -781,6 +806,46 @@ function bindApi(): OsedApi {
     return toDxResult("ROP Corpus Export", rows);
   };
 
+  const executeCorpusReport = (...args: unknown[]): DxResult => {
+    const path = typeof args[0] === "string" ? args[0] : undefined;
+    const index = currentRopCorpus ?? pendingImportedCorpus?.index;
+    if (!index) {
+      const message = "No ROP corpus is available. Run rop.scan(...) or rop.scan_live(...) first.";
+      setResult({ command: "rop.corpus.report", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("ROP Corpus Report", [{ Error: message }]);
+    }
+    const importedPending = currentRopCorpus === undefined && pendingImportedCorpus !== undefined;
+    const modules = importedPending
+      ? pendingImportedCorpus!.fingerprint.modules.map((module) => ({ name: module.name, base: BigInt(module.base), aslr: "unknown" as const }))
+      : corpusReportModules();
+    const text = formatCorpusReport(index, {
+      pointerSize: getPointerSize(),
+      origin: importedPending ? "imported" : corpusOrigin,
+      validation: importedPending ? "unverified" : corpusValidation,
+      modules,
+      badchars: importedPending ? undefined : corpusBadchars,
+    });
+    try {
+      if (path) writeProofText(path, text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setResult({ command: "rop.corpus.report", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("ROP Corpus Report", [{ Error: "Could not write '" + path + "': " + message }]);
+    }
+    if (!path) out.print(text);
+    const rows = [{ Status: path ? "written" : "printed", File: path ?? "(console)", Gadgets: index.gadgets.length.toString() }];
+    if (path) renderRows("ROP Corpus Report", rows);
+    setResult({
+      command: "rop.corpus.report",
+      args: path ? { path } : {},
+      success: true,
+      findings: rows,
+      warnings: importedPending ? ["Imported corpus addresses are unverified."] : [],
+      errors: [],
+    });
+    return toDxResult("ROP Corpus Report", rows);
+  };
+
   const executeCorpusImport = (...args: unknown[]): DxResult => {
     const path = typeof args[0] === "string" ? args[0] : undefined;
     if (!path) {
@@ -791,6 +856,9 @@ function bindApi(): OsedApi {
     try {
       pendingImportedCorpus = importCorpus(readText(path));
       currentRopCorpus = undefined;
+      corpusOrigin = "imported";
+      corpusValidation = "unverified";
+      corpusBadchars = undefined;
       invalidateCorpusPlans();
       resetCorpusModules();
       const rows = [{ Status: "stale-imported", File: path, Gadgets: pendingImportedCorpus.index.gadgets.length.toString() }];
@@ -819,6 +887,9 @@ function bindApi(): OsedApi {
     }
     currentRopCorpus = pendingImportedCorpus.index;
     pendingImportedCorpus = undefined;
+    corpusOrigin = "imported";
+    corpusValidation = "sampled";
+    corpusBadchars = undefined;
     invalidateCorpusPlans();
     const rows = [{ Status: "validated", Detail: "module mappings and sampled gadget bytes match" }];
     renderRows("ROP Corpus Validate", rows);
@@ -2777,6 +2848,7 @@ function bindApi(): OsedApi {
     scan_live: executeRopScanLive,
     corpus: {
       export: executeCorpusExport,
+      report: executeCorpusReport,
       import: executeCorpusImport,
       validate: executeCorpusValidate,
     },

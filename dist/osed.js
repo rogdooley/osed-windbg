@@ -138,8 +138,8 @@ var osed_bundle = (() => {
       if (/^[0-9]+$/.test(trimmed)) {
         throw new Error("Decimal address strings are not allowed.");
       }
-      const hex3 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-      return BigInt(hex3);
+      const hex4 = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+      return BigInt(hex4);
     }
     throw new Error("Address must be a number or hex string.");
   }
@@ -376,13 +376,13 @@ var osed_bundle = (() => {
     if (!/^(0x)?[0-9a-fA-F]+$/.test(value)) {
       throw new Error("String pattern_offset value must be raw hex only.");
     }
-    const hex3 = value.startsWith("0x") ? value.slice(2) : value;
-    if (hex3.length % 2 !== 0) {
+    const hex4 = value.startsWith("0x") ? value.slice(2) : value;
+    if (hex4.length % 2 !== 0) {
       throw new Error("Hex string length must be even.");
     }
     const chars = [];
-    for (let i = 0; i < hex3.length; i += 2) {
-      chars.push(parseInt(hex3.slice(i, i + 2), 16));
+    for (let i = 0; i < hex4.length; i += 2) {
+      chars.push(parseInt(hex4.slice(i, i + 2), 16));
     }
     return String.fromCharCode(...chars.reverse());
   }
@@ -2186,18 +2186,18 @@ var osed_bundle = (() => {
         const expected = expectedBytes(normalizedExclude.values);
         const python = formatByteArray(expected, "python");
         const c = formatByteArray(expected, "c");
-        const hex3 = formatByteArray(expected, "hex");
+        const hex4 = formatByteArray(expected, "hex");
         section("Bad Character Test Array");
         info(`Bytes: ${expected.length} (excluded ${normalizedExclude.values.length})`);
         print(`Python: ${python}`);
         print(`C:      ${c}`);
-        print(`Hex:    ${hex3}`);
+        print(`Hex:    ${hex4}`);
         whyItMatters("Send this array to the target, then use badchar_find to locate it in memory and see which bytes were mangled.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
           "badchar_array",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
-          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex3 } }],
+          [{ count: expected.length, exclude: normalizedExclude.values, bytes: expected, formats: { python, c, hex: hex4 } }],
           warnings
         );
       }
@@ -7021,8 +7021,8 @@ var osed_bundle = (() => {
     const raw = text.trim().toLowerCase();
     if (/^-?0x[0-9a-f]+$/.test(raw)) {
       const negative = raw.startsWith("-");
-      const hex3 = negative ? raw.slice(3) : raw.slice(2);
-      const parsed = Number.parseInt(hex3, 16);
+      const hex4 = negative ? raw.slice(3) : raw.slice(2);
+      const parsed = Number.parseInt(hex4, 16);
       if (!Number.isFinite(parsed)) {
         return void 0;
       }
@@ -10300,7 +10300,7 @@ var osed_bundle = (() => {
         'dx @$osed().rop.scan("0x1000: pop eax ; ret ;")',
         'dx @$osed().rop.scan(rpOutput, "00 0A 0D")'
       ],
-      seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"]
+      seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.report", "rop.corpus.export"]
     },
     {
       name: "rop.scan_live",
@@ -10447,7 +10447,20 @@ var osed_bundle = (() => {
         "dx @$osed().rop.corpus.export()                              // print JSON to the console"
       ],
       details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",
-      seeAlso: ["rop.scan_live", "rop.corpus.import", "rop.corpus.validate"]
+      seeAlso: ["rop.scan_live", "rop.corpus.report", "rop.corpus.import", "rop.corpus.validate"]
+    },
+    {
+      name: "rop.corpus.report",
+      summary: "Write or print a human-readable gadget inventory.",
+      description: "Formats the current ROP corpus as a deterministic one-line-per-gadget report. It is for visual gadget review; rop.corpus.export remains the lossless JSON archive.",
+      usage: "dx @$osed().rop.corpus.report(path?)",
+      examples: [
+        "dx @$osed().rop.corpus.report()",
+        'dx @$osed().rop.corpus.report("C:\\\\notes\\\\rop-gadgets.txt")'
+      ],
+      prerequisites: ["Run rop.scan(...) or rop.scan_live(...) first. Imported corpora are marked unverified until validation."],
+      limitations: ["The report performs no additional gadget scanning. Unknown module metadata and semantic facts are rendered as ?."],
+      seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"]
     },
     {
       name: "rop.corpus.import",
@@ -11843,13 +11856,13 @@ var osed_bundle = (() => {
     if (typeof raw !== "string" || !raw.trim()) {
       throw new Error("shellcode must be a non-empty hex string or byte array.");
     }
-    const hex3 = raw.replace(/[^0-9a-fA-F]/g, "");
-    if (hex3.length % 2 !== 0) {
+    const hex4 = raw.replace(/[^0-9a-fA-F]/g, "");
+    if (hex4.length % 2 !== 0) {
       throw new Error("shellcode hex string must have an even number of hex digits.");
     }
     const result3 = [];
-    for (let i = 0; i < hex3.length; i += 2) {
-      result3.push(parseInt(hex3.slice(i, i + 2), 16));
+    for (let i = 0; i < hex4.length; i += 2) {
+      result3.push(parseInt(hex4.slice(i, i + 2), 16));
     }
     return result3;
   }
@@ -12571,15 +12584,15 @@ var osed_bundle = (() => {
     entries.forEach((entry, i) => {
       const arg = options.argIndex + i;
       const current = runningCount % spec.mod;
-      const pad2 = (entry.chunkVal - current + spec.mod) % spec.mod;
-      if (pad2 > PAD_WARN_THRESHOLD) {
+      const pad3 = (entry.chunkVal - current + spec.mod) % spec.mod;
+      if (pad3 > PAD_WARN_THRESHOLD) {
         warnings.push(
-          `Chunk ${i} needs ${pad2} padding bytes (target 0x${entry.chunkVal.toString(16)}). Consider a narrower width to shrink the payload.`
+          `Chunk ${i} needs ${pad3} padding bytes (target 0x${entry.chunkVal.toString(16)}). Consider a narrower width to shrink the payload.`
         );
       }
-      const fragment = (pad2 > 0 ? `%${pad2}c` : "") + `%${arg}$${spec.spec}`;
+      const fragment = (pad3 > 0 ? `%${pad3}c` : "") + `%${arg}$${spec.spec}`;
       formatString += fragment;
-      runningCount += pad2;
+      runningCount += pad3;
       const written = runningCount % spec.mod;
       if (written !== entry.chunkVal) {
         throw new Error(`Internal error: chunk ${i} would write 0x${written.toString(16)}, expected 0x${entry.chunkVal.toString(16)}.`);
@@ -14264,8 +14277,8 @@ var osed_bundle = (() => {
     return chars.join("");
   }
   function toDmlAddress(address, command2) {
-    const hex3 = `0x${address.toString(16).toUpperCase()}`;
-    return `<link cmd="${command2} ${hex3}">${hex3}</link>`;
+    const hex4 = `0x${address.toString(16).toUpperCase()}`;
+    return `<link cmd="${command2} ${hex4}">${hex4}</link>`;
   }
   function toDmlModule(name) {
     var _a;
@@ -14822,8 +14835,8 @@ var osed_bundle = (() => {
     const text = value.trim().replace(/`/g, "");
     if (/^-?0x[0-9a-f]+$/i.test(text)) {
       const negative = text.startsWith("-");
-      const hex3 = negative ? text.slice(3) : text.slice(2);
-      const parsed = BigInt(`0x${hex3}`);
+      const hex4 = negative ? text.slice(3) : text.slice(2);
+      const parsed = BigInt(`0x${hex4}`);
       return negative ? -parsed : parsed;
     }
     if (/^-?[0-9]+$/.test(text)) {
@@ -14844,7 +14857,7 @@ var osed_bundle = (() => {
     const signed = (unsigned & signBit) !== BigInt(0) ? unsigned - modulus : unsigned;
     const width = bits / 4;
     const byteCount = bits / 8;
-    const hex3 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
+    const hex4 = `0x${unsigned.toString(16).toUpperCase().padStart(width, "0")}`;
     const littleEndianBytes = [];
     for (let i = 0; i < byteCount; i += 1) {
       const byte = Number(unsigned >> BigInt(i * 8) & BigInt(255));
@@ -14853,11 +14866,11 @@ var osed_bundle = (() => {
     return {
       input: typeof rawValue === "string" ? rawValue : value.toString(),
       bits,
-      hex: hex3,
+      hex: hex4,
       unsigned: unsigned.toString(),
       signed: signed.toString(),
       littleEndianBytes: littleEndianBytes.join(" "),
-      twosComplement: hex3
+      twosComplement: hex4
     };
   }
 
@@ -14914,10 +14927,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T02:23:06.570Z" : globalThis[key2];
+        value = true ? "2026-11-03T03:19:26.121Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "e3d8d410b572" : globalThis[key2];
+        value = true ? "81844931766a" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16008,12 +16021,124 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/rop/corpus_report.ts
+  function normalizedIdentity(value) {
+    return (value != null ? value : "?").replace(/\\/g, "/").split("/").pop().toLowerCase();
+  }
+  function capabilityLabel(capabilities) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    const loads = [...new Set(capabilities.filter((cap) => cap.kind === "LOAD_REGISTER" && cap.register).map((cap) => cap.register.toUpperCase()))];
+    if (loads.length > 0) return "LOAD(" + loads.join(",") + ")";
+    const pivot = capabilities.find((cap) => cap.kind === "STACK_PIVOT");
+    if (pivot) {
+      const register2 = (_a = pivot.evidence.join(" ").match(/\b(?:xchg|mov)\s+esp\s*,\s*([a-z]{3})\b/i)) == null ? void 0 : _a[1];
+      return "PIVOT(" + ((_b = register2 == null ? void 0 : register2.toUpperCase()) != null ? _b : "?") + ")";
+    }
+    const jump = capabilities.find((cap) => cap.kind === "DISPATCH_JMP_REGISTER");
+    if (jump) return "JMP(" + ((_d = (_c = jump.register) == null ? void 0 : _c.toUpperCase()) != null ? _d : "?") + ")";
+    const write2 = capabilities.find((cap) => cap.kind === "MEMORY_WRITE");
+    if (write2) return "WRITE(" + ((_f = (_e = write2.register) == null ? void 0 : _e.toUpperCase()) != null ? _f : "?") + ")";
+    if (capabilities.some((cap) => cap.kind === "STACK_ADJUST")) return "ADJUST(ESP)";
+    return (_h = (_g = capabilities[0]) == null ? void 0 : _g.kind) != null ? _h : "?";
+  }
+  function espDelta(gadget) {
+    if (gadget.categories.includes("STACK_PIVOT")) return "DYN";
+    const field = gadget.semanticSummary.summary.stackDelta;
+    if (field.values.unknown || field.values.conservative.size > 0 || field.values.exact.size !== 1) return "?";
+    const value = [...field.values.exact][0];
+    return value > 0 ? "+" + value : String(value);
+  }
+  function hex3(value, width) {
+    return "0x" + value.toString(16).toUpperCase().padStart(width, "0");
+  }
+  function pad2(value, width) {
+    return value + " ".repeat(Math.max(0, width - value.length));
+  }
+  function validationLabel(validation) {
+    return validation === "sampled" ? "SAMPLED" : validation === "unverified" ? "UNVERIFIED" : "?";
+  }
+  function originLabel(origin) {
+    return origin === "live" ? "LIVE" : origin === "imported" ? "IMPORTED" : "RP++";
+  }
+  function formatCorpusReport(index, options) {
+    var _a, _b, _c;
+    const addressWidth = options.pointerSize * 2;
+    const moduleMetadata = new Map(((_a = options.modules) != null ? _a : []).map((module) => [normalizedIdentity(module.name), module]));
+    const groups = /* @__PURE__ */ new Map();
+    for (const gadget of index.gadgets) {
+      gadget.locations.forEach((location, locationIndex) => {
+        var _a2;
+        const key2 = normalizedIdentity(location.module);
+        const group = (_a2 = groups.get(key2)) != null ? _a2 : [];
+        group.push({ gadget, locationIndex });
+        groups.set(key2, group);
+      });
+    }
+    const badchars = options.badchars === void 0 ? "?" : options.badchars.length === 0 ? "none" : options.badchars.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    const lines = [
+      "=== OSED ROP CORPUS ===",
+      "Architecture: " + (options.pointerSize === 4 ? "x86" : "x64"),
+      "Corpus: " + originLabel(options.origin) + " | Validation: " + validationLabel(options.validation),
+      "Gadgets: " + [...groups.values()].reduce((total, group) => total + group.length, 0) + " | Modules: " + groups.size,
+      "Badchars: " + badchars
+    ];
+    if (groups.size === 0) {
+      lines.push("", "No gadgets in corpus.");
+      return lines.join("\n");
+    }
+    for (const [identity, entries] of [...groups.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
+      const metadata = moduleMetadata.get(identity);
+      const moduleName = (_c = (_b = metadata == null ? void 0 : metadata.name) != null ? _b : entries[0].gadget.locations[entries[0].locationIndex].module) != null ? _c : "?";
+      const rows = entries.map(({ gadget, locationIndex }) => {
+        const location = gadget.locations[locationIndex];
+        const va = location.virtualAddress === void 0 ? void 0 : BigInt(location.virtualAddress);
+        return {
+          va,
+          rva: va === void 0 || (metadata == null ? void 0 : metadata.base) === void 0 ? void 0 : va - metadata.base,
+          instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+          capability: capabilityLabel(gadget.capabilities),
+          esp: espDelta(gadget)
+        };
+      }).sort((left, right) => {
+        var _a2, _b2, _c2, _d, _e, _f, _g, _h;
+        return ((_b2 = (_a2 = left.rva) != null ? _a2 : left.va) != null ? _b2 : BigInt(-1)) < ((_d = (_c2 = right.rva) != null ? _c2 : right.va) != null ? _d : BigInt(-1)) ? -1 : ((_f = (_e = left.rva) != null ? _e : left.va) != null ? _f : BigInt(-1)) > ((_h = (_g = right.rva) != null ? _g : right.va) != null ? _h : BigInt(-1)) ? 1 : left.instructions < right.instructions ? -1 : left.instructions > right.instructions ? 1 : 0;
+      });
+      const rendered = rows.map((row) => ({
+        va: row.va === void 0 ? "?" : hex3(row.va, addressWidth),
+        rva: row.rva === void 0 ? "?" : "+" + row.rva.toString(16).toUpperCase().padStart(Math.max(1, addressWidth - 2), "0"),
+        instructions: row.instructions,
+        capability: row.capability,
+        esp: row.esp
+      }));
+      const widths = {
+        va: Math.max(2, ...rendered.map((row) => row.va.length)),
+        rva: Math.max(3, ...rendered.map((row) => row.rva.length)),
+        instructions: Math.max(12, ...rendered.map((row) => row.instructions.length)),
+        capability: Math.max(10, ...rendered.map((row) => row.capability.length)),
+        esp: Math.max(3, ...rendered.map((row) => row.esp.length))
+      };
+      lines.push(
+        "",
+        "MODULE: " + moduleName,
+        "Base: " + ((metadata == null ? void 0 : metadata.base) === void 0 ? "?" : hex3(metadata.base, addressWidth)) + " | ASLR: " + ((metadata == null ? void 0 : metadata.aslr) === "enabled" ? "ON" : (metadata == null ? void 0 : metadata.aslr) === "disabled" ? "OFF" : "?") + " | Gadgets: " + rendered.length,
+        "",
+        pad2("VA", widths.va) + "  " + pad2("RVA", widths.rva) + "  " + pad2("INSTRUCTIONS", widths.instructions) + "  " + pad2("CAPABILITY", widths.capability) + "  ESP",
+        "-".repeat(widths.va) + "  " + "-".repeat(widths.rva) + "  " + "-".repeat(widths.instructions) + "  " + "-".repeat(widths.capability) + "  " + "-".repeat(widths.esp),
+        ...rendered.map((row) => pad2(row.va, widths.va) + "  " + pad2(row.rva, widths.rva) + "  " + pad2(row.instructions, widths.instructions) + "  " + pad2(row.capability, widths.capability) + "  " + row.esp)
+      );
+    }
+    return lines.join("\n");
+  }
+
   // src/index.ts
   var registry = new CommandRegistry();
   var osed = {};
   var lastResult;
   var currentRopCorpus;
   var pendingImportedCorpus;
+  var corpusOrigin = "rpplus";
+  var corpusValidation = "unknown";
+  var corpusBadchars;
   var corpusGeneration = 0;
   var nextRopPlanId = 1;
   var ropPlans = /* @__PURE__ */ new Map();
@@ -16130,9 +16255,9 @@ var osed_bundle = (() => {
         byByte.set(entry.byte, list);
       }
       const badSummary = [...byByte.entries()].map(([byte, positions]) => {
-        const hex3 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+        const hex4 = `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`;
         const posStr = positions.length === 1 ? `offset ${positions[0]}` : positions.length === positions[positions.length - 1] - positions[0] + 1 ? `offsets ${positions[0]}-${positions[positions.length - 1]}` : `offsets ${positions.join(",")}`;
-        return `${hex3} (${posStr})`;
+        return `${hex4} (${posStr})`;
       }).join(", ");
       return `${mod.name} base ${baseHex} | packed: ${packed} | bad bytes: ${badSummary}. No usable gadget addresses.`;
     } catch (e) {
@@ -16147,12 +16272,21 @@ var osed_bundle = (() => {
   function resetCorpusModules() {
     corpusModules = [];
   }
-  function moduleBaseByName(name) {
+  function corpusReportModules() {
+    return corpusModules.map((module) => {
+      var _a;
+      return {
+        name: module.name,
+        base: module.base,
+        aslr: (_a = module.aslr) != null ? _a : "unknown"
+      };
+    });
+  }
+  function moduleInfoByName(name) {
     var _a;
     if (!name || name === "<all>") return void 0;
     const matches = listModulesWithMitigations(name);
-    const exact = (_a = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a : matches[0];
-    return exact == null ? void 0 : exact.base;
+    return (_a = matches.find((m) => m.name.toLowerCase() === name.toLowerCase())) != null ? _a : matches[0];
   }
   function buildStableAddressPredicate() {
     const relocated = [];
@@ -16409,6 +16543,9 @@ var osed_bundle = (() => {
     };
     const scanCorpus = (text, options = {}, badchars) => {
       pendingImportedCorpus = void 0;
+      corpusOrigin = "rpplus";
+      corpusValidation = "unknown";
+      corpusBadchars = badchars ? [...badchars] : [];
       invalidateCorpusPlans();
       resetCorpusModules();
       const raw = buildCapabilityIndexFromRpPlusText(text, options);
@@ -16446,6 +16583,9 @@ var osed_bundle = (() => {
     const scanLiveCorpus = (modules, options, append) => {
       var _a;
       pendingImportedCorpus = void 0;
+      corpusOrigin = "live";
+      corpusValidation = "sampled";
+      corpusBadchars = Array.isArray(options.badchars) ? [...options.badchars] : [];
       const discoveries = modules.map((module) => discoverLiveGadgets(__spreadProps(__spreadValues({}, options), { module })));
       const discoveredIndexes = discoveries.map((discovery) => buildCapabilityIndexFromSequences(sequencesFromLiveHits(discovery.hits)));
       invalidateCorpusPlans();
@@ -16480,7 +16620,8 @@ var osed_bundle = (() => {
           if (reason) warnings.push(reason);
         }
         const modName = mod != null ? mod : "<all>";
-        const base = moduleBaseByName(modName);
+        const moduleInfo = moduleInfoByName(modName);
+        const base = moduleInfo == null ? void 0 : moduleInfo.base;
         const existing = corpusModules.find((m) => m.name === modName);
         if (existing) {
           existing.accepted = accepted;
@@ -16488,6 +16629,7 @@ var osed_bundle = (() => {
           existing.usable = accepted > 0;
           existing.reason = reason;
           existing.base = base;
+          existing.aslr = moduleInfo == null ? void 0 : moduleInfo.aslr;
         } else {
           corpusModules.push({
             name: modName,
@@ -16495,7 +16637,8 @@ var osed_bundle = (() => {
             rejected,
             usable: accepted > 0,
             reason,
-            base
+            base,
+            aslr: moduleInfo == null ? void 0 : moduleInfo.aslr
           });
         }
       }
@@ -16620,6 +16763,43 @@ var osed_bundle = (() => {
       setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
       return toDxResult("ROP Corpus Export", rows);
     };
+    const executeCorpusReport = (...args) => {
+      const path = typeof args[0] === "string" ? args[0] : void 0;
+      const index = currentRopCorpus != null ? currentRopCorpus : pendingImportedCorpus == null ? void 0 : pendingImportedCorpus.index;
+      if (!index) {
+        const message = "No ROP corpus is available. Run rop.scan(...) or rop.scan_live(...) first.";
+        setResult({ command: "rop.corpus.report", args: {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Report", [{ Error: message }]);
+      }
+      const importedPending = currentRopCorpus === void 0 && pendingImportedCorpus !== void 0;
+      const modules = importedPending ? pendingImportedCorpus.fingerprint.modules.map((module) => ({ name: module.name, base: BigInt(module.base), aslr: "unknown" })) : corpusReportModules();
+      const text = formatCorpusReport(index, {
+        pointerSize: getPointerSize(),
+        origin: importedPending ? "imported" : corpusOrigin,
+        validation: importedPending ? "unverified" : corpusValidation,
+        modules,
+        badchars: importedPending ? void 0 : corpusBadchars
+      });
+      try {
+        if (path) writeProofText(path, text);
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        setResult({ command: "rop.corpus.report", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Report", [{ Error: "Could not write '" + path + "': " + message }]);
+      }
+      if (!path) print(text);
+      const rows = [{ Status: path ? "written" : "printed", File: path != null ? path : "(console)", Gadgets: index.gadgets.length.toString() }];
+      if (path) renderRows("ROP Corpus Report", rows);
+      setResult({
+        command: "rop.corpus.report",
+        args: path ? { path } : {},
+        success: true,
+        findings: rows,
+        warnings: importedPending ? ["Imported corpus addresses are unverified."] : [],
+        errors: []
+      });
+      return toDxResult("ROP Corpus Report", rows);
+    };
     const executeCorpusImport = (...args) => {
       const path = typeof args[0] === "string" ? args[0] : void 0;
       if (!path) {
@@ -16630,6 +16810,9 @@ var osed_bundle = (() => {
       try {
         pendingImportedCorpus = importCorpus(readText(path));
         currentRopCorpus = void 0;
+        corpusOrigin = "imported";
+        corpusValidation = "unverified";
+        corpusBadchars = void 0;
         invalidateCorpusPlans();
         resetCorpusModules();
         const rows = [{ Status: "stale-imported", File: path, Gadgets: pendingImportedCorpus.index.gadgets.length.toString() }];
@@ -16657,6 +16840,9 @@ var osed_bundle = (() => {
       }
       currentRopCorpus = pendingImportedCorpus.index;
       pendingImportedCorpus = void 0;
+      corpusOrigin = "imported";
+      corpusValidation = "sampled";
+      corpusBadchars = void 0;
       invalidateCorpusPlans();
       const rows = [{ Status: "validated", Detail: "module mappings and sampled gadget bytes match" }];
       renderRows("ROP Corpus Validate", rows);
@@ -18395,6 +18581,7 @@ var osed_bundle = (() => {
       scan_live: executeRopScanLive,
       corpus: {
         export: executeCorpusExport,
+        report: executeCorpusReport,
         import: executeCorpusImport,
         validate: executeCorpusValidate
       },

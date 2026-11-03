@@ -126,7 +126,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.scan(\"0x1000: pop eax ; ret ;\")",
       'dx @$osed().rop.scan(rpOutput, "00 0A 0D")',
     ],
-    seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"],
+    seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.report", "rop.corpus.export"],
   },
   {
     name: "rop.scan_live",
@@ -273,7 +273,20 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.corpus.export()                              // print JSON to the console",
     ],
     details: "Saves the gadgets you scanned this session so you don't have to re-scan next time. Scanning a large target is slow; export once, then rop.corpus.import it in a later session. The JSON also records a fingerprint (module bases + sampled gadget bytes) so a reloaded corpus can be checked against live memory before you trust its addresses. Run this after rop.scan / rop.scan_live has populated the corpus.",
-    seeAlso: ["rop.scan_live", "rop.corpus.import", "rop.corpus.validate"],
+    seeAlso: ["rop.scan_live", "rop.corpus.report", "rop.corpus.import", "rop.corpus.validate"],
+  },
+  {
+    name: "rop.corpus.report",
+    summary: "Write or print a human-readable gadget inventory.",
+    description: "Formats the current ROP corpus as a deterministic one-line-per-gadget report. It is for visual gadget review; rop.corpus.export remains the lossless JSON archive.",
+    usage: "dx @$osed().rop.corpus.report(path?)",
+    examples: [
+      "dx @$osed().rop.corpus.report()",
+      'dx @$osed().rop.corpus.report("C:\\\\notes\\\\rop-gadgets.txt")',
+    ],
+    prerequisites: ["Run rop.scan(...) or rop.scan_live(...) first. Imported corpora are marked unverified until validation."],
+    limitations: ["The report performs no additional gadget scanning. Unknown module metadata and semantic facts are rendered as ?."],
+    seeAlso: ["rop.scan_live", "rop.capabilities", "rop.corpus.export"],
   },
   {
     name: "rop.corpus.import",

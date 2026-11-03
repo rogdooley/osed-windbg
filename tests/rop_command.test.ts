@@ -352,6 +352,49 @@ describe("rop_suggest command", () => {
     expect(new TextDecoder().decode(new Uint8Array(writes))).toContain("\"version\"");
   });
 
+  test("corpus report writes the readable inventory and surfaces file failures", () => {
+    const writes: number[] = [];
+    (globalThis as unknown as { host: unknown }).host = {
+      diagnostics: { debugLog: () => undefined },
+      currentProcess: { Is64Bit: false, Modules: [] },
+      namespace: {
+        Debugger: {
+          Utility: {
+            FileSystem: {
+              CreateFile: () => ({
+                WriteBytes: (bytes: Iterable<number>) => writes.push(...bytes),
+                Close: () => undefined,
+              }),
+            },
+          },
+        },
+      },
+    };
+    initializeScript();
+    const api = (globalThis as unknown as {
+      osed: {
+        rop: {
+          scan: (text: string) => unknown;
+          corpus: { report: (path: string) => unknown };
+        };
+        last_result: () => { success: boolean; errors: string[] };
+      };
+    }).osed;
+
+    api.rop.scan("0x00401000: pop eax ; ret ;");
+    api.rop.corpus.report("C:\\temp\\gadgets.txt");
+    expect(api.last_result().success).toBe(true);
+    expect(new TextDecoder().decode(new Uint8Array(writes))).toContain("=== OSED ROP CORPUS ===");
+
+    (globalThis as unknown as {
+      host: { namespace: { Debugger: { Utility: { FileSystem: { CreateFile: () => unknown } } } } };
+    }).host.namespace.Debugger.Utility.FileSystem.CreateFile = () => {
+      throw new Error("access denied");
+    };
+    api.rop.corpus.report("C:\\temp\\gadgets.txt");
+    expect(api.last_result()).toMatchObject({ success: false, errors: ["access denied"] });
+  });
+
   test("find_stack_bytes finds live stack hits without searching heap memory", () => {
     const stackPointer = BigInt("0x12ff00");
     const stackBase = BigInt("0x130000");
