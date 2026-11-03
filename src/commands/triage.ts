@@ -359,6 +359,8 @@ function renderStrategyAssessment(
   landingEvidence: LandingEvidence,
   stackExecutable: boolean | null,
   depEnforced: boolean | null,
+  modules: ScoredModule[],
+  patternOffset?: { kind: "msf" | "cyclic"; offset: number },
 ): { evidence: ExploitEvidence; recommendations: StrategyRecommendation[] } {
   const evidence: ExploitEvidence = {
     instructionPointerControlled: strategyEvidence(ipControlled, ipControlled ? "pattern match or crash state" : "crash state"),
@@ -371,11 +373,17 @@ function renderStrategyAssessment(
   };
   const recommendations = adviseExploitStrategy(evidence);
   out.section("EXPLOIT STRATEGY");
-  out.print(`CONTROL: ${ipControlled ? (pointerSize === 8 ? "RIP controlled" : "EIP controlled") : "not demonstrated"} [${evidence.instructionPointerControlled.source}]`);
+  const controlSource = patternOffset ? `${patternOffset.kind.toUpperCase()} pattern, offset ${patternOffset.offset}` : evidence.instructionPointerControlled.source;
+  out.print(`CONTROL: ${ipControlled ? (pointerSize === 8 ? "RIP controlled" : "EIP controlled") : "not demonstrated"} [${controlSource}]`);
   if (landingEvidence.address !== undefined) out.print(`Landing: ${out.formatAddress(landingEvidence.address, pointerSize)}`);
   out.print(`Access: ${stackExecutable === true ? "executable" : stackExecutable === false ? "non-executable" : "unknown"} [${evidence.landingRegionExecutable.source}]`);
   const primary = recommendations[0];
   out.print(`Assessment: ${primary.rationale}`);
+  const stableModules = modules.filter((module) => module.aslr === "disabled" && !module.system);
+  out.print("ROP SOURCES:");
+  out.print(`  Non-ASLR application modules: ${stableModules.length}`);
+  out.print("  Gadget corpus: not evaluated");
+  out.print("  ROP feasibility: unknown");
   const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
   if (next.length > 0) {
     out.print("NEXT:");
@@ -533,7 +541,7 @@ export function createTriageCommand(): Command {
       else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
       if (seh.warning) warnings.push(seh.warning);
 
-      const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, stackProt?.executable ?? null, stackProt?.depEnforced ?? null);
+      const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, stackProt?.executable ?? null, stackProt?.depEnforced ?? null, modules, patternOffset);
 
       const findings = [
         {

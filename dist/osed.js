@@ -1583,10 +1583,10 @@ var osed_bundle = (() => {
         });
       } else {
         recommendations.push({
-          strategy: "Investigate execution-permission alternatives",
+          strategy: "Investigate executable landing regions",
           rationale: "The current landing region is observed non-executable; direct execution there would violate its protection.",
           confidence: "observed",
-          nextCommands: ["memory", "landing", "code_caves"]
+          nextCommands: ["code_caves"]
         });
         recommendations.push({
           strategy: "Evaluate protection-changing techniques",
@@ -1881,7 +1881,7 @@ var osed_bundle = (() => {
   function strategyEvidence(value, source) {
     return { value, source, observedAt: Date.now() };
   }
-  function renderStrategyAssessment(pointerSize, ipControlled, landingEvidence, stackExecutable, depEnforced) {
+  function renderStrategyAssessment(pointerSize, ipControlled, landingEvidence, stackExecutable, depEnforced, modules, patternOffset) {
     var _a;
     const evidence = {
       instructionPointerControlled: strategyEvidence(ipControlled, ipControlled ? "pattern match or crash state" : "crash state"),
@@ -1894,11 +1894,17 @@ var osed_bundle = (() => {
     };
     const recommendations = adviseExploitStrategy(evidence);
     section("EXPLOIT STRATEGY");
-    print(`CONTROL: ${ipControlled ? pointerSize === 8 ? "RIP controlled" : "EIP controlled" : "not demonstrated"} [${evidence.instructionPointerControlled.source}]`);
+    const controlSource = patternOffset ? `${patternOffset.kind.toUpperCase()} pattern, offset ${patternOffset.offset}` : evidence.instructionPointerControlled.source;
+    print(`CONTROL: ${ipControlled ? pointerSize === 8 ? "RIP controlled" : "EIP controlled" : "not demonstrated"} [${controlSource}]`);
     if (landingEvidence.address !== void 0) print(`Landing: ${formatAddress(landingEvidence.address, pointerSize)}`);
     print(`Access: ${stackExecutable === true ? "executable" : stackExecutable === false ? "non-executable" : "unknown"} [${evidence.landingRegionExecutable.source}]`);
     const primary = recommendations[0];
     print(`Assessment: ${primary.rationale}`);
+    const stableModules = modules.filter((module) => module.aslr === "disabled" && !module.system);
+    print("ROP SOURCES:");
+    print(`  Non-ASLR application modules: ${stableModules.length}`);
+    print("  Gadget corpus: not evaluated");
+    print("  ROP feasibility: unknown");
     const next = [...new Set(recommendations.flatMap((item) => item.nextCommands))].slice(0, 3);
     if (next.length > 0) {
       print("NEXT:");
@@ -2038,7 +2044,7 @@ var osed_bundle = (() => {
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
         if (seh.warning) warnings.push(seh.warning);
-        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_f = stackProt == null ? void 0 : stackProt.executable) != null ? _f : null, (_g = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _g : null);
+        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_f = stackProt == null ? void 0 : stackProt.executable) != null ? _f : null, (_g = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _g : null, modules, patternOffset);
         const findings = [
           {
             control: {
@@ -14895,10 +14901,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T01:34:02.523Z" : globalThis[key2];
+        value = true ? "2026-11-03T01:34:55.281Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "5d72c907e315" : globalThis[key2];
+        value = true ? "11589f8b2230" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
