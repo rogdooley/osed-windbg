@@ -414,9 +414,9 @@ describe("rop_suggest command", () => {
     api.rop.scan("0x00401000: pop ebp ; ret ;");
     api.rop.corpus.report();
 
-    const report = logs.find((line) => line.includes("=== OSED ROP CORPUS ==="));
-    expect(report).toBeDefined();
-    expect(report).toMatch(/pop ebp ; ret\s+LOAD\(EBP\)\s+\+8\n\n$/);
+    const finalGadgetLine = logs.find((line) => /pop ebp ; ret\s+LOAD\(EBP\)\s+\+8\n$/.test(line));
+    expect(finalGadgetLine).toBeDefined();
+    expect(logs.at(-1)).toBe("\n");
   });
 
   test("find_stack_bytes finds live stack hits without searching heap memory", () => {

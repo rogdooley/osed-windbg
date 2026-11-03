@@ -832,10 +832,13 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.corpus.report", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
       return toDxResult("ROP Corpus Report", [{ Error: "Could not write '" + path + "': " + message }]);
     }
-    // Leave a blank debugger-console line before dx renders this command's
-    // result object; a single debugLog newline can otherwise be coalesced
-    // with the returned DxResult on the final gadget row.
-    if (!path) out.print(text + "\n");
+    // WinDbg can coalesce the last line of one multiline debugLog call with
+    // the DxResult that follows. Emit each report line independently, then a
+    // blank line, so the final gadget row is complete before dx renders.
+    if (!path) {
+      for (const line of text.split("\n")) out.print(line);
+      out.print("");
+    }
     const rows = [{ Status: path ? "written" : "printed", File: path ?? "(console)", Gadgets: index.gadgets.length.toString() }];
     if (path) renderRows("ROP Corpus Report", rows);
     setResult({
