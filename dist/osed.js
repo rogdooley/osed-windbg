@@ -882,6 +882,23 @@ var osed_bundle = (() => {
     };
   }
 
+  // src/analysis/pattern_evidence.ts
+  function analyzePatternEvidence(address, bytes, maxWindow = 32) {
+    const text = String.fromCharCode(...bytes);
+    for (const candidate of [
+      { family: "msf", value: generateMsfPattern(20280) },
+      { family: "cyclic", value: generateCyclicPattern(2e4) }
+    ]) {
+      for (let length = Math.min(bytes.length, maxWindow); length >= 8; length -= 1) {
+        for (let offset = 0; offset <= text.length - length; offset += 1) {
+          const patternOffset = candidate.value.indexOf(text.slice(offset, offset + length));
+          if (patternOffset >= 0) return { address: address + BigInt(offset), patternFamily: candidate.family, matched: true, matchLength: length, patternOffset, confidence: 0.9, source: "sampled-memory" };
+        }
+      }
+    }
+    return { address, patternFamily: null, matched: false, matchLength: 0, patternOffset: null, confidence: 0, source: "sampled-memory" };
+  }
+
   // src/analysis/memory.ts
   var PAGE_NOACCESS = 1;
   var PAGE_READONLY = 2;
@@ -1026,8 +1043,7 @@ var osed_bundle = (() => {
     "cyclic_pattern_match",
     "payload_like_bytes",
     "known_payload_prefix",
-    "executable_region",
-    "disassembly_succeeded"
+    "executable_region"
   ]);
   function formatAddressValue2(value) {
     return `0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
@@ -1079,23 +1095,6 @@ var osed_bundle = (() => {
     }
     return runs;
   }
-  function findPattern(bytes) {
-    if (bytes.length < 8) return void 0;
-    const text = String.fromCharCode(...bytes);
-    const candidates2 = [
-      { kind: "msf", value: generateMsfPattern(20280) },
-      { kind: "cyclic", value: generateCyclicPattern(2e4) }
-    ];
-    for (const candidate of candidates2) {
-      const length = Math.min(text.length, 32);
-      for (let window = length; window >= 8; window -= 1) {
-        for (let offset = 0; offset <= text.length - window; offset += 1) {
-          if (candidate.value.includes(text.slice(offset, offset + window))) return { kind: candidate.kind, offset, length: window };
-        }
-      }
-    }
-    return void 0;
-  }
   function analyzeLandingBytes(address, bytes, memory, requestedBytes = bytes.length, disassemblySucceeded = null) {
     const observations = [];
     const runs = repeatedRuns(bytes);
@@ -1108,8 +1107,8 @@ var osed_bundle = (() => {
         observations.push(observation("repeated_byte_run", 0.45, address, run.offset, run.length, { byte: run.byte }));
       }
     }
-    const pattern = findPattern(bytes);
-    if (pattern) observations.push(observation("cyclic_pattern_match", 0.9, address, pattern.offset, pattern.length, { pattern: pattern.kind }));
+    const patternEvidence = analyzePatternEvidence(address, bytes);
+    if (patternEvidence.matched) observations.push(observation("cyclic_pattern_match", patternEvidence.confidence, address, Number(patternEvidence.address - address), patternEvidence.matchLength, { pattern: patternEvidence.patternFamily, patternOffset: patternEvidence.patternOffset }));
     for (let offset = 0; offset <= bytes.length - 32; offset += 4) {
       const window = bytes.slice(offset, offset + 32);
       let zeroes = 0;
@@ -1138,7 +1137,7 @@ var osed_bundle = (() => {
     const positive = observations.filter((item) => POSITIVE_OBSERVATION_KINDS.has(item.kind));
     const confidence = calculateLandingConfidence(observations);
     const recommendation = memory.executable === false ? "Execution from this page will fault; redirect to executable memory or change the staging strategy." : bytes.length === 0 ? "The landing bytes are inaccessible; verify the address and debugger context." : positive.length > 0 ? "The address has payload-like evidence; validate control flow and the complete byte sequence." : "No strong landing signal was found in the sampled bytes.";
-    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation };
+    return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation, patternEvidence };
   }
   function stackPointer() {
     var _a, _b, _c;
@@ -1928,7 +1927,7 @@ var osed_bundle = (() => {
         stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const pointerSize = getPointerSize();
         const regs = readRegisters(pointerSize);
         const patternLength = options.patternLength;
@@ -1977,7 +1976,8 @@ var osed_bundle = (() => {
         section("STACK");
         print(`${(_b = regs.spName) != null ? _b : "SP"}: ${regs.sp !== void 0 ? formatAddress(regs.sp, pointerSize) : "n/a"}`);
         print(`Bad stack pointer: ${badSp}`);
-        print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? findOffset(regs.sp, patternLength) ? "yes" : "no" : "unknown"}`);
+        const stackPattern = landingEvidence.patternEvidence;
+        print(`SP pattern observation: ${(stackPattern == null ? void 0 : stackPattern.matched) ? `${(_c = stackPattern.patternFamily) == null ? void 0 : _c.toUpperCase()} (${stackPattern.matchLength} sampled bytes)` : stackBytes ? "none" : "unknown"}`);
         if (stackProt) {
           print(`Stack protect: ${stackProt.name}`);
           print(`DEP enforced: ${stackProt.depEnforced ? "yes" : "no"}`);
@@ -2006,7 +2006,7 @@ var osed_bundle = (() => {
         for (const line of gadgets.pivots) print(`  ${line}`);
         section("CONTEXT");
         print(`Exception code: ${regs.exceptionCode !== void 0 ? formatAddress(regs.exceptionCode, 4) : "n/a"}`);
-        print(`${(_c = regs.ipName) != null ? _c : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
+        print(`${(_d = regs.ipName) != null ? _d : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
         section("MODULE SCORE");
         table(
           [
@@ -2039,12 +2039,12 @@ var osed_bundle = (() => {
         );
         print("No bad characters confirmed by this scan; compare transmitted and received bytes.");
         const warnings = [];
-        warnings.push(...(_e = (_d = landingEvidence.memory) == null ? void 0 : _d.warnings) != null ? _e : []);
+        warnings.push(...(_f = (_e = landingEvidence.memory) == null ? void 0 : _e.warnings) != null ? _f : []);
         if (landingEvidence.address === void 0) warnings.push(landingEvidence.recommendation);
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
         if (seh.warning) warnings.push(seh.warning);
-        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_f = stackProt == null ? void 0 : stackProt.executable) != null ? _f : null, (_g = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _g : null, modules, patternOffset);
+        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_g = stackProt == null ? void 0 : stackProt.executable) != null ? _g : null, (_h = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _h : null, modules, patternOffset);
         const findings = [
           {
             control: {
@@ -14901,10 +14901,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T01:34:55.281Z" : globalThis[key2];
+        value = true ? "2026-11-03T01:41:23.561Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "11589f8b2230" : globalThis[key2];
+        value = true ? "0080a4b9e71e" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15370,7 +15370,7 @@ var osed_bundle = (() => {
       return {};
     }
   }
-  function findPattern2(buffer, pattern, maxResults) {
+  function findPattern(buffer, pattern, maxResults) {
     const hits = [];
     if (pattern.length === 0 || buffer.length < pattern.length) {
       return hits;
@@ -15437,7 +15437,7 @@ var osed_bundle = (() => {
         }
         const buffer = readMemory(regs.sp, searchBytes);
         const pattern = Uint8Array.from(bytes);
-        const offsets = findPattern2(buffer, pattern, options.maxResults);
+        const offsets = findPattern(buffer, pattern, options.maxResults);
         section("Find Stack Bytes");
         info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a = regs.spName) != null ? _a : "sp").toUpperCase()})`);
         if (bounds.base !== void 0) {
@@ -15479,7 +15479,7 @@ var osed_bundle = (() => {
   }
 
   // src/commands/find_mem_bytes.ts
-  function findPattern3(buffer, pattern, maxResults) {
+  function findPattern2(buffer, pattern, maxResults) {
     const hits = [];
     if (pattern.length === 0 || buffer.length < pattern.length) {
       return hits;
@@ -15551,7 +15551,7 @@ var osed_bundle = (() => {
       combined.set(previousTail, 0);
       combined.set(chunk, previousTail.length);
       const combinedBase = previousTailStart;
-      const offsets = findPattern3(combined, pattern, maxResults - hits.length);
+      const offsets = findPattern2(combined, pattern, maxResults - hits.length);
       for (const matchOffset of offsets) {
         const address = combinedBase + BigInt(matchOffset);
         if (address >= current) {

@@ -1,5 +1,5 @@
 import { getPointerSize, tryReadMemory } from "../core/memory";
-import { generateCyclicPattern, generateMsfPattern } from "../logic/pattern_logic";
+import { analyzePatternEvidence, PatternEvidence } from "./pattern_evidence";
 import { MemoryRegionEvidence, SerializedMemoryRegionEvidence, memoryRegion, serializeMemoryRegionEvidence } from "./memory";
 
 export interface Observation {
@@ -18,6 +18,7 @@ export interface LandingEvidence {
   observations: Observation[];
   confidence: number;
   recommendation: string;
+  patternEvidence?: PatternEvidence;
 }
 
 export interface SerializedObservation {
@@ -45,7 +46,6 @@ const POSITIVE_OBSERVATION_KINDS = new Set([
   "payload_like_bytes",
   "known_payload_prefix",
   "executable_region",
-  "disassembly_succeeded",
 ]);
 
 function stableDetails(value: unknown): string {
@@ -129,24 +129,6 @@ function repeatedRuns(bytes: Uint8Array, minimum = 4): Array<{ byte: number; off
   return runs;
 }
 
-function findPattern(bytes: Uint8Array): { kind: string; offset: number; length: number } | undefined {
-  if (bytes.length < 8) return undefined;
-  const text = String.fromCharCode(...bytes);
-  const candidates = [
-    { kind: "msf", value: generateMsfPattern(20280) },
-    { kind: "cyclic", value: generateCyclicPattern(20000) },
-  ];
-  for (const candidate of candidates) {
-    const length = Math.min(text.length, 32);
-    for (let window = length; window >= 8; window -= 1) {
-      for (let offset = 0; offset <= text.length - window; offset += 1) {
-        if (candidate.value.includes(text.slice(offset, offset + window))) return { kind: candidate.kind, offset, length: window };
-      }
-    }
-  }
-  return undefined;
-}
-
 export function analyzeLandingBytes(address: bigint, bytes: Uint8Array, memory: MemoryRegionEvidence, requestedBytes = bytes.length, disassemblySucceeded: boolean | null = null): LandingEvidence {
   const observations: Observation[] = [];
   const runs = repeatedRuns(bytes);
@@ -160,8 +142,8 @@ export function analyzeLandingBytes(address: bigint, bytes: Uint8Array, memory: 
     }
   }
 
-  const pattern = findPattern(bytes);
-  if (pattern) observations.push(observation("cyclic_pattern_match", 0.9, address, pattern.offset, pattern.length, { pattern: pattern.kind }));
+  const patternEvidence = analyzePatternEvidence(address, bytes);
+  if (patternEvidence.matched) observations.push(observation("cyclic_pattern_match", patternEvidence.confidence, address, Number(patternEvidence.address - address), patternEvidence.matchLength, { pattern: patternEvidence.patternFamily, patternOffset: patternEvidence.patternOffset }));
 
   // Preserve the legacy triage signal as normalized evidence. This is deliberately
   // observational: low-printability bytes are not classified as shellcode.
@@ -203,7 +185,7 @@ export function analyzeLandingBytes(address: bigint, bytes: Uint8Array, memory: 
         ? "The address has payload-like evidence; validate control flow and the complete byte sequence."
         : "No strong landing signal was found in the sampled bytes.";
 
-  return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation };
+  return { address, memory, bytes: Array.from(bytes), requestedBytes, observations, confidence, recommendation, patternEvidence };
 }
 
 function stackPointer(): bigint | undefined {

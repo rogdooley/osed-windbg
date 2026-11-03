@@ -1,11 +1,21 @@
 import { describe, expect, test } from "vitest";
 import { analyzeLandingBytes, calculateLandingConfidence, observationIdentity, serializeLandingEvidence, type Observation } from "../src/analysis/landing";
 import { normalizeMemoryRegion } from "../src/analysis/memory";
+import { analyzePatternEvidence } from "../src/analysis/pattern_evidence";
+import { generateMsfPattern } from "../src/logic/pattern_logic";
 import { landingDxRows } from "../src/commands/landing";
 
 const address = BigInt("0x12f800");
 
 describe("landing analysis", () => {
+  test("uses the shared pattern evidence contract", () => {
+    const address = BigInt(0x14dd28);
+    const sample = Uint8Array.from([...generateMsfPattern(600).slice(304, 336)].map((value) => value.charCodeAt(0)));
+    const memory = normalizeMemoryRegion(address, { protection: 0x04 });
+    const landing = analyzeLandingBytes(address, sample, memory);
+    expect(landing.patternEvidence).toEqual(analyzePatternEvidence(address, sample));
+    expect(landing.observations.find((item) => item.kind === "cyclic_pattern_match")).toMatchObject({ length: 32, confidence: 0.9 });
+  });
   test("formats observations as debugger-friendly flat rows", () => {
     const memory = normalizeMemoryRegion(address, { protection: 0x04 });
     const evidence = analyzeLandingBytes(address, Uint8Array.from([0x41, 0x41, 0x41, 0x41]), memory);

@@ -468,7 +468,8 @@ export function createTriageCommand(): Command {
       out.section("STACK");
       out.print(`${regs.spName ?? "SP"}: ${regs.sp !== undefined ? out.formatAddress(regs.sp, pointerSize) : "n/a"}`);
       out.print(`Bad stack pointer: ${badSp}`);
-      out.print(`SP points into cyclic pattern: ${stackBytes && regs.sp ? (findOffset(regs.sp, patternLength) ? "yes" : "no") : "unknown"}`);
+      const stackPattern = landingEvidence.patternEvidence;
+      out.print(`SP pattern observation: ${stackPattern?.matched ? `${stackPattern.patternFamily?.toUpperCase()} (${stackPattern.matchLength} sampled bytes)` : stackBytes ? "none" : "unknown"}`);
       if (stackProt) {
         out.print(`Stack protect: ${stackProt.name}`);
         out.print(`DEP enforced: ${stackProt.depEnforced ? "yes" : "no"}`);
