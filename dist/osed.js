@@ -615,40 +615,67 @@ var osed_bundle = (() => {
     }
   }
   function locateExpectedArray(window, expected, minRun = 8) {
-    let best = { offset: -1, matchedRun: 0 };
+    const expectedIndex = /* @__PURE__ */ new Map();
+    for (let i = 0; i < expected.length; i += 1) {
+      expectedIndex.set(expected[i], i);
+    }
     for (let start = 0; start < window.length; start += 1) {
+      const ei = expectedIndex.get(window[start]);
+      if (ei === void 0) continue;
       let run = 0;
-      for (let i = 0; start + i < window.length && i < expected.length; i += 1) {
-        if (window[start + i] !== expected[i]) {
-          break;
-        }
+      for (let i = 0; start + i < window.length && ei + i < expected.length; i += 1) {
+        if (window[start + i] !== expected[ei + i]) break;
         run += 1;
       }
-      if (run > best.matchedRun) {
-        best = { offset: start, matchedRun: run };
+      if (run >= minRun) {
+        return { offset: start, expectedStart: ei, matchedRun: run };
       }
     }
-    return best.matchedRun >= minRun ? best : void 0;
+    for (let start = 0; start < window.length; start += 1) {
+      const ei = expectedIndex.get(window[start]);
+      if (ei === void 0) continue;
+      let e = ei;
+      let o = start;
+      let matched = 0;
+      while (e < expected.length && o < window.length) {
+        if (window[o] === expected[e]) {
+          matched += 1;
+          e += 1;
+          o += 1;
+        } else if (expected[e] < window[o]) {
+          e += 1;
+        } else {
+          break;
+        }
+      }
+      if (matched >= minRun) {
+        return { offset: start, expectedStart: ei, matchedRun: matched };
+      }
+    }
+    return void 0;
   }
   function compareBadchars(observed, expected) {
+    const badChars = [];
     const mismatches = [];
-    let breakOffset;
-    for (let i = 0; i < expected.length && i < observed.length; i += 1) {
-      if (observed[i] !== expected[i]) {
-        mismatches.push({
-          offset: i,
-          expected: expected[i],
-          observed: observed[i]
-        });
-        if (breakOffset === void 0) {
-          breakOffset = i;
-        }
+    let e = 0;
+    let o = 0;
+    while (e < expected.length && o < observed.length) {
+      if (observed[o] === expected[e]) {
+        e += 1;
+        o += 1;
+      } else if (expected[e] < observed[o]) {
+        badChars.push(expected[e]);
+        mismatches.push({ offset: e, expected: expected[e], observed: -1 });
+        e += 1;
+      } else {
+        break;
       }
     }
     return {
+      badChars,
       mismatches,
-      breakOffset,
-      nextExpected: breakOffset === void 0 ? void 0 : expected[breakOffset]
+      survivorCount: o,
+      expectedConsumed: e
     };
   }
 
@@ -2137,32 +2164,33 @@ var osed_bundle = (() => {
         const address = normalizeAddress(options.address);
         const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : []);
         const expected = expectedBytes(normalizedExclude.values);
-        const observed = readMemory(address, expected.length);
+        const observed = readMemory(address, expected.length + 64);
         const compared = compareBadchars(observed, expected);
         const pointerSize = getPointerSize();
         section("Bad Character Analysis");
         info(`Start address: ${formatAddress(address, pointerSize)}`);
-        info(`Exclude count: ${normalizedExclude.values.length}`);
-        if (compared.breakOffset !== void 0 && compared.nextExpected !== void 0) {
-          warn(`Sequence breaks at offset 0x${compared.breakOffset.toString(16).toUpperCase()}.`);
-          warn(`Next expected byte: ${formatHexByte(compared.nextExpected)}`);
-        } else {
-          info("No sequence break detected in sampled byte range.");
+        if (normalizedExclude.values.length > 0) {
+          info(`Known excludes: ${normalizedExclude.values.map((v) => formatHexByte(v)).join(" ")}`);
         }
-        table(
-          [
-            { key: "offset", header: "Offset", width: 8 },
-            { key: "expected", header: "Expected", width: 10 },
-            { key: "observed", header: "Observed", width: 10 }
-          ],
-          compared.mismatches.slice(0, 32).map((mismatch) => ({
-            offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
-            expected: formatHexByte(mismatch.expected),
-            observed: formatHexByte(mismatch.observed)
-          }))
+        if (compared.badChars.length > 0) {
+          warn(`Bad characters found: ${compared.badChars.map((v) => formatHexByte(v)).join(" ")}`);
+        } else if (compared.expectedConsumed >= expected.length) {
+          info("All expected bytes survived \u2014 no bad characters detected.");
+        } else {
+          info("No bad characters detected in the tested range.");
+        }
+        info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
+        if (compared.expectedConsumed < expected.length) {
+          const lastTested = expected[compared.expectedConsumed - 1];
+          const firstUntested = expected[compared.expectedConsumed];
+          warn(
+            `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
+          );
+        }
+        const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
+        info(
+          `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`
         );
-        const excludeList = normalizedExclude.values.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ");
-        info(`Copy-ready exclude list: ${excludeList}`);
         whyItMatters("Accurate badchar profiling prevents payload corruption before shellcode staging.");
         const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
         return result(
@@ -2172,10 +2200,12 @@ var osed_bundle = (() => {
           }),
           [
             {
-              breakOffset: compared.breakOffset,
-              nextExpected: compared.nextExpected,
+              badChars: compared.badChars,
+              survivorCount: compared.survivorCount,
+              expectedConsumed: compared.expectedConsumed,
               mismatches: compared.mismatches,
-              exclude: normalizedExclude.values
+              exclude: normalizedExclude.values,
+              allExclude
             }
           ],
           warnings
@@ -2275,27 +2305,26 @@ var osed_bundle = (() => {
         const observed = window.slice(located.offset);
         const compared = compareBadchars(observed, expected);
         info(`Located at ${formatAddress(landing2, pointerSize)} (anchor + 0x${located.offset.toString(16).toUpperCase()}).`);
-        info(`Clean run before first break: ${located.matchedRun} bytes.`);
-        if (compared.breakOffset !== void 0 && compared.nextExpected !== void 0) {
-          warn(`First corruption at array offset 0x${compared.breakOffset.toString(16).toUpperCase()}: expected ${formatHexByte(compared.nextExpected)}, observed ${formatHexByte(observed[compared.breakOffset])}.`);
-          info("The first break is the high-confidence bad byte; later mismatches may be shift artifacts.");
+        info(`Matched ${located.matchedRun} survivor bytes starting at expected index ${located.expectedStart}.`);
+        if (compared.badChars.length > 0) {
+          warn(`Bad characters found: ${compared.badChars.map((v) => formatHexByte(v)).join(" ")}`);
+        } else if (compared.expectedConsumed >= expected.length) {
+          info("All expected bytes survived \u2014 no bad characters detected.");
         } else {
-          info("No corruption detected across the located array \u2014 no bad characters in this exclude set.");
+          info("No bad characters detected in the tested range.");
         }
-        table(
-          [
-            { key: "offset", header: "Offset", width: 8 },
-            { key: "expected", header: "Expected", width: 10 },
-            { key: "observed", header: "Observed", width: 10 }
-          ],
-          compared.mismatches.slice(0, 32).map((mismatch) => ({
-            offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
-            expected: formatHexByte(mismatch.expected),
-            observed: formatHexByte(mismatch.observed)
-          }))
+        info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
+        if (compared.expectedConsumed < expected.length) {
+          const lastTested = expected[compared.expectedConsumed - 1];
+          const firstUntested = expected[compared.expectedConsumed];
+          warn(
+            `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
+          );
+        }
+        const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
+        info(
+          `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`
         );
-        const suggestedExclude = compared.nextExpected !== void 0 ? [.../* @__PURE__ */ new Set([...normalizedExclude.values, compared.nextExpected])].sort((a, b) => a - b) : normalizedExclude.values;
-        info(`Suggested next exclude: ${suggestedExclude.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
         return result(
           "badchar_find",
           __spreadProps(__spreadValues({}, options), { exclude: normalizedExclude.values }),
@@ -2304,11 +2333,13 @@ var osed_bundle = (() => {
               located: true,
               landingAddress: landing2,
               anchorOffset: located.offset,
-              cleanRun: located.matchedRun,
-              breakOffset: compared.breakOffset,
-              nextExpected: compared.nextExpected,
+              expectedStart: located.expectedStart,
+              matchedRun: located.matchedRun,
+              badChars: compared.badChars,
+              survivorCount: compared.survivorCount,
+              expectedConsumed: compared.expectedConsumed,
               mismatches: compared.mismatches,
-              suggestedExclude,
+              allExclude,
               exclude: normalizedExclude.values
             }
           ],
@@ -14942,10 +14973,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-03T04:57:21.655Z" : globalThis[key2];
+        value = true ? "2026-11-05T03:53:39.389Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "ac006baa69fc" : globalThis[key2];
+        value = true ? "055a7608ede5" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;

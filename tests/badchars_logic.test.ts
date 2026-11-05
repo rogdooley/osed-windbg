@@ -10,12 +10,42 @@ describe("badchars logic", () => {
     expect(values.length).toBe(253);
   });
 
-  test("finds first mismatch and expected next byte", () => {
-    const expected = [0x01, 0x02, 0x03, 0x04];
-    const observed = Uint8Array.from([0x01, 0x02, 0x41, 0x04]);
+  test("detects dropped bytes as bad characters", () => {
+    const expected = [0x01, 0x02, 0x03, 0x04, 0x05];
+    const observed = Uint8Array.from([0x01, 0x02, 0x04, 0x05]);
     const result = compareBadchars(observed, expected);
-    expect(result.breakOffset).toBe(2);
-    expect(result.nextExpected).toBe(0x03);
-    expect(result.mismatches.length).toBe(1);
+    expect(result.badChars).toEqual([0x03]);
+    expect(result.survivorCount).toBe(4);
+    expect(result.expectedConsumed).toBe(5);
+  });
+
+  test("detects multiple dropped bytes", () => {
+    const expected = expectedBytes([]);
+    const observed = Uint8Array.from([
+      0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+      0x09, 0x0b, 0x0c, 0x0e, 0x0f, 0x10,
+    ]);
+    const result = compareBadchars(observed, expected);
+    expect(result.badChars).toContain(0x00);
+    expect(result.badChars).toContain(0x0a);
+    expect(result.badChars).toContain(0x0d);
+    expect(result.survivorCount).toBe(14);
+  });
+
+  test("reports no bad chars when all bytes survive", () => {
+    const expected = [0x01, 0x02, 0x03, 0x04];
+    const observed = Uint8Array.from([0x01, 0x02, 0x03, 0x04]);
+    const result = compareBadchars(observed, expected);
+    expect(result.badChars).toEqual([]);
+    expect(result.survivorCount).toBe(4);
+    expect(result.expectedConsumed).toBe(4);
+  });
+
+  test("handles truncated array with trailing junk", () => {
+    const expected = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
+    const observed = Uint8Array.from([0x01, 0x02, 0x03, 0x00, 0x00]);
+    const result = compareBadchars(observed, expected);
+    expect(result.survivorCount).toBe(3);
+    expect(result.expectedConsumed).toBe(3);
   });
 });

@@ -45,38 +45,38 @@ export function createBadcharsCommand(): Command {
       const address = normalizeAddress(options.address);
       const normalizedExclude = normalizeByteArray((options.exclude as number[]) ?? []);
       const expected = expectedBytes(normalizedExclude.values);
-      const observed = readMemory(address, expected.length);
+      const observed = readMemory(address, expected.length + 64);
       const compared = compareBadchars(observed, expected);
       const pointerSize = getPointerSize();
 
       out.section("Bad Character Analysis");
       out.info(`Start address: ${out.formatAddress(address, pointerSize)}`);
-      out.info(`Exclude count: ${normalizedExclude.values.length}`);
-
-      if (compared.breakOffset !== undefined && compared.nextExpected !== undefined) {
-        out.warn(`Sequence breaks at offset 0x${compared.breakOffset.toString(16).toUpperCase()}.`);
-        out.warn(`Next expected byte: ${out.formatHexByte(compared.nextExpected)}`);
-      } else {
-        out.info("No sequence break detected in sampled byte range.");
+      if (normalizedExclude.values.length > 0) {
+        out.info(`Known excludes: ${normalizedExclude.values.map((v) => out.formatHexByte(v)).join(" ")}`);
       }
 
-      out.table(
-        [
-          { key: "offset", header: "Offset", width: 8 },
-          { key: "expected", header: "Expected", width: 10 },
-          { key: "observed", header: "Observed", width: 10 },
-        ],
-        compared.mismatches.slice(0, 32).map((mismatch) => ({
-          offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
-          expected: out.formatHexByte(mismatch.expected),
-          observed: out.formatHexByte(mismatch.observed),
-        })),
-      );
+      if (compared.badChars.length > 0) {
+        out.warn(`Bad characters found: ${compared.badChars.map((v) => out.formatHexByte(v)).join(" ")}`);
+      } else if (compared.expectedConsumed >= expected.length) {
+        out.info("All expected bytes survived — no bad characters detected.");
+      } else {
+        out.info("No bad characters detected in the tested range.");
+      }
 
-      const excludeList = normalizedExclude.values
-        .map((value) => value.toString(16).toUpperCase().padStart(2, "0"))
-        .join(" ");
-      out.info(`Copy-ready exclude list: ${excludeList}`);
+      out.info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
+
+      if (compared.expectedConsumed < expected.length) {
+        const lastTested = expected[compared.expectedConsumed - 1];
+        const firstUntested = expected[compared.expectedConsumed];
+        out.warn(
+          `Array truncated after ${out.formatHexByte(lastTested)}; bytes ${out.formatHexByte(firstUntested)}-0xFF not tested.`,
+        );
+      }
+
+      const allExclude = [...new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
+      out.info(
+        `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`,
+      );
       out.whyItMatters("Accurate badchar profiling prevents payload corruption before shellcode staging.");
 
       const warnings = normalizedExclude.warning ? [normalizedExclude.warning] : [];
@@ -88,10 +88,12 @@ export function createBadcharsCommand(): Command {
         },
         [
           {
-            breakOffset: compared.breakOffset,
-            nextExpected: compared.nextExpected,
+            badChars: compared.badChars,
+            survivorCount: compared.survivorCount,
+            expectedConsumed: compared.expectedConsumed,
             mismatches: compared.mismatches,
             exclude: normalizedExclude.values,
+            allExclude,
           },
         ],
         warnings,
@@ -199,32 +201,30 @@ export function createBadcharFindCommand(): Command {
       const compared = compareBadchars(observed, expected);
 
       out.info(`Located at ${out.formatAddress(landing, pointerSize)} (anchor + 0x${located.offset.toString(16).toUpperCase()}).`);
-      out.info(`Clean run before first break: ${located.matchedRun} bytes.`);
-      if (compared.breakOffset !== undefined && compared.nextExpected !== undefined) {
-        out.warn(`First corruption at array offset 0x${compared.breakOffset.toString(16).toUpperCase()}: expected ${out.formatHexByte(compared.nextExpected)}, observed ${out.formatHexByte(observed[compared.breakOffset])}.`);
-        out.info("The first break is the high-confidence bad byte; later mismatches may be shift artifacts.");
+      out.info(`Matched ${located.matchedRun} survivor bytes starting at expected index ${located.expectedStart}.`);
+
+      if (compared.badChars.length > 0) {
+        out.warn(`Bad characters found: ${compared.badChars.map((v) => out.formatHexByte(v)).join(" ")}`);
+      } else if (compared.expectedConsumed >= expected.length) {
+        out.info("All expected bytes survived — no bad characters detected.");
       } else {
-        out.info("No corruption detected across the located array — no bad characters in this exclude set.");
+        out.info("No bad characters detected in the tested range.");
       }
 
-      out.table(
-        [
-          { key: "offset", header: "Offset", width: 8 },
-          { key: "expected", header: "Expected", width: 10 },
-          { key: "observed", header: "Observed", width: 10 },
-        ],
-        compared.mismatches.slice(0, 32).map((mismatch) => ({
-          offset: `0x${mismatch.offset.toString(16).toUpperCase()}`,
-          expected: out.formatHexByte(mismatch.expected),
-          observed: out.formatHexByte(mismatch.observed),
-        })),
-      );
+      out.info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
 
-      // Highest-confidence next step: exclude the first corrupted byte and re-test.
-      const suggestedExclude = compared.nextExpected !== undefined
-        ? [...new Set([...normalizedExclude.values, compared.nextExpected])].sort((a, b) => a - b)
-        : normalizedExclude.values;
-      out.info(`Suggested next exclude: ${suggestedExclude.map((value) => value.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`);
+      if (compared.expectedConsumed < expected.length) {
+        const lastTested = expected[compared.expectedConsumed - 1];
+        const firstUntested = expected[compared.expectedConsumed];
+        out.warn(
+          `Array truncated after ${out.formatHexByte(lastTested)}; bytes ${out.formatHexByte(firstUntested)}-0xFF not tested.`,
+        );
+      }
+
+      const allExclude = [...new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
+      out.info(
+        `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`,
+      );
 
       return result(
         "badchar_find",
@@ -234,11 +234,13 @@ export function createBadcharFindCommand(): Command {
             located: true,
             landingAddress: landing,
             anchorOffset: located.offset,
-            cleanRun: located.matchedRun,
-            breakOffset: compared.breakOffset,
-            nextExpected: compared.nextExpected,
+            expectedStart: located.expectedStart,
+            matchedRun: located.matchedRun,
+            badChars: compared.badChars,
+            survivorCount: compared.survivorCount,
+            expectedConsumed: compared.expectedConsumed,
             mismatches: compared.mismatches,
-            suggestedExclude,
+            allExclude,
             exclude: normalizedExclude.values,
           },
         ],

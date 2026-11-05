@@ -5,15 +5,17 @@ export type BadcharMismatch = {
 };
 
 export type BadcharComparison = {
+  badChars: number[];
   mismatches: BadcharMismatch[];
-  breakOffset?: number;
-  nextExpected?: number;
+  survivorCount: number;
+  expectedConsumed: number;
 };
 
 export type ByteArrayFormat = "python" | "c" | "hex";
 
 export type ArrayLocation = {
   offset: number;
+  expectedStart: number;
   matchedRun: number;
 };
 
@@ -45,47 +47,75 @@ export function formatByteArray(bytes: number[], format: ByteArrayFormat): strin
   }
 }
 
-// Locate where a known expected byte array begins inside a memory window, by
-// finding the start offset whose contiguous forward match against `expected` is
-// longest. Tolerant of trailing corruption (the run simply ends at the first bad
-// byte); returns undefined if no start reaches `minRun` matching bytes.
 export function locateExpectedArray(window: Uint8Array, expected: number[], minRun = 8): ArrayLocation | undefined {
-  let best: ArrayLocation = { offset: -1, matchedRun: 0 };
+  const expectedIndex = new Map<number, number>();
+  for (let i = 0; i < expected.length; i += 1) {
+    expectedIndex.set(expected[i], i);
+  }
+
   for (let start = 0; start < window.length; start += 1) {
+    const ei = expectedIndex.get(window[start]);
+    if (ei === undefined) continue;
+
     let run = 0;
-    for (let i = 0; start + i < window.length && i < expected.length; i += 1) {
-      if (window[start + i] !== expected[i]) {
-        break;
-      }
+    for (let i = 0; start + i < window.length && ei + i < expected.length; i += 1) {
+      if (window[start + i] !== expected[ei + i]) break;
       run += 1;
     }
-    if (run > best.matchedRun) {
-      best = { offset: start, matchedRun: run };
+    if (run >= minRun) {
+      return { offset: start, expectedStart: ei, matchedRun: run };
     }
   }
-  return best.matchedRun >= minRun ? best : undefined;
+
+  for (let start = 0; start < window.length; start += 1) {
+    const ei = expectedIndex.get(window[start]);
+    if (ei === undefined) continue;
+
+    let e = ei;
+    let o = start;
+    let matched = 0;
+    while (e < expected.length && o < window.length) {
+      if (window[o] === expected[e]) {
+        matched += 1;
+        e += 1;
+        o += 1;
+      } else if (expected[e] < window[o]) {
+        e += 1;
+      } else {
+        break;
+      }
+    }
+    if (matched >= minRun) {
+      return { offset: start, expectedStart: ei, matchedRun: matched };
+    }
+  }
+
+  return undefined;
 }
 
 export function compareBadchars(observed: Uint8Array, expected: number[]): BadcharComparison {
+  const badChars: number[] = [];
   const mismatches: BadcharMismatch[] = [];
-  let breakOffset: number | undefined;
+  let e = 0;
+  let o = 0;
 
-  for (let i = 0; i < expected.length && i < observed.length; i += 1) {
-    if (observed[i] !== expected[i]) {
-      mismatches.push({
-        offset: i,
-        expected: expected[i],
-        observed: observed[i],
-      });
-      if (breakOffset === undefined) {
-        breakOffset = i;
-      }
+  while (e < expected.length && o < observed.length) {
+    if (observed[o] === expected[e]) {
+      e += 1;
+      o += 1;
+    } else if (expected[e] < observed[o]) {
+      badChars.push(expected[e]);
+      mismatches.push({ offset: e, expected: expected[e], observed: -1 });
+      e += 1;
+    } else {
+      break;
     }
   }
 
   return {
+    badChars,
     mismatches,
-    breakOffset,
-    nextExpected: breakOffset === undefined ? undefined : expected[breakOffset],
+    survivorCount: o,
+    expectedConsumed: e,
   };
 }
