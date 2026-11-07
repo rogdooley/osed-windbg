@@ -17,42 +17,104 @@ const categoryForName = (name: string): string => {
 };
 
 const LISTING_SUMMARIES: Record<string, string> = {
-  findmsp: "Find cyclic-pattern offsets across crash state",
-  landing: "Analyze controlled execution and landing options",
-  stackmap: "Classify stack slots and identify ROP space",
+  triage: "Crash and mitigation summary",
+  findmsp: "Find cyclic offsets in registers and memory",
+  landing: "Analyze execution landing and protections",
+  stackmap: "Identify controlled stack regions",
+  modules: "Modules, bases, and mitigations",
+  memory: "Inspect memory region and protections",
+  code_caves: "Find candidate staging regions",
+  pattern_create: "Generate a cyclic pattern",
+  pattern_offset: "Resolve a cyclic offset",
+  badchars: "Compare candidate bytes with memory",
+  badchar_array: "Generate a bad-character test array",
+  badchar_find: "Locate a sent bad-character array in memory",
+  find_bytes: "Find byte sequence in PE sections",
+  find_mem_bytes: "Find byte sequence in a memory range",
+  find_stack_bytes: "Find byte sequence on the stack",
+  find_ptr: "Search executable memory for instruction bytes",
   "rop.scan": "Load gadgets into the semantic corpus",
-  "rop.scan_live": "Discover live gadgets",
-  "rop.query": "Search the gadget corpus",
-  "rop.capabilities": "Summarize observed corpus capabilities",
-  "rop.plan": "Evaluate feasible ROP strategies",
+  "rop.scan_live": "Discover gadgets in loaded modules",
+  "rop.query": "Search gadgets by capability or instruction",
+  "rop.capabilities": "Summarize available ROP primitives",
+  "rop.plan": "Compare API-call construction strategies",
   "rop.emit": "Select gadgets for a strategy",
   "rop.synthesize": "Build a concrete stack layout",
   "rop.construct": "Build register-load ROP recipes",
   "rop.setup": "Stage registers for a call frame",
   "rop.frame_write": "Construct stdcall frames in memory",
   "rop.slot_call": "Call APIs through stable IAT slots",
-  "rop.generate": "Generate an API-call ROP chain",
+  "rop.generate": "Generate an API-call chain",
   "rop.verify": "Verify chain structure and side effects",
-  "rop.prove": "Validate debugger execution stepwise",
+  "rop.prove": "Trace chain execution in WinDbg",
   "rop.pivots": "Find and rank stack pivot gadgets",
   "rop.corpus.export": "Save the semantic corpus to disk",
   "rop.corpus.import": "Load a corpus as inactive evidence",
   "rop.corpus.validate": "Validate corpus against live memory",
+  "rop.corpus.report": "Print a human-readable gadget inventory",
   "rop.frame_va": "Build a VirtualAlloc stdcall frame",
   "rop.frame_vp": "Build a VirtualProtect stdcall frame",
   "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame",
+  "rop.chain": "Build a register-setup chain",
   "rop.chain_va": "Build a VirtualAlloc PUSHAD chain",
   "rop.chain_vp": "Build a VirtualProtect PUSHAD chain",
   "rop.chain_wpm": "Build a WriteProcessMemory PUSHAD chain",
   "rop.export": "Export gadgets and chain as Python",
+  "rop.find": "Legacy ROP helper and module triage",
+  rop_find: "Flat alias for legacy ROP helper triage",
+  rop_suggest: "Suggest exploit-friendly gadget patterns",
+  rop_template: "Print a commented ROP chain skeleton",
+  pivots: "Scan for stack pivot candidates",
+  retn: "Scan for retn N gadgets",
+  add_esp: "Scan for add esp, N gadgets",
+  seh: "Walk current thread SEH chain",
+  seh_ppr: "Find POP-POP-RET candidates",
+  "seh.visualize": "Inspect the exception-handler chain",
+  encode: "Encode shellcode around forbidden bytes",
+  egghunter: "Generate an egghunter stub",
+  nop: "Generate a NOP sled",
   "sc.iat": "Inspect imported APIs and IAT entries",
+  "sc.iat_find": "Search all modules for matching IAT entries",
+  "sc.iat_ptr": "Resolve an import to its IAT slot",
+  "sc.resolve": "Resolve API exports",
+  "sc.export": "Resolve an export by name",
+  "sc.exportat": "Resolve an export by ordinal",
+  "sc.exportdir": "Show PE export directory metadata",
+  "sc.exportwalk": "Walk PE export resolution checkpoints",
+  "sc.exports": "Enumerate exported symbols",
+  "sc.hash": "Hash one API name",
+  "sc.hashes": "Hash named exports with a given algorithm",
+  "sc.hashresolve": "Resolve an API hash against exports",
+  "sc.algorithms": "List supported API hash algorithms",
+  "sc.pe": "Print PE header fields",
+  "sc.base": "Resolve a module base address",
+  "sc.modules": "List loaded modules",
+  "sc.peb": "Dump PEB-oriented module evidence",
+  "sc.module_pages": "Report module size and page count",
+  "sc.page_summary": "Bucket module pages by protection",
+  "str.find": "Search process memory for strings",
+  "str.read": "Read a string from memory",
+  "str.refs": "Find executable pointers to a string",
+  "str.bytes": "Encode text as payload bytes",
+  "leak.classify": "Classify a pointer without dereferencing",
+  "pattern.create": "Generate cyclic pattern text",
+  "pattern.offset": "Find an offset in a pattern family",
+  fmt_build: "Construct format-string payload components",
+  fmt_offset: "Find the controlled parameter index",
+  "fmt.build": "Construct format-string payload components",
+  "fmt.offset": "Find the controlled parameter index",
+  exploit: "Emit exploit-development command workflows",
+  "exploit.state": "View or update cached exploit state",
+  "exploit.clear": "Clear the cached exploit state",
+  math: "Format an integer as hex, signed, unsigned, LE",
+  leak_classify: "Classify a pointer without dereferencing",
+  help: "List commands or show detailed help",
+  reload: "Clear and re-register command registry",
+  version: "Show loaded build identity",
 };
 
 function shortSummary(name: string, description: string, supplied?: string): string {
-  const source = supplied ?? LISTING_SUMMARIES[name] ?? description.split(/(?<=[.!?])\s/)[0] ?? description;
-  if (source.length <= 60) return source;
-  const truncated = source.slice(0, 60);
-  return `${truncated.slice(0, truncated.lastIndexOf(" ") || 60).trimEnd()}…`;
+  return LISTING_SUMMARIES[name] ?? supplied ?? description.split(/(?<=[.!?])\s/)[0] ?? description;
 }
 
 const toDocument = (entry: HelpEntry): HelpDocument => ({ ...entry, summary: shortSummary(entry.name, entry.description, entry.summary) });
@@ -74,13 +136,26 @@ function groupedDocuments(registry: CommandRegistry): Map<string, HelpDocument[]
   return groups;
 }
 
+const OVERVIEW_WORKFLOW: Array<[string, string[]]> = [
+  ["crash", ["triage", "findmsp", "stackmap", "landing"]],
+  ["target", ["modules", "memory", "code_caves"]],
+  ["payload", ["pattern_create", "pattern_offset", "badchars"]],
+  ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
+  ["pe-api", ["sc.iat", "sc.resolve"]],
+  ["shellcode", ["encode", "egghunter"]],
+  ["seh", ["seh", "seh_ppr"]],
+  ["strings", ["str.find"]],
+  ["format", ["fmt_build"]],
+];
+
 function overviewGroups(all: HelpDocument[]): Map<string, HelpDocument[]> {
-  const selected = new Set([
-    "triage", "landing", "stackmap", "findmsp", "pattern_create", "pattern_offset", "badchars", "modules", "memory", "code_caves",
-    "rop.scan_live", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove",
-    "seh", "seh_ppr", "encode", "egghunter", "sc.iat", "sc.resolve", "str.find", "fmt_build",
-  ]);
-  return groupByCategory(all.filter((entry) => selected.has(entry.name)));
+  const index = new Map(all.map((entry) => [entry.name, entry]));
+  const groups = new Map<string, HelpDocument[]>();
+  for (const [category, names] of OVERVIEW_WORKFLOW) {
+    const entries = names.map((name) => index.get(name)).filter((entry): entry is HelpDocument => !!entry);
+    if (entries.length > 0) groups.set(category, entries);
+  }
+  return groups;
 }
 
 function documents(registry: CommandRegistry): HelpDocument[] {

@@ -1,11 +1,15 @@
 import { HelpEntry, normalizeHelpExamples } from "./help_catalog";
+import { getVersionInfo } from "./version";
 
-export const HELP_WIDTH = 80;
-const NAME_WIDTH = 23;
-const DESC_WIDTH = 36;
-const EXAMPLE_PREFIX = "dx @$osed().";
-const ROOT_CATEGORY_ORDER = ["crash", "payload", "target", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
+export const HELP_WIDTH = 68;
+const INDEX_NAME_WIDTH = 24;
+const DETAIL_NAME_WIDTH = 23;
+const ROOT_CATEGORY_ORDER = ["crash", "target", "payload", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
 const ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  "pe-api": "PE / API",
+};
 
 export type HelpDocument = Pick<HelpEntry, "name" | "description" | "usage" | "examples" | "details" | "summary" | "category" | "arguments" | "prerequisites" | "limitations" | "seeAlso" | "keywords">;
 
@@ -32,8 +36,8 @@ export function wrapText(text: string, width = HELP_WIDTH, indent = ""): string[
   return lines.length > 0 ? lines : [indent];
 }
 
-function heading(title: string): string[] {
-  return ["", `=== ${title} ===`];
+function ruler(): string {
+  return "─".repeat(HELP_WIDTH);
 }
 
 function labelled(label: string, value: string): string[] {
@@ -59,78 +63,115 @@ function orderedGroups(groups: Map<string, HelpDocument[]>, order: string[] = RO
   return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-function shortExample(entry: HelpDocument): string {
-  const examples = normalizeHelpExamples(entry.examples);
-  if (examples.length === 0) return "";
-  const command = examples[0].command.split(/\s+\/\/\s+/)[0];
-  return command.startsWith(EXAMPLE_PREFIX) ? command.slice(EXAMPLE_PREFIX.length) : command;
+function categoryLabel(key: string): string {
+  return CATEGORY_LABELS[key] ?? key.toUpperCase();
 }
 
-function truncate(text: string, width: number): string {
-  if (text.length <= width) return text;
-  const cut = text.lastIndexOf(" ", width - 1);
-  return `${text.slice(0, cut > 0 ? cut : width - 1).trimEnd()}…`;
-}
-
+/** Index listing: command(...) + summary, two columns, no examples. */
 export function renderListing(entries: HelpDocument[]): string[] {
-  const nameWidth = Math.max(...entries.map((e) => e.name.length)) + 2;
   return entries.map((entry) => {
-    const summary = truncate(entry.summary ?? entry.description, DESC_WIDTH);
-    const example = shortExample(entry);
-    return `${entry.name.padEnd(nameWidth)}${summary}${example ? `  ${example}` : ""}`;
+    const label = `  ${entry.name}(...)`;
+    const summary = entry.summary ?? entry.description;
+    if (label.length >= INDEX_NAME_WIDTH) {
+      return `${label}  ${summary}`;
+    }
+    return `${label.padEnd(INDEX_NAME_WIDTH)}${summary}`;
+  });
+}
+
+/** Detail listing: command + full summary, used by namespace/all views. */
+function renderDetailListing(entries: HelpDocument[]): string[] {
+  const nameWidth = Math.max(DETAIL_NAME_WIDTH, ...entries.map((e) => e.name.length + 2));
+  return entries.flatMap((entry) => {
+    const summary = entry.summary ?? entry.description;
+    if (entry.name.length + 2 > nameWidth) {
+      return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
+    }
+    const descWidth = HELP_WIDTH - nameWidth;
+    const wrapped = wrapText(summary, descWidth);
+    return wrapped.map((line, i) =>
+      `${i === 0 ? entry.name.padEnd(nameWidth) : " ".repeat(nameWidth)}${line}`);
   });
 }
 
 export function renderOverview(groups: Map<string, HelpDocument[]>): string[] {
-  const lines = heading("OSED Help");
-  lines.push(...wrapText("Choose a task area, then use help(\"name\") for a quick command reference.", HELP_WIDTH));
-  lines.push("", "QUICK START", "  dx @$osed().triage()", "", "DISCOVER", "  help(\"crash\")     Crash analysis commands", "  help(\"rop\")       ROP discovery and construction", "  help(\"?pivot\")    Search commands", "  help(\"all\")       Complete inventory");
+  const info = getVersionInfo();
+  const banner = `OSED-WINDBG ${info.version}`;
+  const lines: string[] = [
+    "",
+    `╭─ ${banner} ${ "─".repeat(Math.max(0, HELP_WIDTH - banner.length - 4))}╮`,
+    `│ Exploit development · x86 · WinDbg JavaScript extension${" ".repeat(Math.max(0, HELP_WIDTH - 57))}│`,
+    `╰${"─".repeat(HELP_WIDTH - 1)}╯`,
+  ];
+  lines.push(
+    "",
+    "QUICK START",
+    `  ${"triage()".padEnd(INDEX_NAME_WIDTH - 2)}Analyze current crash and exploitability`,
+    `  ${"help(\"rop\")".padEnd(INDEX_NAME_WIDTH - 2)}ROP discovery, planning, and construction`,
+    `  ${"help(\"all\")".padEnd(INDEX_NAME_WIDTH - 2)}Complete command reference`,
+    `  ${"help(\"?pivot\")".padEnd(INDEX_NAME_WIDTH - 2)}Search commands by keyword`,
+  );
   for (const [category, entries] of orderedGroups(groups)) {
-    lines.push("", category.toUpperCase());
+    lines.push("", categoryLabel(category));
     lines.push(...renderListing(entries));
   }
-  lines.push("", "MORE", "  help(\"rop\")      All ROP commands", "  help(\"all\")      Complete inventory", "  help(\"?pivot\")   Search commands");
+  lines.push(
+    "",
+    ruler(),
+    `  ${"help(\"<command>\")".padEnd(INDEX_NAME_WIDTH - 2)}Command details`,
+    `  ${"help(\"<category>\")".padEnd(INDEX_NAME_WIDTH - 2)}Category reference`,
+    `  ${"help(\"?term\")".padEnd(INDEX_NAME_WIDTH - 2)}Search commands`,
+  );
   return lines;
 }
 
 export function renderAll(groups: Map<string, HelpDocument[]>): string[] {
-  const lines = heading("All OSED Commands");
+  const lines = ["", `=== All OSED Commands ===`];
   for (const [category, entries] of orderedGroups(groups)) {
-    lines.push("", category.toUpperCase());
-    lines.push(...renderListing(entries));
+    lines.push("", categoryLabel(category));
+    lines.push(...renderDetailListing(entries));
   }
   return lines;
 }
 
 export function renderNamespace(name: string, groups: Map<string, HelpDocument[]>): string[] {
-  const lines = heading(`Help: ${name}`);
+  const label = categoryLabel(name.toLowerCase());
+  const lines = ["", `${label} — COMMAND REFERENCE`, ruler()];
   for (const [task, entries] of orderedGroups(groups, name.toLowerCase() === "rop" ? ROP_TASK_ORDER : [])) {
     lines.push("", task.toUpperCase());
-    lines.push(...renderListing(entries));
+    for (const entry of entries) {
+      const summary = entry.summary ?? entry.description;
+      lines.push(`  ${entry.usage.replace(/^dx @\$osed\(\)\./, "")}`);
+      lines.push(...wrapText(summary, HELP_WIDTH, "      "));
+      lines.push("");
+    }
   }
-  lines.push("", ...wrapText("Use help(\"name\") for RUN-first help or help(\"name\", \"full\") for all details.", HELP_WIDTH));
+  lines.push(
+    ruler(),
+    `  help(\"<command>\")  Command details    help(\"?term\")  Search`,
+  );
   return lines;
 }
 
 export function renderSearch(query: string, groups: Map<string, HelpDocument[]>, total: number): string[] {
-  const lines = heading(`Search: ${query} (${total} ${total === 1 ? "match" : "matches"})`);
+  const lines = ["", `=== Search: ${query} (${total} ${total === 1 ? "match" : "matches"}) ===`];
   if (total === 0) return [...lines, "No matching commands."];
   for (const [category, entries] of orderedGroups(groups)) {
-    lines.push("", category.toUpperCase());
+    lines.push("", categoryLabel(category));
     lines.push(...renderListing(entries));
   }
   return lines;
 }
 
 export function renderCandidates(suffix: string, entries: HelpDocument[]): string[] {
-  const lines = heading(`Ambiguous help: ${suffix}`);
+  const lines = ["", `=== Ambiguous help: ${suffix} ===`];
   lines.push("Multiple commands match this suffix:", ...renderListing(entries));
   return lines;
 }
 
 export function renderCompactDetail(entry: HelpDocument): string[] {
   const examples = normalizeHelpExamples(entry.examples);
-  const lines = heading(`Help: ${entry.name}`);
+  const lines = ["", `=== Help: ${entry.name} ===`];
   lines.push(...wrapText(entry.summary ?? entry.description, HELP_WIDTH));
   if (examples[0]) {
     const [command, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
@@ -143,7 +184,7 @@ export function renderCompactDetail(entry: HelpDocument): string[] {
 }
 
 export function renderFullDetail(entry: HelpDocument): string[] {
-  const lines = heading(`Help: ${entry.name}`);
+  const lines = ["", `=== Help: ${entry.name} ===`];
   lines.push("PURPOSE", ...wrapText(entry.description, HELP_WIDTH, "  "), "", "USAGE", `  ${entry.usage}`);
   if (entry.details) lines.push("", "DETAILS", ...wrapText(entry.details, HELP_WIDTH, "  "));
   if (entry.arguments?.length) lines.push("", "ARGUMENTS", ...entry.arguments.flatMap((argument) => labelled(`  ${argument.name}${argument.required ? "" : "?"}: `, argument.description)));

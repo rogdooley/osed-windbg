@@ -10797,12 +10797,45 @@ var osed_bundle = (() => {
     ];
   }
 
+  // src/core/version.ts
+  function readBuildString(key2, fallback) {
+    let value;
+    switch (key2) {
+      case "__OSED_VERSION__":
+        value = true ? "1.0.4" : globalThis[key2];
+        break;
+      case "__OSED_BUILD_TIME__":
+        value = true ? "2026-11-07T02:39:03.724Z" : globalThis[key2];
+        break;
+      case "__OSED_GIT_COMMIT__":
+        value = true ? "f659789b4024" : globalThis[key2];
+        break;
+    }
+    return typeof value === "string" && value.length > 0 ? value : fallback;
+  }
+  function readBuildBoolean(key2, fallback) {
+    const value = true ? true : globalThis[key2];
+    return typeof value === "boolean" ? value : fallback;
+  }
+  function getVersionInfo() {
+    return {
+      name: "osed-windbg",
+      version: readBuildString("__OSED_VERSION__", "dev"),
+      buildTime: readBuildString("__OSED_BUILD_TIME__", "unknown"),
+      gitCommit: readBuildString("__OSED_GIT_COMMIT__", "unknown"),
+      gitDirty: readBuildBoolean("__OSED_GIT_DIRTY__", false)
+    };
+  }
+
   // src/core/help_render.ts
-  var HELP_WIDTH = 80;
-  var DESC_WIDTH = 36;
-  var EXAMPLE_PREFIX = "dx @$osed().";
-  var ROOT_CATEGORY_ORDER = ["crash", "payload", "target", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
+  var HELP_WIDTH = 68;
+  var INDEX_NAME_WIDTH = 24;
+  var DETAIL_NAME_WIDTH = 23;
+  var ROOT_CATEGORY_ORDER = ["crash", "target", "payload", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
   var ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
+  var CATEGORY_LABELS = {
+    "pe-api": "PE / API"
+  };
   function words(text) {
     return text.trim().split(/\s+/).filter(Boolean);
   }
@@ -10823,8 +10856,8 @@ var osed_bundle = (() => {
     if (line) lines.push(`${indent}${line}`);
     return lines.length > 0 ? lines : [indent];
   }
-  function heading(title) {
-    return ["", `=== ${title} ===`];
+  function ruler() {
+    return "\u2500".repeat(HELP_WIDTH);
   }
   function labelled(label, value) {
     return wrapText(value, HELP_WIDTH, " ".repeat(label.length)).map((line, index) => index === 0 ? `${label}${line.trimStart()}` : line);
@@ -10846,72 +10879,109 @@ var osed_bundle = (() => {
     };
     return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   }
-  function shortExample(entry) {
-    const examples = normalizeHelpExamples(entry.examples);
-    if (examples.length === 0) return "";
-    const command2 = examples[0].command.split(/\s+\/\/\s+/)[0];
-    return command2.startsWith(EXAMPLE_PREFIX) ? command2.slice(EXAMPLE_PREFIX.length) : command2;
-  }
-  function truncate(text, width) {
-    if (text.length <= width) return text;
-    const cut = text.lastIndexOf(" ", width - 1);
-    return `${text.slice(0, cut > 0 ? cut : width - 1).trimEnd()}\u2026`;
+  function categoryLabel(key2) {
+    var _a;
+    return (_a = CATEGORY_LABELS[key2]) != null ? _a : key2.toUpperCase();
   }
   function renderListing(entries) {
-    const nameWidth = Math.max(...entries.map((e) => e.name.length)) + 2;
     return entries.map((entry) => {
       var _a;
-      const summary = truncate((_a = entry.summary) != null ? _a : entry.description, DESC_WIDTH);
-      const example = shortExample(entry);
-      return `${entry.name.padEnd(nameWidth)}${summary}${example ? `  ${example}` : ""}`;
+      const label = `  ${entry.name}(...)`;
+      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      if (label.length >= INDEX_NAME_WIDTH) {
+        return `${label}  ${summary}`;
+      }
+      return `${label.padEnd(INDEX_NAME_WIDTH)}${summary}`;
+    });
+  }
+  function renderDetailListing(entries) {
+    const nameWidth = Math.max(DETAIL_NAME_WIDTH, ...entries.map((e) => e.name.length + 2));
+    return entries.flatMap((entry) => {
+      var _a;
+      const summary = (_a = entry.summary) != null ? _a : entry.description;
+      if (entry.name.length + 2 > nameWidth) {
+        return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
+      }
+      const descWidth = HELP_WIDTH - nameWidth;
+      const wrapped = wrapText(summary, descWidth);
+      return wrapped.map((line, i) => `${i === 0 ? entry.name.padEnd(nameWidth) : " ".repeat(nameWidth)}${line}`);
     });
   }
   function renderOverview(groups) {
-    const lines = heading("OSED Help");
-    lines.push(...wrapText('Choose a task area, then use help("name") for a quick command reference.', HELP_WIDTH));
-    lines.push("", "QUICK START", "  dx @$osed().triage()", "", "DISCOVER", '  help("crash")     Crash analysis commands', '  help("rop")       ROP discovery and construction', '  help("?pivot")    Search commands', '  help("all")       Complete inventory');
+    const info2 = getVersionInfo();
+    const banner = `OSED-WINDBG ${info2.version}`;
+    const lines = [
+      "",
+      `\u256D\u2500 ${banner} ${"\u2500".repeat(Math.max(0, HELP_WIDTH - banner.length - 4))}\u256E`,
+      `\u2502 Exploit development \xB7 x86 \xB7 WinDbg JavaScript extension${" ".repeat(Math.max(0, HELP_WIDTH - 57))}\u2502`,
+      `\u2570${"\u2500".repeat(HELP_WIDTH - 1)}\u256F`
+    ];
+    lines.push(
+      "",
+      "QUICK START",
+      `  ${"triage()".padEnd(INDEX_NAME_WIDTH - 2)}Analyze current crash and exploitability`,
+      `  ${'help("rop")'.padEnd(INDEX_NAME_WIDTH - 2)}ROP discovery, planning, and construction`,
+      `  ${'help("all")'.padEnd(INDEX_NAME_WIDTH - 2)}Complete command reference`,
+      `  ${'help("?pivot")'.padEnd(INDEX_NAME_WIDTH - 2)}Search commands by keyword`
+    );
     for (const [category, entries] of orderedGroups(groups)) {
-      lines.push("", category.toUpperCase());
+      lines.push("", categoryLabel(category));
       lines.push(...renderListing(entries));
     }
-    lines.push("", "MORE", '  help("rop")      All ROP commands', '  help("all")      Complete inventory', '  help("?pivot")   Search commands');
+    lines.push(
+      "",
+      ruler(),
+      `  ${'help("<command>")'.padEnd(INDEX_NAME_WIDTH - 2)}Command details`,
+      `  ${'help("<category>")'.padEnd(INDEX_NAME_WIDTH - 2)}Category reference`,
+      `  ${'help("?term")'.padEnd(INDEX_NAME_WIDTH - 2)}Search commands`
+    );
     return lines;
   }
   function renderAll(groups) {
-    const lines = heading("All OSED Commands");
+    const lines = ["", `=== All OSED Commands ===`];
     for (const [category, entries] of orderedGroups(groups)) {
-      lines.push("", category.toUpperCase());
-      lines.push(...renderListing(entries));
+      lines.push("", categoryLabel(category));
+      lines.push(...renderDetailListing(entries));
     }
     return lines;
   }
   function renderNamespace(name, groups) {
-    const lines = heading(`Help: ${name}`);
+    var _a;
+    const label = categoryLabel(name.toLowerCase());
+    const lines = ["", `${label} \u2014 COMMAND REFERENCE`, ruler()];
     for (const [task, entries] of orderedGroups(groups, name.toLowerCase() === "rop" ? ROP_TASK_ORDER : [])) {
       lines.push("", task.toUpperCase());
-      lines.push(...renderListing(entries));
+      for (const entry of entries) {
+        const summary = (_a = entry.summary) != null ? _a : entry.description;
+        lines.push(`  ${entry.usage.replace(/^dx @\$osed\(\)\./, "")}`);
+        lines.push(...wrapText(summary, HELP_WIDTH, "      "));
+        lines.push("");
+      }
     }
-    lines.push("", ...wrapText('Use help("name") for RUN-first help or help("name", "full") for all details.', HELP_WIDTH));
+    lines.push(
+      ruler(),
+      `  help("<command>")  Command details    help("?term")  Search`
+    );
     return lines;
   }
   function renderSearch(query, groups, total) {
-    const lines = heading(`Search: ${query} (${total} ${total === 1 ? "match" : "matches"})`);
+    const lines = ["", `=== Search: ${query} (${total} ${total === 1 ? "match" : "matches"}) ===`];
     if (total === 0) return [...lines, "No matching commands."];
     for (const [category, entries] of orderedGroups(groups)) {
-      lines.push("", category.toUpperCase());
+      lines.push("", categoryLabel(category));
       lines.push(...renderListing(entries));
     }
     return lines;
   }
   function renderCandidates(suffix, entries) {
-    const lines = heading(`Ambiguous help: ${suffix}`);
+    const lines = ["", `=== Ambiguous help: ${suffix} ===`];
     lines.push("Multiple commands match this suffix:", ...renderListing(entries));
     return lines;
   }
   function renderCompactDetail(entry) {
     var _a, _b, _c;
     const examples = normalizeHelpExamples(entry.examples);
-    const lines = heading(`Help: ${entry.name}`);
+    const lines = ["", `=== Help: ${entry.name} ===`];
     lines.push(...wrapText((_a = entry.summary) != null ? _a : entry.description, HELP_WIDTH));
     if (examples[0]) {
       const [command2, note] = examples[0].command.split(/\s+\/\/\s+/, 2);
@@ -10924,7 +10994,7 @@ var osed_bundle = (() => {
   }
   function renderFullDetail(entry) {
     var _a, _b, _c, _d;
-    const lines = heading(`Help: ${entry.name}`);
+    const lines = ["", `=== Help: ${entry.name} ===`];
     lines.push("PURPOSE", ...wrapText(entry.description, HELP_WIDTH, "  "), "", "USAGE", `  ${entry.usage}`);
     if (entry.details) lines.push("", "DETAILS", ...wrapText(entry.details, HELP_WIDTH, "  "));
     if ((_a = entry.arguments) == null ? void 0 : _a.length) lines.push("", "ARGUMENTS", ...entry.arguments.flatMap((argument) => labelled(`  ${argument.name}${argument.required ? "" : "?"}: `, argument.description)));
@@ -10949,42 +11019,104 @@ var osed_bundle = (() => {
     return "tools";
   };
   var LISTING_SUMMARIES = {
-    findmsp: "Find cyclic-pattern offsets across crash state",
-    landing: "Analyze controlled execution and landing options",
-    stackmap: "Classify stack slots and identify ROP space",
+    triage: "Crash and mitigation summary",
+    findmsp: "Find cyclic offsets in registers and memory",
+    landing: "Analyze execution landing and protections",
+    stackmap: "Identify controlled stack regions",
+    modules: "Modules, bases, and mitigations",
+    memory: "Inspect memory region and protections",
+    code_caves: "Find candidate staging regions",
+    pattern_create: "Generate a cyclic pattern",
+    pattern_offset: "Resolve a cyclic offset",
+    badchars: "Compare candidate bytes with memory",
+    badchar_array: "Generate a bad-character test array",
+    badchar_find: "Locate a sent bad-character array in memory",
+    find_bytes: "Find byte sequence in PE sections",
+    find_mem_bytes: "Find byte sequence in a memory range",
+    find_stack_bytes: "Find byte sequence on the stack",
+    find_ptr: "Search executable memory for instruction bytes",
     "rop.scan": "Load gadgets into the semantic corpus",
-    "rop.scan_live": "Discover live gadgets",
-    "rop.query": "Search the gadget corpus",
-    "rop.capabilities": "Summarize observed corpus capabilities",
-    "rop.plan": "Evaluate feasible ROP strategies",
+    "rop.scan_live": "Discover gadgets in loaded modules",
+    "rop.query": "Search gadgets by capability or instruction",
+    "rop.capabilities": "Summarize available ROP primitives",
+    "rop.plan": "Compare API-call construction strategies",
     "rop.emit": "Select gadgets for a strategy",
     "rop.synthesize": "Build a concrete stack layout",
     "rop.construct": "Build register-load ROP recipes",
     "rop.setup": "Stage registers for a call frame",
     "rop.frame_write": "Construct stdcall frames in memory",
     "rop.slot_call": "Call APIs through stable IAT slots",
-    "rop.generate": "Generate an API-call ROP chain",
+    "rop.generate": "Generate an API-call chain",
     "rop.verify": "Verify chain structure and side effects",
-    "rop.prove": "Validate debugger execution stepwise",
+    "rop.prove": "Trace chain execution in WinDbg",
     "rop.pivots": "Find and rank stack pivot gadgets",
     "rop.corpus.export": "Save the semantic corpus to disk",
     "rop.corpus.import": "Load a corpus as inactive evidence",
     "rop.corpus.validate": "Validate corpus against live memory",
+    "rop.corpus.report": "Print a human-readable gadget inventory",
     "rop.frame_va": "Build a VirtualAlloc stdcall frame",
     "rop.frame_vp": "Build a VirtualProtect stdcall frame",
     "rop.frame_wpm": "Build a WriteProcessMemory stdcall frame",
+    "rop.chain": "Build a register-setup chain",
     "rop.chain_va": "Build a VirtualAlloc PUSHAD chain",
     "rop.chain_vp": "Build a VirtualProtect PUSHAD chain",
     "rop.chain_wpm": "Build a WriteProcessMemory PUSHAD chain",
     "rop.export": "Export gadgets and chain as Python",
-    "sc.iat": "Inspect imported APIs and IAT entries"
+    "rop.find": "Legacy ROP helper and module triage",
+    rop_find: "Flat alias for legacy ROP helper triage",
+    rop_suggest: "Suggest exploit-friendly gadget patterns",
+    rop_template: "Print a commented ROP chain skeleton",
+    pivots: "Scan for stack pivot candidates",
+    retn: "Scan for retn N gadgets",
+    add_esp: "Scan for add esp, N gadgets",
+    seh: "Walk current thread SEH chain",
+    seh_ppr: "Find POP-POP-RET candidates",
+    "seh.visualize": "Inspect the exception-handler chain",
+    encode: "Encode shellcode around forbidden bytes",
+    egghunter: "Generate an egghunter stub",
+    nop: "Generate a NOP sled",
+    "sc.iat": "Inspect imported APIs and IAT entries",
+    "sc.iat_find": "Search all modules for matching IAT entries",
+    "sc.iat_ptr": "Resolve an import to its IAT slot",
+    "sc.resolve": "Resolve API exports",
+    "sc.export": "Resolve an export by name",
+    "sc.exportat": "Resolve an export by ordinal",
+    "sc.exportdir": "Show PE export directory metadata",
+    "sc.exportwalk": "Walk PE export resolution checkpoints",
+    "sc.exports": "Enumerate exported symbols",
+    "sc.hash": "Hash one API name",
+    "sc.hashes": "Hash named exports with a given algorithm",
+    "sc.hashresolve": "Resolve an API hash against exports",
+    "sc.algorithms": "List supported API hash algorithms",
+    "sc.pe": "Print PE header fields",
+    "sc.base": "Resolve a module base address",
+    "sc.modules": "List loaded modules",
+    "sc.peb": "Dump PEB-oriented module evidence",
+    "sc.module_pages": "Report module size and page count",
+    "sc.page_summary": "Bucket module pages by protection",
+    "str.find": "Search process memory for strings",
+    "str.read": "Read a string from memory",
+    "str.refs": "Find executable pointers to a string",
+    "str.bytes": "Encode text as payload bytes",
+    "leak.classify": "Classify a pointer without dereferencing",
+    "pattern.create": "Generate cyclic pattern text",
+    "pattern.offset": "Find an offset in a pattern family",
+    fmt_build: "Construct format-string payload components",
+    fmt_offset: "Find the controlled parameter index",
+    "fmt.build": "Construct format-string payload components",
+    "fmt.offset": "Find the controlled parameter index",
+    exploit: "Emit exploit-development command workflows",
+    "exploit.state": "View or update cached exploit state",
+    "exploit.clear": "Clear the cached exploit state",
+    math: "Format an integer as hex, signed, unsigned, LE",
+    leak_classify: "Classify a pointer without dereferencing",
+    help: "List commands or show detailed help",
+    reload: "Clear and re-register command registry",
+    version: "Show loaded build identity"
   };
   function shortSummary(name, description, supplied) {
-    var _a, _b;
-    const source = (_b = (_a = supplied != null ? supplied : LISTING_SUMMARIES[name]) != null ? _a : description.split(new RegExp("(?<=[.!?])\\s"))[0]) != null ? _b : description;
-    if (source.length <= 60) return source;
-    const truncated = source.slice(0, 60);
-    return `${truncated.slice(0, truncated.lastIndexOf(" ") || 60).trimEnd()}\u2026`;
+    var _a, _b, _c;
+    return (_c = (_b = (_a = LISTING_SUMMARIES[name]) != null ? _a : supplied) != null ? _b : description.split(new RegExp("(?<=[.!?])\\s"))[0]) != null ? _c : description;
   }
   var toDocument = (entry) => __spreadProps(__spreadValues({}, entry), { summary: shortSummary(entry.name, entry.description, entry.summary) });
   function registryDocument(command2) {
@@ -11003,35 +11135,25 @@ var osed_bundle = (() => {
     }
     return groups;
   }
+  var OVERVIEW_WORKFLOW = [
+    ["crash", ["triage", "findmsp", "stackmap", "landing"]],
+    ["target", ["modules", "memory", "code_caves"]],
+    ["payload", ["pattern_create", "pattern_offset", "badchars"]],
+    ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
+    ["pe-api", ["sc.iat", "sc.resolve"]],
+    ["shellcode", ["encode", "egghunter"]],
+    ["seh", ["seh", "seh_ppr"]],
+    ["strings", ["str.find"]],
+    ["format", ["fmt_build"]]
+  ];
   function overviewGroups(all) {
-    const selected = /* @__PURE__ */ new Set([
-      "triage",
-      "landing",
-      "stackmap",
-      "findmsp",
-      "pattern_create",
-      "pattern_offset",
-      "badchars",
-      "modules",
-      "memory",
-      "code_caves",
-      "rop.scan_live",
-      "rop.query",
-      "rop.capabilities",
-      "rop.plan",
-      "rop.generate",
-      "rop.verify",
-      "rop.prove",
-      "seh",
-      "seh_ppr",
-      "encode",
-      "egghunter",
-      "sc.iat",
-      "sc.resolve",
-      "str.find",
-      "fmt_build"
-    ]);
-    return groupByCategory(all.filter((entry) => selected.has(entry.name)));
+    const index = new Map(all.map((entry) => [entry.name, entry]));
+    const groups = /* @__PURE__ */ new Map();
+    for (const [category, names] of OVERVIEW_WORKFLOW) {
+      const entries = names.map((name) => index.get(name)).filter((entry) => !!entry);
+      if (entries.length > 0) groups.set(category, entries);
+    }
+    return groups;
   }
   function documents(registry2) {
     return [...groupedDocuments(registry2).values()].flat().sort((a, b) => a.name.localeCompare(b.name));
@@ -15021,36 +15143,6 @@ var osed_bundle = (() => {
           errors: []
         };
       }
-    };
-  }
-
-  // src/core/version.ts
-  function readBuildString(key2, fallback) {
-    let value;
-    switch (key2) {
-      case "__OSED_VERSION__":
-        value = true ? "1.0.4" : globalThis[key2];
-        break;
-      case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-07T02:28:34.668Z" : globalThis[key2];
-        break;
-      case "__OSED_GIT_COMMIT__":
-        value = true ? "fe14ffd7db48" : globalThis[key2];
-        break;
-    }
-    return typeof value === "string" && value.length > 0 ? value : fallback;
-  }
-  function readBuildBoolean(key2, fallback) {
-    const value = true ? true : globalThis[key2];
-    return typeof value === "boolean" ? value : fallback;
-  }
-  function getVersionInfo() {
-    return {
-      name: "osed-windbg",
-      version: readBuildString("__OSED_VERSION__", "dev"),
-      buildTime: readBuildString("__OSED_BUILD_TIME__", "unknown"),
-      gitCommit: readBuildString("__OSED_GIT_COMMIT__", "unknown"),
-      gitDirty: readBuildBoolean("__OSED_GIT_DIRTY__", false)
     };
   }
 

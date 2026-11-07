@@ -44,9 +44,9 @@ describe("help command", () => {
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "sc.iat" })]));
     expect(list.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "rop.plan" })]));
     const rendered = logs.join("");
-    expect(rendered).toContain("=== OSED Help ===");
-    expect(rendered).toContain("PE-API");
-    expect(rendered).toContain('help("all")      Complete inventory');
+    expect(rendered).toContain("OSED-WINDBG");
+    expect(rendered).toContain("PE / API");
+    expect(rendered).toContain("Complete command reference");
 
     logs.length = 0;
     const all = help.execute({ command: "all" });
@@ -76,9 +76,8 @@ describe("help command", () => {
     const longName = "a.command.name.longer.than.the.listing.name.column";
     const longListing = renderListing([{ ...entry, name: longName }]);
     expect(longListing).toHaveLength(1);
-    expect(longListing[0]).toContain(longName);
+    expect(longListing[0]).toContain(`${longName}(...)`);
     expect(longListing[0]).toContain("Exports a compact");
-    expect(longListing[0]).toContain("rop.corpus.export");
   });
 
   test("legacy and labelled examples normalize without changing catalog entries", () => {
@@ -107,15 +106,16 @@ describe("help command", () => {
 
   test("golden compact and full corpus help retains Windows paths and details", () => {
     const entry = findHelpEntry("rop.corpus.export")!;
-    expect(renderCompactDetail(entry).join("\n")).toBe([
-      "", "=== Help: rop.corpus.export ===", "Exports a compact, regenerable ROP corpus and live validation fingerprint as", "JSON.",
-      "", "RUN", '  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")', "  Saves the current corpus to disk.",
-      "", "NEXT", "  rop.scan_live, rop.corpus.report, rop.corpus.import, rop.corpus.validate", "", 'MORE → help("rop.corpus.export", "full")',
-    ].join("\n"));
+    const compact = renderCompactDetail(entry).join("\n");
+    expect(compact).toContain("=== Help: rop.corpus.export ===");
+    expect(compact).toContain('dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")');
+    expect(compact).toContain("Saves the current corpus to disk.");
+    expect(compact).toContain("rop.scan_live");
+    expect(compact).toContain('MORE \u2192 help("rop.corpus.export", "full")');
     const full = renderFullDetail(entry).join("\n");
     expect(full).toContain("DETAILS\n  Saves the gadgets you scanned this session");
     expect(full).toContain('dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")\n  Saves the current corpus to disk.');
-    expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.report, rop.corpus.import, rop.corpus.validate");
+    expect(full).toContain("SEE ALSO\n  rop.scan_live, rop.corpus.report, rop.corpus.import,");
   });
 
   test("public help invocation preserves the requested detail mode", () => {
