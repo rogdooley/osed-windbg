@@ -2,6 +2,8 @@ import { HelpEntry, normalizeHelpExamples } from "./help_catalog";
 
 export const HELP_WIDTH = 80;
 const NAME_WIDTH = 23;
+const DESC_WIDTH = 36;
+const EXAMPLE_PREFIX = "dx @$osed().";
 const ROOT_CATEGORY_ORDER = ["crash", "payload", "target", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
 const ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
 
@@ -57,15 +59,25 @@ function orderedGroups(groups: Map<string, HelpDocument[]>, order: string[] = RO
   return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
+function shortExample(entry: HelpDocument): string {
+  const examples = normalizeHelpExamples(entry.examples);
+  if (examples.length === 0) return "";
+  const command = examples[0].command.split(/\s+\/\/\s+/)[0];
+  return command.startsWith(EXAMPLE_PREFIX) ? command.slice(EXAMPLE_PREFIX.length) : command;
+}
+
+function truncate(text: string, width: number): string {
+  if (text.length <= width) return text;
+  const cut = text.lastIndexOf(" ", width - 1);
+  return `${text.slice(0, cut > 0 ? cut : width - 1).trimEnd()}…`;
+}
+
 export function renderListing(entries: HelpDocument[]): string[] {
-  return entries.flatMap((entry) => {
-    const summary = entry.summary ?? entry.description;
-    if (entry.name.length > NAME_WIDTH) {
-      return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
-    }
-    const descriptionWidth = HELP_WIDTH - NAME_WIDTH - 2;
-    const description = wrapText(summary, descriptionWidth);
-    return description.map((line, index) => `${index === 0 ? entry.name.padEnd(NAME_WIDTH) : " ".repeat(NAME_WIDTH)}  ${line}`);
+  const nameWidth = Math.max(...entries.map((e) => e.name.length)) + 2;
+  return entries.map((entry) => {
+    const summary = truncate(entry.summary ?? entry.description, DESC_WIDTH);
+    const example = shortExample(entry);
+    return `${entry.name.padEnd(nameWidth)}${summary}${example ? `  ${example}` : ""}`;
   });
 }
 

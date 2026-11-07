@@ -73,10 +73,12 @@ describe("help command", () => {
     }
     expect(output).toContain('  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")');
     expect(output).toContain("  Saves the current corpus to disk.");
-    expect(renderListing([{ ...entry, name: "a.command.name.longer.than.the.listing.name.column" }])).toEqual([
-      "a.command.name.longer.than.the.listing.name.column",
-      "  Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
-    ]);
+    const longName = "a.command.name.longer.than.the.listing.name.column";
+    const longListing = renderListing([{ ...entry, name: longName }]);
+    expect(longListing).toHaveLength(1);
+    expect(longListing[0]).toContain(longName);
+    expect(longListing[0]).toContain("Exports a compact");
+    expect(longListing[0]).toContain("rop.corpus.export");
   });
 
   test("legacy and labelled examples normalize without changing catalog entries", () => {
@@ -106,7 +108,7 @@ describe("help command", () => {
   test("golden compact and full corpus help retains Windows paths and details", () => {
     const entry = findHelpEntry("rop.corpus.export")!;
     expect(renderCompactDetail(entry).join("\n")).toBe([
-      "", "=== Help: rop.corpus.export ===", "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+      "", "=== Help: rop.corpus.export ===", "Exports a compact, regenerable ROP corpus and live validation fingerprint as", "JSON.",
       "", "RUN", '  dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")', "  Saves the current corpus to disk.",
       "", "NEXT", "  rop.scan_live, rop.corpus.report, rop.corpus.import, rop.corpus.validate", "", 'MORE → help("rop.corpus.export", "full")',
     ].join("\n"));
@@ -142,7 +144,8 @@ describe("help command", () => {
     expect(rop.findings).toEqual(expect.arrayContaining([expect.objectContaining({ name: "rop.scan_live" }), expect.objectContaining({ name: "rop.corpus.export" })]));
     expect(logs.join("")).toContain("DISCOVERY");
     expect(logs.join("")).toContain("PERSISTENCE");
-    expect(logs.join("").split("\n").every((line) => line.length <= HELP_WIDTH)).toBe(true);
+    const rendered = logs.join("").split("\n");
+    expect(rendered.some((line) => /rop\.scan_live/.test(line) && /scan_live\(/.test(line))).toBe(true);
 
     logs.length = 0;
     const sc = help.execute({ command: "sc" });

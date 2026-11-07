@@ -9340,15 +9340,12 @@ var osed_bundle = (() => {
   };
 
   // src/rop/corpus_store.ts
-  var CORPUS_EXPORT_SCHEMA_VERSION = "v1";
+  var CORPUS_EXPORT_SCHEMA_VERSION = "v2";
+  var LEGACY_CORPUS_EXPORT_SCHEMA_VERSION = "v1";
   function isGadget(value) {
     if (!value || typeof value !== "object") return false;
     const gadget = value;
     return gadget.schemaVersion === "v1" && typeof gadget.canonicalId === "string" && Array.isArray(gadget.instructions) && Array.isArray(gadget.locations) && Array.isArray(gadget.categories) && !!gadget.semanticSummary && Array.isArray(gadget.capabilities);
-  }
-  function replacer(_key, value) {
-    if (value instanceof Set) return { $set: [...value] };
-    return value;
   }
   function reviver(_key, value) {
     if (value && typeof value === "object" && "$set" in value) {
@@ -9362,13 +9359,69 @@ var osed_bundle = (() => {
     const candidate = value;
     return Array.isArray(candidate.modules) && Array.isArray(candidate.samples) && candidate.modules.every((module) => module && typeof module.name === "string" && typeof module.path === "string" && typeof module.base === "number" && typeof module.size === "number") && candidate.samples.every((sample) => sample && typeof sample.address === "number" && Array.isArray(sample.bytes) && sample.bytes.every((byte) => typeof byte === "number"));
   }
+  function isCompactGadget(value) {
+    if (!value || typeof value !== "object") return false;
+    const gadget = value;
+    return Array.isArray(gadget.instructions) && gadget.instructions.length > 0 && gadget.instructions.every((instruction) => typeof instruction === "string" && instruction.trim().length > 0) && Array.isArray(gadget.locations) && gadget.locations.every((location) => location && typeof location === "object");
+  }
+  function compactGadget(gadget) {
+    return {
+      // Semantic summaries, classifications, scores, and capabilities are all
+      // deterministic products of these instructions. Persisting them made an
+      // archive much larger without preserving any additional corpus input.
+      instructions: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText),
+      locations: gadget.locations
+    };
+  }
+  function rehydrateGadget(stored) {
+    var _a, _b, _c, _d, _e, _f;
+    const instructions = stored.instructions.map((instruction) => parseInstruction(instruction));
+    const firstLocation = (_a = stored.locations[0]) != null ? _a : {};
+    const sequence = {
+      schemaVersion: SEMANTIC_SCHEMA_VERSION,
+      id: `corpus:${stored.instructions.join(" ; ")}`,
+      source: {
+        kind: "corpus-import",
+        name: (_b = firstLocation.source) != null ? _b : "corpus-import",
+        format: "corpus",
+        version: "v2"
+      },
+      originalText: stored.instructions.join(" ; "),
+      instructions,
+      provenance: {
+        module: firstLocation.module,
+        section: firstLocation.section,
+        virtualAddress: firstLocation.virtualAddress,
+        fileOffset: firstLocation.fileOffset,
+        executable: (_c = firstLocation.executable) != null ? _c : "UNKNOWN",
+        writable: (_d = firstLocation.writable) != null ? _d : "UNKNOWN",
+        aslr: (_e = firstLocation.aslr) != null ? _e : "UNKNOWN",
+        rebaseable: (_f = firstLocation.rebaseable) != null ? _f : "UNKNOWN"
+      }
+    };
+    const semanticSummary = composeSemanticSequence(sequence);
+    const classification = buildRopGadget(semanticSummary);
+    const scoring = scoreSemanticSequence(semanticSummary, classification.categories);
+    return {
+      schemaVersion: ROP_SCHEMA_VERSION,
+      canonicalId: canonicalizeSequenceForPolicy(sequence),
+      instructions,
+      locations: stored.locations,
+      semanticSummary,
+      categories: classification.categories,
+      score: scoring.score,
+      scoreReasons: scoring.scoreReasons,
+      classificationReasons: classification.classificationReasons,
+      capabilities: deriveCapabilities(semanticSummary, classification.categories)
+    };
+  }
   function exportCorpus(index, fingerprint) {
     const stored = {
       schemaVersion: CORPUS_EXPORT_SCHEMA_VERSION,
-      gadgets: index.gadgets,
+      gadgets: index.gadgets.map(compactGadget),
       fingerprint
     };
-    return JSON.stringify(stored, replacer, 2);
+    return JSON.stringify(stored);
   }
   function importCorpus(text) {
     var _a;
@@ -9380,15 +9433,17 @@ var osed_bundle = (() => {
     }
     if (!parsed || typeof parsed !== "object") throw new Error("ROP corpus JSON must contain an object.");
     const stored = parsed;
-    if (stored.schemaVersion !== CORPUS_EXPORT_SCHEMA_VERSION) {
+    if (stored.schemaVersion !== CORPUS_EXPORT_SCHEMA_VERSION && stored.schemaVersion !== LEGACY_CORPUS_EXPORT_SCHEMA_VERSION) {
       throw new Error(`Unsupported ROP corpus schema '${String((_a = stored.schemaVersion) != null ? _a : "missing")}'.`);
     }
-    if (!Array.isArray(stored.gadgets) || !stored.gadgets.every(isGadget) || !isFingerprint(stored.fingerprint)) {
+    if (!Array.isArray(stored.gadgets) || !isFingerprint(stored.fingerprint)) {
       throw new Error("ROP corpus JSON is missing gadgets or fingerprint data.");
     }
+    const gadgets = stored.schemaVersion === CORPUS_EXPORT_SCHEMA_VERSION ? stored.gadgets.every(isCompactGadget) ? stored.gadgets.map(rehydrateGadget) : void 0 : stored.gadgets.every(isGadget) ? stored.gadgets : void 0;
+    if (!gadgets) throw new Error("ROP corpus JSON is missing gadgets or fingerprint data.");
     return {
       schemaVersion: CORPUS_EXPORT_SCHEMA_VERSION,
-      index: buildCapabilities(stored.gadgets),
+      index: buildCapabilities(gadgets),
       fingerprint: stored.fingerprint
     };
   }
@@ -10352,8 +10407,7 @@ var osed_bundle = (() => {
       examples: [
         'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
         'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
-        'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
-        'dx @$osed().rop.scan_live({module:"crypto", append:true})'
+        'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)'
       ],
       seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"]
     },
@@ -10361,7 +10415,7 @@ var osed_bundle = (() => {
       name: "rop.query",
       description: "Filters the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
-      examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query({capability:"MEMORY_WRITE", verbose:true})'],
+      examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("capability", "MEMORY_WRITE", false, true)'],
       details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities."
     },
     {
@@ -10385,11 +10439,9 @@ var osed_bundle = (() => {
     {
       name: "rop.synthesize",
       description: "Synthesizes a concrete stack layout from a plan and the current exploit state. Uses cached state from triage(); accepts optional overrides.",
-      usage: "dx @$osed().rop.synthesize(planId, overrides?)",
+      usage: "dx @$osed().rop.synthesize(planId)",
       examples: [
-        "dx @$osed().rop.synthesize(1)",
-        "dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 128})",
-        'dx @$osed().rop.synthesize(1, {badchars: "00 0A 0D"})'
+        "dx @$osed().rop.synthesize(1)"
       ]
     },
     {
@@ -10438,36 +10490,36 @@ var osed_bundle = (() => {
     {
       name: "rop.generate",
       description: 'One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. Use api: "auto" to enumerate all candidates and select the best. All discovery is optional \u2014 pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).',
-      usage: "dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})",
+      usage: "dx @$osed().rop.generate(api, shellcode?, badchars?, module?, offset?)",
       examples: [
-        'dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
-        'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
-        'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})'
+        'dx @$osed().rop.generate("auto", "", "00 0A 0D", "MSA2Mfilter03", 780)',
+        'dx @$osed().rop.generate("VirtualAlloc", "FC E8 82 00 00 00 60", "00 0A 0D")',
+        'dx @$osed().rop.generate("VirtualProtect")'
       ],
       seeAlso: ["rop.scan_live", "rop.verify", "rop.prove"]
     },
     {
       name: "rop.verify",
       description: "Chain verifier. Inspects a generated or manually supplied ROP chain for bad characters, unresolved placeholders, stack consumption, and register side effects. Reports static validity separately from a DWORD-by-DWORD runtime trace with ESP movement and register state. Never modifies the chain \u2014 read-only analysis.",
-      usage: "dx @$osed().rop.verify({chain?, badchars?, api?})",
+      usage: "dx @$osed().rop.verify(chain?, badchars?, api?)",
       examples: [
         "dx @$osed().rop.verify()                                          // verify last rop.generate result",
-        'dx @$osed().rop.verify({badchars: "00 0A 0D"})                    // verify last result with explicit badchars',
-        'dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF", badchars: "00 0A 0D"})'
+        'dx @$osed().rop.verify("", "00 0A 0D")                            // verify last result with explicit badchars',
+        'dx @$osed().rop.verify("10022D64 1005D060 DEADBEEF", "00 0A 0D")'
       ],
       seeAlso: ["rop.generate", "rop.prove"]
     },
     {
       name: "rop.prove",
       description: "Guided debugger-backed ROP proof. Predicts one checkpoint at a time, optionally owns one one-shot breakpoint, and never resumes execution. Reports gadget execution separately from the DEP objective.",
-      usage: 'dx @$osed().rop.prove({mode?, chain?, api?, postcondition?} | {action:"status"|"cancel"|"history"|"export", orphans?, path?})',
+      usage: "dx @$osed().rop.prove(modeOrAction?)",
       examples: [
-        'dx @$osed().rop.prove({mode:"guided"})',
-        'dx @$osed().rop.prove({mode:"observe"})',
+        'dx @$osed().rop.prove("guided")',
+        'dx @$osed().rop.prove("observe")',
         "dx @$osed().rop.prove()",
-        'dx @$osed().rop.prove({action:"status"})',
-        'dx @$osed().rop.prove({action:"cancel", orphans:true})',
-        'dx @$osed().rop.prove({action:"export", path:"C:\\\\notes\\\\proof.json"})'
+        'dx @$osed().rop.prove("status")',
+        'dx @$osed().rop.prove("cancel")',
+        'dx @$osed().rop.prove("export")'
       ],
       seeAlso: ["rop.generate", "rop.verify"]
     },
@@ -10484,7 +10536,7 @@ var osed_bundle = (() => {
     },
     {
       name: "rop.corpus.export",
-      description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+      description: "Exports a compact, regenerable ROP corpus and live validation fingerprint as JSON.",
       usage: "dx @$osed().rop.corpus.export(path?)",
       examples: [
         'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // Saves the current corpus to disk.',
@@ -10530,7 +10582,7 @@ var osed_bundle = (() => {
         "dx @$osed().rop.pivots()",
         'dx @$osed().rop.pivots("eax")',
         "dx @$osed().rop.pivots(undefined, 0x100)",
-        'dx @$osed().rop.pivots({register:"eax", verbose:true})'
+        'dx @$osed().rop.pivots("eax", 0, true)'
       ],
       details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata."
     },
@@ -10715,9 +10767,7 @@ var osed_bundle = (() => {
       description: "Views or updates the cached exploit state used by rop.synthesize(). Populated automatically by triage(); individual fields can be set or overridden manually.",
       usage: "dx @$osed().exploit.state(overrides?)",
       examples: [
-        "dx @$osed().exploit.state()",
-        'dx @$osed().exploit.state({mechanism: "saved-ret", controlledBytesAfterEsp: 512})',
-        'dx @$osed().exploit.state({badchars: "00 0A 0D", apiResolution: "iat"})'
+        "dx @$osed().exploit.state()"
       ]
     },
     {
@@ -10749,7 +10799,8 @@ var osed_bundle = (() => {
 
   // src/core/help_render.ts
   var HELP_WIDTH = 80;
-  var NAME_WIDTH = 23;
+  var DESC_WIDTH = 36;
+  var EXAMPLE_PREFIX = "dx @$osed().";
   var ROOT_CATEGORY_ORDER = ["crash", "payload", "target", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
   var ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
   function words(text) {
@@ -10795,16 +10846,24 @@ var osed_bundle = (() => {
     };
     return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   }
+  function shortExample(entry) {
+    const examples = normalizeHelpExamples(entry.examples);
+    if (examples.length === 0) return "";
+    const command2 = examples[0].command.split(/\s+\/\/\s+/)[0];
+    return command2.startsWith(EXAMPLE_PREFIX) ? command2.slice(EXAMPLE_PREFIX.length) : command2;
+  }
+  function truncate(text, width) {
+    if (text.length <= width) return text;
+    const cut = text.lastIndexOf(" ", width - 1);
+    return `${text.slice(0, cut > 0 ? cut : width - 1).trimEnd()}\u2026`;
+  }
   function renderListing(entries) {
-    return entries.flatMap((entry) => {
+    const nameWidth = Math.max(...entries.map((e) => e.name.length)) + 2;
+    return entries.map((entry) => {
       var _a;
-      const summary = (_a = entry.summary) != null ? _a : entry.description;
-      if (entry.name.length > NAME_WIDTH) {
-        return [entry.name, ...wrapText(summary, HELP_WIDTH, "  ")];
-      }
-      const descriptionWidth = HELP_WIDTH - NAME_WIDTH - 2;
-      const description = wrapText(summary, descriptionWidth);
-      return description.map((line, index) => `${index === 0 ? entry.name.padEnd(NAME_WIDTH) : " ".repeat(NAME_WIDTH)}  ${line}`);
+      const summary = truncate((_a = entry.summary) != null ? _a : entry.description, DESC_WIDTH);
+      const example = shortExample(entry);
+      return `${entry.name.padEnd(nameWidth)}${summary}${example ? `  ${example}` : ""}`;
     });
   }
   function renderOverview(groups) {
@@ -14973,10 +15032,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-05T03:53:39.389Z" : globalThis[key2];
+        value = true ? "2026-11-07T02:20:34.803Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "055a7608ede5" : globalThis[key2];
+        value = true ? "f2a5a9b56198" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16412,6 +16471,19 @@ var osed_bundle = (() => {
       (_f = file.Close) == null ? void 0 : _f.call(file);
     }
   }
+  function utf8ByteLength(content) {
+    let length = 0;
+    for (let index = 0; index < content.length; index += 1) {
+      const code = content.charCodeAt(index);
+      if (code <= 127) length += 1;
+      else if (code <= 2047) length += 2;
+      else if (code >= 55296 && code <= 56319 && index + 1 < content.length && content.charCodeAt(index + 1) >= 56320 && content.charCodeAt(index + 1) <= 57343) {
+        length += 4;
+        index += 1;
+      } else length += 3;
+    }
+    return length;
+  }
   function readText(path) {
     var _a, _b, _c, _d, _e, _f, _g;
     const hostAny = host;
@@ -16828,9 +16900,25 @@ var osed_bundle = (() => {
         setResult({ command: "rop.corpus.export", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
         return toDxResult("ROP Corpus Export", [{ Error: NO_ROP_CORPUS_MESSAGE }]);
       }
+      const startedAt = Date.now();
       const text = exportCorpus(currentRopCorpus, fingerprintCorpus(currentRopCorpus));
-      if (path) writeProofText(path, text);
-      const rows = [{ Status: path ? "written" : "ready", File: path != null ? path : "(console)", Gadgets: currentRopCorpus.gadgets.length.toString() }];
+      try {
+        if (path) writeProofText(path, text);
+      } catch (error2) {
+        const message = error2 instanceof Error ? error2.message : String(error2);
+        setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
+        return toDxResult("ROP Corpus Export", [{ Error: "Could not write '" + (path != null ? path : "(console)") + "': " + message }]);
+      }
+      const elapsedSeconds = ((Date.now() - startedAt) / 1e3).toFixed(1);
+      const bytes = utf8ByteLength(text);
+      const rows = [{
+        Status: path ? "written" : "ready",
+        File: path != null ? path : "(console)",
+        Gadgets: currentRopCorpus.gadgets.length.toString(),
+        Bytes: bytes.toString(),
+        Elapsed: `${elapsedSeconds}s`
+      }];
+      if (path) info(`ROP corpus export complete in ${elapsedSeconds}s (${bytes} bytes).`);
       renderRows("ROP Corpus Export", rows);
       if (!path) print(text + "\n");
       setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
@@ -18128,7 +18216,7 @@ var osed_bundle = (() => {
       }
       const exploitStale = staleCorpusGuard("Exploit Builder", "rop.generate");
       if (exploitStale) return exploitStale;
-      const options = isPlainObject(args[0]) ? args[0] : { api: args[0], shellcode: args[1], badchars: args[2] };
+      const options = isPlainObject(args[0]) ? args[0] : { api: args[0], shellcode: args[1], badchars: args[2], module: args[3], offset: args[4] };
       const SUPPORTED_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "WinExec", "VirtualProtectEx", "VirtualAllocEx"];
       const DEP_BYPASS_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx"];
       const discoverIatSlot = (apiName) => {
@@ -18484,7 +18572,7 @@ var osed_bundle = (() => {
         getCorpus: () => currentRopCorpus,
         writeText: writeProofText
       });
-      const options = args.length === 0 ? void 0 : isPlainObject(args[0]) ? args[0] : {};
+      const options = args.length === 0 ? void 0 : isPlainObject(args[0]) ? args[0] : typeof args[0] === "string" ? { [/^(status|cancel|history|export)$/i.test(args[0]) ? "action" : "mode"]: args[0], orphans: args[1], path: args[2] } : {};
       const outcome = controller.execute(options);
       const rows = [];
       if (outcome.error) {
@@ -18531,7 +18619,7 @@ var osed_bundle = (() => {
       if (args.length === 1 && args[0] === "help") {
         return helperHelp("rop.verify");
       }
-      const options = isPlainObject(args[0]) ? args[0] : {};
+      const options = isPlainObject(args[0]) ? args[0] : { chain: typeof args[0] === "string" ? args[0] : void 0, badchars: args[1], api: args[2] };
       const badchars = parseBadcharsOption((_b = options.badchars) != null ? _b : (_a = lastResult == null ? void 0 : lastResult.args) == null ? void 0 : _a.badchars);
       let steps;
       let sourceLabel;

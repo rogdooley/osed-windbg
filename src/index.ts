@@ -358,6 +358,21 @@ function writeProofText(path: string, content: string): void {
   }
 }
 
+function utf8ByteLength(content: string): number {
+  let length = 0;
+  for (let index = 0; index < content.length; index += 1) {
+    const code = content.charCodeAt(index);
+    if (code <= 0x7f) length += 1;
+    else if (code <= 0x7ff) length += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < content.length
+      && content.charCodeAt(index + 1) >= 0xdc00 && content.charCodeAt(index + 1) <= 0xdfff) {
+      length += 4;
+      index += 1;
+    } else length += 3;
+  }
+  return length;
+}
+
 function readText(path: string): string {
   const hostAny = host as unknown as { namespace?: { Debugger?: { Utility?: { FileSystem?: { OpenFile?: (path: string) => unknown; CreateFile?: (path: string, disposition: string) => unknown } } } } };
   const fs = hostAny.namespace?.Debugger?.Utility?.FileSystem;
@@ -818,9 +833,25 @@ function bindApi(): OsedApi {
       setResult({ command: "rop.corpus.export", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
       return toDxResult("ROP Corpus Export", [{ Error: NO_ROP_CORPUS_MESSAGE }]);
     }
+    const startedAt = Date.now();
     const text = exportCorpus(currentRopCorpus, fingerprintCorpus(currentRopCorpus));
-    if (path) writeProofText(path, text);
-    const rows = [{ Status: path ? "written" : "ready", File: path ?? "(console)", Gadgets: currentRopCorpus.gadgets.length.toString() }];
+    try {
+      if (path) writeProofText(path, text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: false, findings: [], warnings: [], errors: [message] });
+      return toDxResult("ROP Corpus Export", [{ Error: "Could not write '" + (path ?? "(console)") + "': " + message }]);
+    }
+    const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const bytes = utf8ByteLength(text);
+    const rows = [{
+      Status: path ? "written" : "ready",
+      File: path ?? "(console)",
+      Gadgets: currentRopCorpus.gadgets.length.toString(),
+      Bytes: bytes.toString(),
+      Elapsed: `${elapsedSeconds}s`,
+    }];
+    if (path) out.info(`ROP corpus export complete in ${elapsedSeconds}s (${bytes} bytes).`);
     renderRows("ROP Corpus Export", rows);
     if (!path) out.print(text + "\n");
     setResult({ command: "rop.corpus.export", args: path ? { path } : {}, success: true, findings: rows, warnings: [], errors: [] });
@@ -2234,7 +2265,7 @@ function bindApi(): OsedApi {
 
     const options = isPlainObject(args[0])
       ? args[0]
-      : { api: args[0], shellcode: args[1], badchars: args[2] };
+      : { api: args[0], shellcode: args[1], badchars: args[2], module: args[3], offset: args[4] };
 
     const SUPPORTED_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "WinExec", "VirtualProtectEx", "VirtualAllocEx"];
     const DEP_BYPASS_APIS = ["VirtualProtect", "VirtualAlloc", "WriteProcessMemory", "VirtualProtectEx", "VirtualAllocEx"];
@@ -2660,7 +2691,13 @@ function bindApi(): OsedApi {
       getCorpus: () => currentRopCorpus,
       writeText: writeProofText,
     });
-    const options = args.length === 0 ? undefined : isPlainObject(args[0]) ? args[0] : {};
+    const options = args.length === 0
+      ? undefined
+      : isPlainObject(args[0])
+        ? args[0]
+        : typeof args[0] === "string"
+          ? { [/^(status|cancel|history|export)$/i.test(args[0]) ? "action" : "mode"]: args[0], orphans: args[1], path: args[2] }
+          : {};
     const outcome = controller.execute(options);
     const rows: Array<Record<string, string>> = [];
     if (outcome.error) {
@@ -2710,7 +2747,9 @@ function bindApi(): OsedApi {
       return helperHelp("rop.verify");
     }
 
-    const options = isPlainObject(args[0]) ? args[0] : {};
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { chain: typeof args[0] === "string" ? args[0] : undefined, badchars: args[1], api: args[2] };
     const badchars = parseBadcharsOption(options.badchars ?? (lastResult?.args as Record<string, unknown> | undefined)?.badchars);
 
     // Determine the chain to verify: manual chain string, or last rop.generate result

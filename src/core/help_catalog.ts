@@ -135,8 +135,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     examples: [
       'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
       'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
-      'dx @$osed().rop.scan_live(["compression", "crypto", "network"])',
-      'dx @$osed().rop.scan_live({module:"crypto", append:true})',
+      'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)',
     ],
     seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"],
   },
@@ -144,7 +143,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     name: "rop.query",
     description: "Filters the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
-    examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query({capability:"MEMORY_WRITE", verbose:true})'],
+    examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("capability", "MEMORY_WRITE", false, true)'],
     details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities.",
   },
   {
@@ -168,11 +167,9 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.synthesize",
     description: "Synthesizes a concrete stack layout from a plan and the current exploit state. Uses cached state from triage(); accepts optional overrides.",
-    usage: "dx @$osed().rop.synthesize(planId, overrides?)",
+    usage: "dx @$osed().rop.synthesize(planId)",
     examples: [
       "dx @$osed().rop.synthesize(1)",
-      'dx @$osed().rop.synthesize(1, {controlledBytesAfterEsp: 128})',
-      'dx @$osed().rop.synthesize(1, {badchars: "00 0A 0D"})',
     ],
   },
   {
@@ -221,36 +218,36 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.generate",
     description: "One-command exploit generator. Discovers the IAT slot and writable buffer, builds a slot_call ROP chain for the chosen DEP-bypass API, XOR-encodes shellcode, and emits a complete Python exploit. Use api: \"auto\" to enumerate all candidates and select the best. All discovery is optional — pass iatSlot, buf, retAddr manually to override. Requires a loaded corpus (rop.scan / rop.scan_live).",
-    usage: 'dx @$osed().rop.generate({api, shellcode?, badchars?, module?, offset?, iatSlot?, buf?, retAddr?, writable?, entrySkew?})',
+    usage: 'dx @$osed().rop.generate(api, shellcode?, badchars?, module?, offset?)',
     examples: [
-      'dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
-      'dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})',
-      'dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", badchars: "00 0A 0D"})',
+      'dx @$osed().rop.generate("auto", "", "00 0A 0D", "MSA2Mfilter03", 780)',
+      'dx @$osed().rop.generate("VirtualAlloc", "FC E8 82 00 00 00 60", "00 0A 0D")',
+      'dx @$osed().rop.generate("VirtualProtect")',
     ],
     seeAlso: ["rop.scan_live", "rop.verify", "rop.prove"],
   },
   {
     name: "rop.verify",
     description: "Chain verifier. Inspects a generated or manually supplied ROP chain for bad characters, unresolved placeholders, stack consumption, and register side effects. Reports static validity separately from a DWORD-by-DWORD runtime trace with ESP movement and register state. Never modifies the chain — read-only analysis.",
-    usage: 'dx @$osed().rop.verify({chain?, badchars?, api?})',
+    usage: 'dx @$osed().rop.verify(chain?, badchars?, api?)',
     examples: [
       'dx @$osed().rop.verify()                                          // verify last rop.generate result',
-      'dx @$osed().rop.verify({badchars: "00 0A 0D"})                    // verify last result with explicit badchars',
-      'dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF", badchars: "00 0A 0D"})',
+      'dx @$osed().rop.verify("", "00 0A 0D")                            // verify last result with explicit badchars',
+      'dx @$osed().rop.verify("10022D64 1005D060 DEADBEEF", "00 0A 0D")',
     ],
     seeAlso: ["rop.generate", "rop.prove"],
   },
   {
     name: "rop.prove",
     description: "Guided debugger-backed ROP proof. Predicts one checkpoint at a time, optionally owns one one-shot breakpoint, and never resumes execution. Reports gadget execution separately from the DEP objective.",
-    usage: 'dx @$osed().rop.prove({mode?, chain?, api?, postcondition?} | {action:"status"|"cancel"|"history"|"export", orphans?, path?})',
+    usage: 'dx @$osed().rop.prove(modeOrAction?)',
     examples: [
-      'dx @$osed().rop.prove({mode:"guided"})',
-      'dx @$osed().rop.prove({mode:"observe"})',
+      'dx @$osed().rop.prove("guided")',
+      'dx @$osed().rop.prove("observe")',
       'dx @$osed().rop.prove()',
-      'dx @$osed().rop.prove({action:"status"})',
-      'dx @$osed().rop.prove({action:"cancel", orphans:true})',
-      'dx @$osed().rop.prove({action:"export", path:"C:\\\\notes\\\\proof.json"})',
+      'dx @$osed().rop.prove("status")',
+      'dx @$osed().rop.prove("cancel")',
+      'dx @$osed().rop.prove("export")',
     ],
     seeAlso: ["rop.generate", "rop.verify"],
   },
@@ -267,7 +264,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "rop.corpus.export",
-    description: "Exports the full semantic ROP corpus and live validation fingerprint as JSON.",
+    description: "Exports a compact, regenerable ROP corpus and live validation fingerprint as JSON.",
     usage: "dx @$osed().rop.corpus.export(path?)",
     examples: [
       'dx @$osed().rop.corpus.export("C:\\\\notes\\\\rop-corpus.json")  // Saves the current corpus to disk.',
@@ -313,7 +310,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.pivots()",
       'dx @$osed().rop.pivots("eax")',
       "dx @$osed().rop.pivots(undefined, 0x100)",
-      "dx @$osed().rop.pivots({register:\"eax\", verbose:true})",
+      'dx @$osed().rop.pivots("eax", 0, true)',
     ],
     details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata.",
   },
@@ -499,8 +496,6 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     usage: "dx @$osed().exploit.state(overrides?)",
     examples: [
       "dx @$osed().exploit.state()",
-      'dx @$osed().exploit.state({mechanism: "saved-ret", controlledBytesAfterEsp: 512})',
-      'dx @$osed().exploit.state({badchars: "00 0A 0D", apiResolution: "iat"})',
     ],
   },
   {
