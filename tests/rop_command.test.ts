@@ -315,9 +315,10 @@ describe("rop_suggest command", () => {
 
   test("corpus export writes UTF-8 bytes through the WinDbg file object", () => {
     const writes: number[] = [];
+    const logs: string[] = [];
     let closed = false;
     (globalThis as unknown as { host: unknown }).host = {
-      diagnostics: { debugLog: () => undefined },
+      diagnostics: { debugLog: (line: string) => logs.push(line) },
       currentProcess: { Is64Bit: false, Modules: [] },
       namespace: {
         Debugger: {
@@ -349,7 +350,9 @@ describe("rop_suggest command", () => {
 
     expect(api.last_result().success).toBe(true);
     expect(closed).toBe(true);
-    expect(new TextDecoder().decode(new Uint8Array(writes))).toContain("\"version\"");
+    expect(new TextDecoder().decode(new Uint8Array(writes))).toContain("\"schemaVersion\":\"v2\"");
+    expect(logs.join("")).toContain("ROP corpus export complete in");
+    expect(logs.join("")).toMatch(/Bytes\s+Elapsed/);
   });
 
   test("corpus report writes the readable inventory and surfaces file failures", () => {

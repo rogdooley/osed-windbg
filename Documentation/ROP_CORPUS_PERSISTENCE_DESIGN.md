@@ -33,11 +33,14 @@ instructions.
 
 ## Design
 
-`rop.corpus.export(path)` writes canonical JSON containing corpus schema
-version, gadgets, locations, semantic summaries, capabilities, scan metadata,
-and a validation fingerprint. Each fingerprint records every resolvable module
-that backs a gadget (name, path, base, size) and a bounded sample of gadget
-address/instruction bytes.
+`rop.corpus.export(path)` writes compact JSON containing its schema version,
+gadget instruction text, locations, and a validation fingerprint. Semantic
+summaries, classifications, scores, reasons, and capabilities are deterministic
+derivatives of the instruction text, so import regenerates them rather than
+persisting their repeated evidence. Each fingerprint records every resolvable
+module that backs a gadget (name, path, base, size) and a bounded sample of
+gadget address/instruction bytes. The completion result reports the archive's
+byte count and elapsed time.
 
 `rop.corpus.import(path)` accepts only the export schema, restores the catalog
 in a `stale-imported` state, and makes the status visible to the user.

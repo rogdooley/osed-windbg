@@ -26,6 +26,33 @@ describe("ROP corpus store", () => {
     expect(validateCorpus(imported, fingerprint)).toEqual({ valid: true, reasons: [] });
   });
 
+  test("exports only regenerable corpus input, then restores query behavior", () => {
+    const text = exportCorpus(corpus, fingerprint);
+    const stored = JSON.parse(text) as { schemaVersion: string; gadgets: Array<Record<string, unknown>> };
+
+    expect(stored.schemaVersion).toBe("v2");
+    expect(stored.gadgets[0]).toEqual(expect.objectContaining({
+      instructions: ["pop eax", "ret"],
+      locations: expect.any(Array),
+    }));
+    expect(text).not.toContain("semanticSummary");
+    expect(text).not.toContain("classificationReasons");
+
+    const imported = importCorpus(text);
+    expect(imported.index.query({ capability: "LOAD_REGISTER" })).toHaveLength(1);
+    expect(imported.index.gadgets[0].semanticSummary.summary.stackDelta.values.exact).toEqual(new Set([8]));
+  });
+
+  test("imports legacy v1 semantic archives", () => {
+    const legacy = JSON.stringify({
+      schemaVersion: "v1",
+      gadgets: corpus.gadgets,
+      fingerprint,
+    }, (_key, value) => value instanceof Set ? { $set: [...value] } : value);
+
+    expect(importCorpus(legacy).index.query({ capability: "LOAD_REGISTER" })).toHaveLength(1);
+  });
+
   test("rejects incompatible corpus schema", () => {
     expect(() => importCorpus(JSON.stringify({ schemaVersion: "v0" }))).toThrow("Unsupported ROP corpus schema");
   });
