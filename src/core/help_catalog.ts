@@ -358,12 +358,14 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "code_caves",
-    description: "Finds contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
-    usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
+    description: "Finds contiguous null/int3/nop padding regions in PE sections with exploitation classification, ASLR awareness, and bad-character filtering. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
+    usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
     examples: [
       "dx @$osed().code_caves()",
       'dx @$osed().code_caves("essfunc")',
       'dx @$osed().code_caves("essfunc", 100)',
+      'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
+      'dx @$osed().code_caves("", 50, 25, "", "EXEC")',
     ],
   },
   {

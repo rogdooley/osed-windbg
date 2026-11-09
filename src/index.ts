@@ -3182,7 +3182,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
     case "modules":
       return { filter: args[0] };
     case "code_caves":
-      return { module: args[0], minSize: args[1], maxResults: args[2] };
+      return { module: args[0], minSize: args[1], maxResults: args[2], badChars: args[3], capability: args[4] };
     case "math":
       return { value: args[0], bits: args[1] };
     case "str_read":

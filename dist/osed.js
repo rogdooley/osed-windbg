@@ -10630,12 +10630,14 @@ var osed_bundle = (() => {
     },
     {
       name: "code_caves",
-      description: "Finds contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
-      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
+      description: "Finds contiguous null/int3/nop padding regions in PE sections with exploitation classification, ASLR awareness, and bad-character filtering. Detection heuristics inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
       examples: [
         "dx @$osed().code_caves()",
         'dx @$osed().code_caves("essfunc")',
-        'dx @$osed().code_caves("essfunc", 100)'
+        'dx @$osed().code_caves("essfunc", 100)',
+        'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
+        'dx @$osed().code_caves("", 50, 25, "", "EXEC")'
       ]
     },
     {
@@ -10805,10 +10807,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-07T02:39:03.724Z" : globalThis[key2];
+        value = true ? "2026-11-09T02:43:54.360Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "f659789b4024" : globalThis[key2];
+        value = true ? "5f9902de41ed" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -12520,6 +12522,8 @@ var osed_bundle = (() => {
   }
 
   // src/commands/code_caves.ts
+  var IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2 = 64;
+  var ROP_WORKSPACE_MIN_BYTES = 128;
   function classifyRun(nullCount, int3Count, nopCount) {
     const total = nullCount + int3Count + nopCount;
     if (total === nullCount) return "NULL";
@@ -12544,6 +12548,19 @@ var osed_bundle = (() => {
       return readUint32LE(pe + BigInt(56));
     } catch (e) {
       return 0;
+    }
+  }
+  function readModuleAslr(moduleBase) {
+    try {
+      const mz = readUint16LE(moduleBase);
+      if (mz !== 23117) return "unknown";
+      const peOffset = readUint32LE(moduleBase + BigInt(60));
+      const pe = moduleBase + BigInt(peOffset);
+      if (readUint32LE(pe) !== 17744) return "unknown";
+      const dllChars = readUint16LE(pe + BigInt(94));
+      return (dllChars & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE2) !== 0 ? "enabled" : "disabled";
+    } catch (e) {
+      return "unknown";
     }
   }
   function computeEffectiveSizes(sections) {
@@ -12592,11 +12609,20 @@ var osed_bundle = (() => {
           size: runLength,
           pattern: classifyRun(nullCount, int3Count, nopCount),
           module: moduleName,
+          modulePath: section2.module.path,
+          moduleBase: section2.module.base,
           section: section2.name,
           sectionExecutable: section2.executable,
+          rva: Number(runStart - section2.module.base),
+          aslr: "unknown",
           readable: null,
           writable: null,
-          executable: null
+          executable: null,
+          capabilities: [],
+          addrSafe: null,
+          badBytes: [],
+          safeOffset: null,
+          safeVa: null
         });
       }
       runStart = void 0;
@@ -12631,25 +12657,130 @@ var osed_bundle = (() => {
     flush();
     return caves;
   }
-  function enrichProtection(caves) {
-    const checked = /* @__PURE__ */ new Map();
-    for (const cave of caves) {
-      const key2 = cave.address.toString();
-      let prot = checked.get(key2);
-      if (!prot) {
-        const region = memoryRegion(cave.address);
-        prot = { readable: region.readable, writable: region.writable, executable: region.executable };
-        checked.set(key2, prot);
-      }
-      cave.readable = prot.readable;
-      cave.writable = prot.writable;
-      cave.executable = prot.executable;
+  function classifyCapabilities(readable, writable, executable, size) {
+    const r = readable === true;
+    const w = writable === true;
+    const x = executable === true;
+    if (!r && !w && !x) return ["UNUSABLE"];
+    const caps = [];
+    if (r && w && x) caps.push("RWX");
+    if (x && !(r && w && x)) caps.push("EXEC");
+    if (w) {
+      caps.push("STAGING");
+      if (size >= ROP_WORKSPACE_MIN_BYTES) caps.push("ROP_WORKSPACE");
     }
+    if (r && !w && !x) caps.push("READ_ONLY");
+    return caps.length > 0 ? caps : ["UNUSABLE"];
   }
-  function flag(value) {
-    return value === null ? "?" : value ? "yes" : "no";
+  function displayCapabilities(caps) {
+    if (caps.includes("RWX")) return "RWX";
+    if (caps.includes("UNUSABLE")) return "UNUSABLE";
+    if (caps.includes("READ_ONLY")) return "READ_ONLY";
+    const parts = [];
+    if (caps.includes("EXEC")) parts.push("EXEC");
+    if (caps.includes("STAGING")) parts.push("STAGING");
+    if (caps.includes("ROP_WORKSPACE")) parts.push("ROP");
+    return parts.join(",");
   }
-  function findCodeCaves(module, minSize, maxResults) {
+  function protectionLabel(r, w, x) {
+    if (r === null && w === null && x === null) return "?";
+    const parts = [];
+    if (r) parts.push("R");
+    if (w) parts.push("W");
+    if (x) parts.push("X");
+    return parts.length > 0 ? parts.join("") : "-";
+  }
+  function enrichAndSplit(caves, minSize) {
+    const result3 = [];
+    for (const cave of caves) {
+      let pos = cave.address;
+      const end = cave.address + BigInt(cave.size);
+      while (pos < end) {
+        const region = memoryRegion(pos);
+        let segEnd;
+        if (region.baseAddress !== void 0 && region.regionSize !== void 0 && region.regionSize > BigInt(0) && region.baseAddress <= pos && region.baseAddress + region.regionSize > pos) {
+          segEnd = region.baseAddress + region.regionSize;
+          if (segEnd > end) segEnd = end;
+        } else {
+          segEnd = end;
+        }
+        const segSize = Number(segEnd - pos);
+        if (segSize >= minSize) {
+          let r = region.readable;
+          let w = region.writable;
+          let x = region.executable;
+          if (region.guarded === true || region.noAccess === true || region.committed !== null && !region.committed) {
+            r = false;
+            w = false;
+            x = false;
+          }
+          const offsetFromOriginal = Number(pos - cave.address);
+          result3.push(__spreadProps(__spreadValues({}, cave), {
+            address: pos,
+            size: segSize,
+            rva: cave.rva + offsetFromOriginal,
+            readable: r,
+            writable: w,
+            executable: x,
+            capabilities: classifyCapabilities(r, w, x, segSize)
+          }));
+        }
+        pos = segEnd;
+      }
+    }
+    return result3;
+  }
+  function parseBadChars(input) {
+    const chars = /* @__PURE__ */ new Set();
+    const tokens = input.trim().split(/[\s,]+/);
+    for (const token of tokens) {
+      if (token.length === 0) continue;
+      const value = parseInt(token, 16);
+      if (!isNaN(value) && value >= 0 && value <= 255) {
+        chars.add(value);
+      }
+    }
+    return chars;
+  }
+  function addressBadBytes(address, pointerSize, badChars) {
+    const bad = [];
+    let addr = address;
+    for (let i = 0; i < pointerSize; i++) {
+      const byte = Number(addr & BigInt(255));
+      if (badChars.has(byte)) bad.push(byte);
+      addr >>= BigInt(8);
+    }
+    return [...new Set(bad)];
+  }
+  function findSafeOffset(caveAddress, caveSize, pointerSize, badChars) {
+    for (let delta = 0; delta < caveSize; delta++) {
+      const addr = caveAddress + BigInt(delta);
+      if (addressBadBytes(addr, pointerSize, badChars).length === 0) {
+        return { offset: delta, va: addr };
+      }
+    }
+    return null;
+  }
+  function rankCaves(caves) {
+    return [...caves].sort((a, b) => {
+      const aslrRank = (c) => c.aslr === "disabled" ? 0 : c.aslr === "unknown" ? 1 : 2;
+      const aslrDiff = aslrRank(a) - aslrRank(b);
+      if (aslrDiff !== 0) return aslrDiff;
+      if (a.addrSafe !== null && b.addrSafe !== null) {
+        const safeDiff = (a.addrSafe ? 0 : 1) - (b.addrSafe ? 0 : 1);
+        if (safeDiff !== 0) return safeDiff;
+      }
+      const usability = (c) => {
+        if (c.capabilities.includes("UNUSABLE")) return 2;
+        if (c.capabilities.includes("READ_ONLY")) return 1;
+        return 0;
+      };
+      const useDiff = usability(a) - usability(b);
+      if (useDiff !== 0) return useDiff;
+      return b.size - a.size;
+    });
+  }
+  function findCodeCaves(module, minSize, maxResults, badChars, capability2) {
     const scope = forEachSection({
       module,
       executableOnly: false,
@@ -12657,90 +12788,171 @@ var osed_bundle = (() => {
       chunkSize: 4096
     });
     const effectiveSizes = computeEffectiveSizes(scope.sections);
-    const caves = [];
+    let pointerSize;
+    try {
+      pointerSize = getPointerSize();
+    } catch (e) {
+      pointerSize = 4;
+    }
+    const rawCaves = [];
     for (let s = 0; s < scope.sections.length; s++) {
       const section2 = scope.sections[s];
       const scanSize = effectiveSizes[s];
       const found = scanForCaves(section2, scanSize, minSize, 4096);
       for (const cave of found) {
-        caves.push(cave);
-        if (caves.length >= maxResults) break;
+        rawCaves.push(cave);
       }
-      if (caves.length >= maxResults) break;
     }
-    caves.sort((a, b) => b.size - a.size);
-    enrichProtection(caves);
+    let caves = enrichAndSplit(rawCaves, minSize);
+    const aslrCache = /* @__PURE__ */ new Map();
+    for (const cave of caves) {
+      const key2 = cave.moduleBase.toString(16);
+      let aslr = aslrCache.get(key2);
+      if (aslr === void 0) {
+        aslr = readModuleAslr(cave.moduleBase);
+        aslrCache.set(key2, aslr);
+      }
+      cave.aslr = aslr;
+    }
+    if (capability2) {
+      const cap = capability2.toUpperCase();
+      caves = caves.filter((c) => c.capabilities.includes(cap));
+    }
+    if (badChars && badChars.trim().length > 0) {
+      const badSet = parseBadChars(badChars);
+      if (badSet.size > 0) {
+        for (const cave of caves) {
+          const bad = addressBadBytes(cave.address, pointerSize, badSet);
+          cave.addrSafe = bad.length === 0;
+          cave.badBytes = bad;
+          if (!cave.addrSafe) {
+            const safe = findSafeOffset(cave.address, cave.size, pointerSize, badSet);
+            if (safe) {
+              cave.safeOffset = safe.offset;
+              cave.safeVa = safe.va;
+            }
+          }
+        }
+      }
+    }
+    caves = rankCaves(caves);
+    caves = caves.slice(0, maxResults);
     return { caves, warnings: scope.warnings };
   }
   function createCodeCavesCommand() {
     return {
       name: "code_caves",
       description: "Find contiguous null/int3/nop padding regions in PE sections suitable for shellcode placement. Inspired by nop-tech/codecaver (https://github.com/nop-tech/codecaver).",
-      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?)",
+      usage: "dx @$osed().code_caves(module?, minSize?, maxResults?, badChars?, capability?)",
       examples: [
         "dx @$osed().code_caves()",
         'dx @$osed().code_caves("vulnserver")',
         'dx @$osed().code_caves("essfunc", 100)',
-        'dx @$osed().code_caves("essfunc", 50, 20)'
+        'dx @$osed().code_caves("essfunc", 50, 25, "00 0A 0D")',
+        'dx @$osed().code_caves("", 50, 25, "", "EXEC")'
       ],
       schema: {
         module: { type: "string" },
         minSize: { type: "number", min: 1, default: 50 },
-        maxResults: { type: "number", min: 1, max: 100, default: 25 }
+        maxResults: { type: "number", min: 1, max: 100, default: 25 },
+        badChars: { type: "string" },
+        capability: { type: "string" }
       },
       execute(options) {
         var _a, _b;
         const module = options.module;
         const minSize = (_a = options.minSize) != null ? _a : 50;
         const maxResults = (_b = options.maxResults) != null ? _b : 25;
+        const badChars = options.badChars;
+        const capability2 = options.capability;
         const pointerSize = getPointerSize();
-        const { caves, warnings } = findCodeCaves(module, minSize, maxResults);
+        const hasBadChars = badChars !== void 0 && badChars.trim().length > 0;
+        const { caves, warnings } = findCodeCaves(module, minSize, maxResults, badChars, capability2);
         section("Code Caves");
         if (caves.length === 0) {
-          info(`No caves >= ${minSize} bytes found${module ? ` in '${module}'` : ""}.`);
+          const parts = [`No caves >= ${minSize} bytes found`];
+          if (module) parts.push(`in '${module}'`);
+          if (capability2) parts.push(`with capability ${capability2}`);
+          info(parts.join(" ") + ".");
         } else {
-          info(`Found ${caves.length} cave(s) (min ${minSize} bytes${module ? `, module: ${module}` : ""})`);
+          const parts = [`Found ${caves.length} cave(s)`, `min ${minSize} bytes`];
+          if (module) parts.push(`module: ${module}`);
+          if (capability2) parts.push(`filter: ${capability2}`);
+          if (hasBadChars) parts.push("bad chars applied");
+          info(parts.join(", "));
+          const columns = [
+            { key: "va", header: "VA", width: pointerSize * 2 + 2 },
+            { key: "rva", header: "RVA", width: pointerSize * 2 + 2 },
+            { key: "size", header: "Size", width: 11 },
+            { key: "pattern", header: "Pattern", width: 7 },
+            { key: "module", header: "Module", width: 16 },
+            { key: "section", header: "Section", width: 8 },
+            { key: "aslr", header: "ASLR" },
+            { key: "prot", header: "Prot" },
+            { key: "capability", header: "Capability", width: 14 }
+          ];
+          if (hasBadChars) {
+            columns.push({ key: "addrSafe", header: "AddrSafe" });
+            columns.push({ key: "safeVa", header: "SafeVA", width: pointerSize * 2 + 2 });
+          }
           table(
-            [
-              { key: "address", header: "Address", width: pointerSize * 2 + 2 },
-              { key: "size", header: "Size", width: 11 },
-              { key: "pattern", header: "Pattern", width: 7 },
-              { key: "module", header: "Module", width: 16 },
-              { key: "section", header: "Section", width: 8 },
-              { key: "read", header: "R" },
-              { key: "write", header: "W" },
-              { key: "exec", header: "X" }
-            ],
-            caves.map((cave) => ({
-              address: formatAddress(cave.address, pointerSize),
-              size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
-              pattern: cave.pattern,
-              module: cave.module,
-              section: cave.section,
-              read: flag(cave.readable),
-              write: flag(cave.writable),
-              exec: flag(cave.executable)
-            }))
+            columns,
+            caves.map((cave) => {
+              const row = {
+                va: formatAddress(cave.address, pointerSize),
+                rva: formatAddress(BigInt(cave.rva), pointerSize),
+                size: `0x${cave.size.toString(16).toUpperCase()} (${cave.size})`,
+                pattern: cave.pattern,
+                module: cave.module,
+                section: cave.section,
+                aslr: cave.aslr === "enabled" ? "yes" : cave.aslr === "disabled" ? "no" : "?",
+                prot: protectionLabel(cave.readable, cave.writable, cave.executable),
+                capability: displayCapabilities(cave.capabilities)
+              };
+              if (hasBadChars) {
+                row.addrSafe = cave.addrSafe ? "yes" : "no";
+                row.safeVa = cave.addrSafe ? "-" : cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : "(none)";
+              }
+              return row;
+            })
           );
+          if (hasBadChars) {
+            const unsafeCount = caves.filter((c) => c.addrSafe === false).length;
+            if (unsafeCount > 0) {
+              const aslrNote = caves.some((c) => c.aslr === "enabled") ? " (ASLR addresses valid for current mapping only)" : "";
+              info(`${unsafeCount} cave address(es) contain forbidden bytes${aslrNote}.`);
+            }
+          }
         }
         for (const warning of warnings) {
           warn(warning);
         }
-        whyItMatters("Code caves provide writable regions for shellcode or ROP stack pivots without allocating new memory.");
+        whyItMatters(
+          "Code caves are unused regions within mapped images. Their suitability for execution, staging, or ROP workspaces depends on memory protection, address stability, and input constraints."
+        );
         return {
           command: "code_caves",
           args: options,
           success: true,
           findings: caves.map((cave) => ({
             address: formatAddress(cave.address, pointerSize),
+            rva: cave.rva,
             size: cave.size,
             pattern: cave.pattern,
             module: cave.module,
+            modulePath: cave.modulePath,
+            moduleBase: formatAddress(cave.moduleBase, pointerSize),
             section: cave.section,
             sectionExecutable: cave.sectionExecutable,
+            aslr: cave.aslr,
             readable: cave.readable,
             writable: cave.writable,
-            executable: cave.executable
+            executable: cave.executable,
+            capabilities: cave.capabilities,
+            addrSafe: cave.addrSafe,
+            badBytes: cave.badBytes.map((b) => formatHexByte(b)),
+            safeOffset: cave.safeOffset,
+            safeVa: cave.safeVa !== null ? formatAddress(cave.safeVa, pointerSize) : null
           })),
           warnings,
           errors: []
@@ -14943,7 +15155,7 @@ var osed_bundle = (() => {
   }
 
   // src/commands/memory.ts
-  function flag2(value) {
+  function flag(value) {
     return value === null ? "unknown" : value ? "yes" : "no";
   }
   function createMemoryCommand() {
@@ -14969,12 +15181,12 @@ var osed_bundle = (() => {
             { key: "type", header: "Type" }
           ],
           [{
-            read: flag2(evidence.readable),
-            write: flag2(evidence.writable),
-            exec: flag2(evidence.executable),
-            guard: flag2(evidence.guarded),
-            noAccess: flag2(evidence.noAccess),
-            commit: flag2(evidence.committed),
+            read: flag(evidence.readable),
+            write: flag(evidence.writable),
+            exec: flag(evidence.executable),
+            guard: flag(evidence.guarded),
+            noAccess: flag(evidence.noAccess),
+            commit: flag(evidence.committed),
             type: evidence.regionType
           }]
         );
@@ -19080,7 +19292,7 @@ var osed_bundle = (() => {
       case "modules":
         return { filter: args[0] };
       case "code_caves":
-        return { module: args[0], minSize: args[1], maxResults: args[2] };
+        return { module: args[0], minSize: args[1], maxResults: args[2], badChars: args[3], capability: args[4] };
       case "math":
         return { value: args[0], bits: args[1] };
       case "str_read":
