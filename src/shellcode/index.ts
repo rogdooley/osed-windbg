@@ -4,7 +4,7 @@ import * as out from "../core/output";
 import { DxResult, toDxResult } from "../core/dx_result";
 import { findHelpEntry, helpRows } from "../core/help_catalog";
 
-type ModuleInfo = {
+export type ModuleInfo = {
   name: string;
   path: string;
   base: bigint;
@@ -52,7 +52,7 @@ type ExportDirectoryInfo = {
   ordinalBase: number;
 };
 
-type IatEntry = {
+export type IatEntry = {
   ownerModule: string;
   importDll: string;
   symbol: string;
@@ -244,7 +244,7 @@ function asciiBytes(text: string): number[] {
   return bytes;
 }
 
-class PEParser {
+export class PEParser {
   private readonly pointerSize: 4 | 8;
 
   public constructor(pointerSize: 4 | 8) {
@@ -374,7 +374,7 @@ class PEParser {
   }
 }
 
-class ExportResolver {
+export class ExportResolver {
   private readonly parser: PEParser;
   // parseExports reads the module's whole export table (many string reads). It is
   // called per import entry by nearestSymbol during iat_find, so without a cache
@@ -482,7 +482,7 @@ class ExportResolver {
   }
 }
 
-class IATResolver {
+export class IATResolver {
   private readonly pointerSize: 4 | 8;
   private readonly parser: PEParser;
   private readonly exportResolver: ExportResolver;
@@ -544,8 +544,7 @@ class IATResolver {
 
         const target = iatValue;
         const actualModule = this.findContainingModule(modules, target);
-        const trampoline = this.resolveTrampoline(target);
-        const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, trampoline.target) : undefined;
+        const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, target) : undefined;
         const imported = this.parseImportedName(owner, intValue);
 
         rows.push({
@@ -555,11 +554,11 @@ class IATResolver {
           ordinal: imported.ordinal,
           nameWarning: imported.warning,
           slot: iatPtr,
-          target: trampoline.target,
+          target,
           expectedModule,
           actualModule,
           nearest,
-          status: this.classifyStatus(target, trampoline.target, expectedModule, actualModule),
+          status: this.classifyStatus(target, expectedModule, actualModule),
         });
 
         intPtr += BigInt(this.pointerSize);
@@ -594,17 +593,17 @@ class IATResolver {
     return descriptors;
   }
 
-  private classifyStatus(target: bigint, resolvedTarget: bigint, expected?: ModuleInfo, actual?: ModuleInfo): string {
+  private classifyStatus(target: bigint, expected?: ModuleInfo, actual?: ModuleInfo): string {
     if (target === BigInt(0)) {
       return "unresolved";
     }
-    if (!this.isMapped(resolvedTarget)) {
+    if (!this.isMapped(target)) {
       return "unmapped";
     }
     if (!actual) {
       return "unknown-module";
     }
-    if (!this.isExecutable(actual, resolvedTarget)) {
+    if (!this.isExecutable(actual, target)) {
       return "non-exec";
     }
     if (expected && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
@@ -649,39 +648,6 @@ class IATResolver {
       return false;
     }
     return false;
-  }
-
-  private resolveTrampoline(address: bigint): { target: bigint; note: string } {
-    if (address === BigInt(0)) {
-      return { target: address, note: "" };
-    }
-    try {
-      const first = readMemory(address, 6);
-      const op = first[0];
-      if (op === 0xe9 && first.length >= 5) {
-        const imm = this.readInt32LE(address + BigInt(1));
-        const dest = address + BigInt(5) + BigInt(imm);
-        return { target: dest, note: "jmp-rel32" };
-      }
-      if (op === 0xeb && first.length >= 2) {
-        const rel8 = first[1] >= 0x80 ? first[1] - 0x100 : first[1];
-        const dest = address + BigInt(2) + BigInt(rel8);
-        return { target: dest, note: "jmp-rel8" };
-      }
-      if (this.pointerSize === 4 && op === 0xff && first[1] === 0x25) {
-        const memPtr = BigInt(readUint32LE(address + BigInt(2)));
-        const dest = readPointer(memPtr, this.pointerSize);
-        return { target: dest, note: "jmp-[imm]" };
-      }
-    } catch (_error) {
-      return { target: address, note: "" };
-    }
-    return { target: address, note: "" };
-  }
-
-  private readInt32LE(address: bigint): number {
-    const value = readUint32LE(address);
-    return value > 0x7fffffff ? value - 0x100000000 : value;
   }
 
   private readImportDirectoryRva(owner: ModuleInfo, optionalMagic: number, ntHeader: bigint): number {
