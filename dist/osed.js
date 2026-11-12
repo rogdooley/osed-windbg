@@ -10807,16 +10807,16 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-09T02:43:54.360Z" : globalThis[key2];
+        value = true ? "2026-11-12T14:05:27.685Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "5f9902de41ed" : globalThis[key2];
+        value = true ? "20d75ffae21b" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
   }
   function readBuildBoolean(key2, fallback) {
-    const value = true ? true : globalThis[key2];
+    const value = true ? false : globalThis[key2];
     return typeof value === "boolean" ? value : fallback;
   }
   function getVersionInfo() {
@@ -13826,8 +13826,7 @@ var osed_bundle = (() => {
           }
           const target = iatValue;
           const actualModule = this.findContainingModule(modules, target);
-          const trampoline = this.resolveTrampoline(target);
-          const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, trampoline.target) : void 0;
+          const nearest = actualModule ? this.exportResolver.nearestSymbol(actualModule, target) : void 0;
           const imported = this.parseImportedName(owner, intValue);
           rows.push({
             ownerModule: owner.name,
@@ -13836,11 +13835,11 @@ var osed_bundle = (() => {
             ordinal: imported.ordinal,
             nameWarning: imported.warning,
             slot: iatPtr,
-            target: trampoline.target,
+            target,
             expectedModule,
             actualModule,
             nearest,
-            status: this.classifyStatus(target, trampoline.target, expectedModule, actualModule)
+            status: this.classifyStatus(target, expectedModule, actualModule)
           });
           intPtr += BigInt(this.pointerSize);
           iatPtr += BigInt(this.pointerSize);
@@ -13866,17 +13865,17 @@ var osed_bundle = (() => {
       }
       return descriptors;
     }
-    classifyStatus(target, resolvedTarget, expected, actual) {
+    classifyStatus(target, expected, actual) {
       if (target === BigInt(0)) {
         return "unresolved";
       }
-      if (!this.isMapped(resolvedTarget)) {
+      if (!this.isMapped(target)) {
         return "unmapped";
       }
       if (!actual) {
         return "unknown-module";
       }
-      if (!this.isExecutable(actual, resolvedTarget)) {
+      if (!this.isExecutable(actual, target)) {
         return "non-exec";
       }
       if (expected && expected.name.toLowerCase() !== actual.name.toLowerCase()) {
@@ -13918,37 +13917,6 @@ var osed_bundle = (() => {
         return false;
       }
       return false;
-    }
-    resolveTrampoline(address) {
-      if (address === BigInt(0)) {
-        return { target: address, note: "" };
-      }
-      try {
-        const first = readMemory(address, 6);
-        const op3 = first[0];
-        if (op3 === 233 && first.length >= 5) {
-          const imm = this.readInt32LE(address + BigInt(1));
-          const dest = address + BigInt(5) + BigInt(imm);
-          return { target: dest, note: "jmp-rel32" };
-        }
-        if (op3 === 235 && first.length >= 2) {
-          const rel8 = first[1] >= 128 ? first[1] - 256 : first[1];
-          const dest = address + BigInt(2) + BigInt(rel8);
-          return { target: dest, note: "jmp-rel8" };
-        }
-        if (this.pointerSize === 4 && op3 === 255 && first[1] === 37) {
-          const memPtr = BigInt(readUint32LE(address + BigInt(2)));
-          const dest = readPointer(memPtr, this.pointerSize);
-          return { target: dest, note: "jmp-[imm]" };
-        }
-      } catch (_error) {
-        return { target: address, note: "" };
-      }
-      return { target: address, note: "" };
-    }
-    readInt32LE(address) {
-      const value = readUint32LE(address);
-      return value > 2147483647 ? value - 4294967296 : value;
     }
     readImportDirectoryRva(owner, optionalMagic, ntHeader) {
       const optionalHeader = ntHeader + BigInt(24);
