@@ -26,6 +26,18 @@ export interface ApiBuildPlan {
   notes: string[];
 }
 
+export interface ApiBuildSelection {
+  candidate?: ApiPlanCandidate;
+  plan?: ApiBuildPlan;
+  attempts: ApiBuildAttempt[];
+}
+
+export interface ApiBuildAttempt {
+  candidate: ApiPlanCandidate;
+  plan?: ApiBuildPlan;
+  rejectionReasons: string[];
+}
+
 function op(gadget: RopGadget, instruction: number, operand: number): string {
   return (gadget.instructions[instruction]?.operands[operand] ?? "").trim().toLowerCase();
 }
@@ -133,6 +145,7 @@ export function buildApiResolution(index: CapabilityIndex, candidate: ApiPlanCan
   for (const operation of operations) {
     const address = firstKnownAddress(operation.gadget)!;
     if (!dwordIsByteSafe(address, badchars)) unsatisfied.push(`Gadget address 0x${address.toString(16).toUpperCase()} contains a forbidden byte.`);
+    if (retImmBytes(operation.gadget) % 4 !== 0) unsatisfied.push(`Gadget at 0x${address.toString(16).toUpperCase()} has ret ${retImmBytes(operation.gadget)}, which cannot be represented by DWORD stack padding.`);
     if (operation.operand !== undefined && !dwordIsByteSafe(BigInt(operation.operand), badchars)) {
       unsatisfied.push(`Operand 0x${operation.operand.toString(16).toUpperCase()} contains a forbidden byte.`);
     }
@@ -162,4 +175,21 @@ export function buildApiResolution(index: CapabilityIndex, candidate: ApiPlanCan
     unsatisfied: [],
     notes,
   };
+}
+
+/** Select only independently address-validated candidates before composing. */
+export function buildBestApiResolution(index: CapabilityIndex, candidates: readonly ApiPlanCandidate[], options: ApiBuildOptions = {}): ApiBuildSelection {
+  const attempts: ApiBuildAttempt[] = candidates.map((candidate) => {
+    if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
+      return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
+    }
+    const plan = buildApiResolution(index, candidate, options);
+    return { candidate, plan, rejectionReasons: plan.state === "CHAIN_CONSTRUCTED" ? [] : plan.unsatisfied };
+  });
+  const successful = attempts.filter((attempt): attempt is ApiBuildAttempt & { plan: ApiBuildPlan } => attempt.plan?.state === "CHAIN_CONSTRUCTED");
+  successful.sort((left, right) => left.plan.gadgetCount - right.plan.gadgetCount
+    || left.plan.stackBytes - right.plan.stackBytes
+    || left.plan.clobbers.length - right.plan.clobbers.length);
+  const selected = successful[0] ?? attempts.find((attempt) => attempt.plan !== undefined);
+  return selected ? { candidate: selected.candidate, plan: selected.plan, attempts } : { attempts };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildApiResolution, type ApiPlanCandidate, type CapabilityIndex, type RopGadget } from "../src/rop";
+import { buildApiResolution, buildBestApiResolution, type ApiPlanCandidate, type CapabilityIndex, type RopGadget } from "../src/rop";
 
 function gadget(address: number, text: string): RopGadget {
   const instructions = text.split(";").map((part) => {
@@ -43,5 +43,32 @@ describe("buildApiResolution", () => {
     ]), candidate, { continuation: 0x55555555, preserve: ["ecx"] });
     expect(plan.state).toBe("UNSATISFIED");
     expect(plan.unsatisfied.join(" ")).toContain("add eax, ebp");
+  });
+
+  test("does not let an unvalidated direct import mask a valid derived candidate", () => {
+    const direct: ApiPlanCandidate = { ...base, strategy: "direct-slot", exportRvaVerified: false };
+    const derived: ApiPlanCandidate = { ...base, strategy: "derived-address", slot: BigInt(0x10168034), anchor: { symbol: "QueryDosDeviceA", pointer: BigInt(0x765ab0a0), delta: BigInt(0) } };
+    const result = buildBestApiResolution(corpus([
+      gadget(0x11111111, "pop eax; ret"), gadget(0x22222222, "mov eax, [eax]; ret"), gadget(0x44444444, "pop ebp; ret"), gadget(0x55555555, "add eax, ebp; ret"),
+    ]), [direct, derived], { continuation: 0x33333333 });
+    expect(result.attempts).toHaveLength(2);
+    expect(result.attempts[0].rejectionReasons).toEqual(["Phase 1 address evidence is incomplete."]);
+    expect(result.candidate?.strategy).toBe("derived-address");
+    expect(result.candidate?.anchor?.symbol).toBe("QueryDosDeviceA");
+    expect(result.plan?.state).toBe("CHAIN_CONSTRUCTED");
+  });
+
+  test("retains bad-continuation and preservation failures for every validated candidate", () => {
+    const queryDos: ApiPlanCandidate = { ...base, strategy: "derived-address", anchor: { symbol: "QueryDosDeviceA", pointer: BigInt(0x765ab0a0), delta: BigInt(0x20) } };
+    const getLastError: ApiPlanCandidate = { ...base, strategy: "derived-address", anchor: { symbol: "GetLastError", pointer: BigInt(0x7656f020), delta: BigInt(0x10) } };
+    const result = buildBestApiResolution(corpus([
+      gadget(0x11111111, "pop eax; ret"), gadget(0x22222222, "mov eax, [eax]; ret"), gadget(0x33333333, "pop ebp; ret"), gadget(0x44444444, "add eax, ebp; dec ecx; ret"),
+    ]), [queryDos, getLastError], { continuation: 0x10001000, badchars: [0x00], preserve: ["ecx"] });
+    expect(result.attempts).toHaveLength(2);
+    for (const attempt of result.attempts) {
+      expect(attempt.rejectionReasons.join(" ")).toContain("Continuation address contains a forbidden byte");
+      expect(attempt.rejectionReasons.join(" ")).toContain("add eax, ebp");
+    }
+    expect(result.plan?.state).toBe("UNSATISFIED");
   });
 });

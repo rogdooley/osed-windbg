@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
@@ -2295,15 +2295,19 @@ function bindApi(): OsedApi {
 
   const executeRopApiBuild = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_build");
-    const options = isPlainObject(args[0]) ? args[0] : { target: args[0], badchars: args[1], continuation: args[2] };
+    const options = isPlainObject(args[0]) ? args[0] : {
+      target: args[0], badchars: args[1], continuation: args[2], preserve: args[3], maxGadgets: args[4],
+    };
     const target = typeof options.target === "string" ? options.target.trim() : "";
     const badchars = parseBadcharsOption(options.badchars);
     const output = typeof options.output === "string" ? options.output : "eax";
-    const preserve = Array.isArray(options.preserve) ? options.preserve.filter((value): value is string => typeof value === "string") : [];
+    const preserve = Array.isArray(options.preserve)
+      ? options.preserve.filter((value): value is string => typeof value === "string")
+      : typeof options.preserve === "string" ? options.preserve.split(/[\s,]+/).filter(Boolean) : [];
     const maxGadgets = options.maxGadgets !== undefined ? Number(options.maxGadgets) : 12;
     const continuation = options.continuation !== undefined ? Number(options.continuation) : undefined;
     if (!target) {
-      const rows = [{ Error: 'rop.api_build requires {target:"MODULE!Symbol", continuation:0xADDRESS}; it never invents a terminal continuation.' }];
+      const rows = [{ Error: 'rop.api_build requires target and continuation, e.g. rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10001000, "ecx").' }];
       renderRows("ROP API Resolution Builder", rows);
       return toDxResult("ROP API Resolution Builder", rows);
     }
@@ -2320,11 +2324,14 @@ function bindApi(): OsedApi {
       renderRows("ROP API Resolution Builder", rows);
       return toDxResult("ROP API Resolution Builder", rows);
     }
-    const builds = snapshot.candidates.map((candidate) => ({ candidate, plan: buildApiResolution(currentRopCorpus!, candidate, { output, preserve, maxGadgets, badchars, continuation }) }));
-    const selected = builds.find((entry) => entry.plan.state === "CHAIN_CONSTRUCTED") ?? builds[0];
-    if (!selected) {
-      const rows = [{ Error: "No validated Phase 1 resolution candidate is available." }];
+    const selected = buildBestApiResolution(currentRopCorpus, snapshot.candidates, { output, preserve, maxGadgets, badchars, continuation });
+    if (!selected.candidate || !selected.plan) {
+      const rows = selected.attempts.map((attempt) => ({
+        Error: `${attempt.candidate.strategy} ${attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`,
+      }));
+      if (rows.length === 0) rows.push({ Error: "No address-validated Phase 1 resolution candidate is available. Run rop.api_plan to inspect unresolved imports, thunks, or forwarding." });
       renderRows("ROP API Resolution Builder", rows);
+      setResult({ command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation }, success: false, findings: [{ snapshot, attempts: selected.attempts }], warnings: rows.map((row) => row.Error), errors: [] });
       return toDxResult("ROP API Resolution Builder", rows);
     }
     const plan = selected.plan;
@@ -2334,6 +2341,13 @@ function bindApi(): OsedApi {
     for (const note of plan.notes) out.info(note);
     for (const reason of plan.unsatisfied) out.warn(reason);
     if (plan.clobbers.length > 0) out.warn(`Clobbers: ${plan.clobbers.join(", ")}`);
+    const rejected = selected.attempts.filter((attempt) => attempt.rejectionReasons.length > 0);
+    if (rejected.length > 0) {
+      out.info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
+      for (const attempt of rejected) {
+        out.warn(`${attempt.candidate.strategy} ${attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`);
+      }
+    }
     const rows: Array<Record<string, string>> = plan.steps.map((step, index) => ({
       Index: String(index), Type: step.kind, Value: step.address !== undefined ? hex32(step.address) : step.value !== undefined ? hex32(BigInt(step.value)) : step.placeholder ?? "", Meaning: step.comment,
     }));
@@ -2341,7 +2355,7 @@ function bindApi(): OsedApi {
     renderRows("ROP API Resolution Builder", rows);
     setResult({
       command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation }, success: plan.state === "CHAIN_CONSTRUCTED",
-      findings: [{ snapshot, candidate: selected.candidate, plan }], warnings: plan.unsatisfied, errors: [],
+      findings: [{ snapshot, candidate: selected.candidate, plan, attempts: selected.attempts }], warnings: [...plan.unsatisfied, ...rejected.flatMap((attempt) => attempt.rejectionReasons)], errors: [],
     });
     return toDxResult("ROP API Resolution Builder", rows);
   };

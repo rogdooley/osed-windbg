@@ -5770,6 +5770,7 @@ var osed_bundle = (() => {
     for (const operation of operations) {
       const address = firstKnownAddress(operation.gadget);
       if (!dwordIsByteSafe(address, badchars)) unsatisfied.push(`Gadget address 0x${address.toString(16).toUpperCase()} contains a forbidden byte.`);
+      if (retImmBytes(operation.gadget) % 4 !== 0) unsatisfied.push(`Gadget at 0x${address.toString(16).toUpperCase()} has ret ${retImmBytes(operation.gadget)}, which cannot be represented by DWORD stack padding.`);
       if (operation.operand !== void 0 && !dwordIsByteSafe(BigInt(operation.operand), badchars)) {
         unsatisfied.push(`Operand 0x${operation.operand.toString(16).toUpperCase()} contains a forbidden byte.`);
       }
@@ -5798,6 +5799,23 @@ var osed_bundle = (() => {
       unsatisfied: [],
       notes
     };
+  }
+  function buildBestApiResolution(index, candidates2, options = {}) {
+    var _a;
+    const attempts = candidates2.map((candidate) => {
+      if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
+        return { candidate, rejectionReasons: ["Phase 1 address evidence is incomplete."] };
+      }
+      const plan = buildApiResolution(index, candidate, options);
+      return { candidate, plan, rejectionReasons: plan.state === "CHAIN_CONSTRUCTED" ? [] : plan.unsatisfied };
+    });
+    const successful = attempts.filter((attempt) => {
+      var _a2;
+      return ((_a2 = attempt.plan) == null ? void 0 : _a2.state) === "CHAIN_CONSTRUCTED";
+    });
+    successful.sort((left, right) => left.plan.gadgetCount - right.plan.gadgetCount || left.plan.stackBytes - right.plan.stackBytes || left.plan.clobbers.length - right.plan.clobbers.length);
+    const selected = (_a = successful[0]) != null ? _a : attempts.find((attempt) => attempt.plan !== void 0);
+    return selected ? { candidate: selected.candidate, plan: selected.plan, attempts } : { attempts };
   }
 
   // src/rop/planner.ts
@@ -10601,8 +10619,8 @@ var osed_bundle = (() => {
     {
       name: "rop.api_build",
       description: "Bounded Phase 2 composer for API-address resolution into EAX. Revalidates Phase 1 evidence in the current stopped-debugger snapshot, then supports exact pop, mov-reg-[reg], add, and ret/ret-N gadgets. It requires an explicit continuation and never invokes the API.",
-      usage: 'dx @$osed().rop.api_build({target:"MODULE!Symbol", continuation:0xADDRESS, output?:"eax", preserve?:["ecx"], maxGadgets?:12, badchars?:"00 0A 0D"})',
-      examples: ['dx @$osed().rop.api_build({target:"KERNEL32!WriteProcessMemory", continuation:0x10001000, preserve:["ecx"], badchars:"00 0A 0D"})'],
+      usage: "dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?)",
+      examples: ['dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10001000, "ecx")'],
       seeAlso: ["rop.api_plan", "rop.construct", "rop.verify", "rop.prove"]
     },
     {
@@ -11001,10 +11019,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-14T19:22:34.007Z" : globalThis[key2];
+        value = true ? "2026-11-14T19:41:06.150Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "735c13b85987" : globalThis[key2];
+        value = true ? "e09c12104c10" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -18805,17 +18823,23 @@ var osed_bundle = (() => {
       return toDxResult("ROP API Resolution Planner", rows);
     };
     const executeRopApiBuild = (...args) => {
-      var _a;
+      var _a, _b;
       if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_build");
-      const options = isPlainObject(args[0]) ? args[0] : { target: args[0], badchars: args[1], continuation: args[2] };
+      const options = isPlainObject(args[0]) ? args[0] : {
+        target: args[0],
+        badchars: args[1],
+        continuation: args[2],
+        preserve: args[3],
+        maxGadgets: args[4]
+      };
       const target = typeof options.target === "string" ? options.target.trim() : "";
       const badchars = parseBadcharsOption(options.badchars);
       const output = typeof options.output === "string" ? options.output : "eax";
-      const preserve = Array.isArray(options.preserve) ? options.preserve.filter((value) => typeof value === "string") : [];
+      const preserve = Array.isArray(options.preserve) ? options.preserve.filter((value) => typeof value === "string") : typeof options.preserve === "string" ? options.preserve.split(/[\s,]+/).filter(Boolean) : [];
       const maxGadgets = options.maxGadgets !== void 0 ? Number(options.maxGadgets) : 12;
       const continuation = options.continuation !== void 0 ? Number(options.continuation) : void 0;
       if (!target) {
-        const rows2 = [{ Error: 'rop.api_build requires {target:"MODULE!Symbol", continuation:0xADDRESS}; it never invents a terminal continuation.' }];
+        const rows2 = [{ Error: 'rop.api_build requires target and continuation, e.g. rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10001000, "ecx").' }];
         renderRows("ROP API Resolution Builder", rows2);
         return toDxResult("ROP API Resolution Builder", rows2);
       }
@@ -18832,11 +18856,17 @@ var osed_bundle = (() => {
         renderRows("ROP API Resolution Builder", rows2);
         return toDxResult("ROP API Resolution Builder", rows2);
       }
-      const builds = snapshot.candidates.map((candidate) => ({ candidate, plan: buildApiResolution(currentRopCorpus, candidate, { output, preserve, maxGadgets, badchars, continuation }) }));
-      const selected = (_a = builds.find((entry) => entry.plan.state === "CHAIN_CONSTRUCTED")) != null ? _a : builds[0];
-      if (!selected) {
-        const rows2 = [{ Error: "No validated Phase 1 resolution candidate is available." }];
+      const selected = buildBestApiResolution(currentRopCorpus, snapshot.candidates, { output, preserve, maxGadgets, badchars, continuation });
+      if (!selected.candidate || !selected.plan) {
+        const rows2 = selected.attempts.map((attempt) => {
+          var _a2, _b2;
+          return {
+            Error: `${attempt.candidate.strategy} ${(_b2 = (_a2 = attempt.candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b2 : attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`
+          };
+        });
+        if (rows2.length === 0) rows2.push({ Error: "No address-validated Phase 1 resolution candidate is available. Run rop.api_plan to inspect unresolved imports, thunks, or forwarding." });
         renderRows("ROP API Resolution Builder", rows2);
+        setResult({ command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation }, success: false, findings: [{ snapshot, attempts: selected.attempts }], warnings: rows2.map((row) => row.Error), errors: [] });
         return toDxResult("ROP API Resolution Builder", rows2);
       }
       const plan = selected.plan;
@@ -18846,6 +18876,13 @@ var osed_bundle = (() => {
       for (const note of plan.notes) info(note);
       for (const reason of plan.unsatisfied) warn(reason);
       if (plan.clobbers.length > 0) warn(`Clobbers: ${plan.clobbers.join(", ")}`);
+      const rejected = selected.attempts.filter((attempt) => attempt.rejectionReasons.length > 0);
+      if (rejected.length > 0) {
+        info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
+        for (const attempt of rejected) {
+          warn(`${attempt.candidate.strategy} ${(_b = (_a = attempt.candidate.anchor) == null ? void 0 : _a.symbol) != null ? _b : attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`);
+        }
+      }
       const rows = plan.steps.map((step, index) => {
         var _a2;
         return {
@@ -18861,8 +18898,8 @@ var osed_bundle = (() => {
         command: "rop.api_build",
         args: { target, output, preserve, maxGadgets, badchars, continuation },
         success: plan.state === "CHAIN_CONSTRUCTED",
-        findings: [{ snapshot, candidate: selected.candidate, plan }],
-        warnings: plan.unsatisfied,
+        findings: [{ snapshot, candidate: selected.candidate, plan, attempts: selected.attempts }],
+        warnings: [...plan.unsatisfied, ...rejected.flatMap((attempt) => attempt.rejectionReasons)],
         errors: []
       });
       return toDxResult("ROP API Resolution Builder", rows);
