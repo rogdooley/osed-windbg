@@ -2363,9 +2363,17 @@ function bindApi(): OsedApi {
     const rejected = selected.attempts.filter((attempt) => attempt.rejectionReasons.length > 0);
     if (rejected.length > 0) {
       out.info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
+      const groups = new Map<string, string[]>();
       for (const attempt of rejected) {
-        const candidateReasons = attempt.rejectionReasons.filter((reason) => !globalFailures.includes(reason));
-        if (candidateReasons.length > 0) out.warn(`${attempt.candidate.strategy} ${attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol}: ${candidateReasons.join(" ")}`);
+        const label = attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol;
+        for (const reason of attempt.rejectionReasons.filter((reason) => !globalFailures.includes(reason))) {
+          groups.set(reason, [...(groups.get(reason) ?? []), label]);
+        }
+      }
+      for (const [reason, labels] of groups) {
+        const examples = labels.slice(0, 3).join(", ");
+        const suffix = labels.length > 3 ? `, +${labels.length - 3} more` : "";
+        out.warn(`${reason} (${labels.length} candidate${labels.length === 1 ? "" : "s"}: ${examples}${suffix})`);
       }
     }
     const rows: Array<Record<string, string>> = plan.steps.map((step, index) => ({

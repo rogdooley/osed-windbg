@@ -11019,10 +11019,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-14T20:10:32.674Z" : globalThis[key2];
+        value = true ? "2026-11-14T20:29:27.537Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c9ed478eb28e" : globalThis[key2];
+        value = true ? "51305682fa13" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -18823,7 +18823,7 @@ var osed_bundle = (() => {
       return toDxResult("ROP API Resolution Planner", rows);
     };
     const executeRopApiBuild = (...args) => {
-      var _a, _b;
+      var _a, _b, _c;
       if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_build");
       const options = isPlainObject(args[0]) ? args[0] : {
         target: args[0],
@@ -18901,9 +18901,17 @@ var osed_bundle = (() => {
       const rejected = selected.attempts.filter((attempt) => attempt.rejectionReasons.length > 0);
       if (rejected.length > 0) {
         info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
+        const groups = /* @__PURE__ */ new Map();
         for (const attempt of rejected) {
-          const candidateReasons = attempt.rejectionReasons.filter((reason) => !globalFailures.includes(reason));
-          if (candidateReasons.length > 0) warn(`${attempt.candidate.strategy} ${(_b = (_a = attempt.candidate.anchor) == null ? void 0 : _a.symbol) != null ? _b : attempt.candidate.target.symbol}: ${candidateReasons.join(" ")}`);
+          const label = (_b = (_a = attempt.candidate.anchor) == null ? void 0 : _a.symbol) != null ? _b : attempt.candidate.target.symbol;
+          for (const reason of attempt.rejectionReasons.filter((reason2) => !globalFailures.includes(reason2))) {
+            groups.set(reason, [...(_c = groups.get(reason)) != null ? _c : [], label]);
+          }
+        }
+        for (const [reason, labels] of groups) {
+          const examples = labels.slice(0, 3).join(", ");
+          const suffix = labels.length > 3 ? `, +${labels.length - 3} more` : "";
+          warn(`${reason} (${labels.length} candidate${labels.length === 1 ? "" : "s"}: ${examples}${suffix})`);
         }
       }
       const rows = plan.steps.map((step, index) => {
