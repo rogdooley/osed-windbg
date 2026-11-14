@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
@@ -2296,7 +2296,7 @@ function bindApi(): OsedApi {
   const executeRopApiBuild = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_build");
     const options = isPlainObject(args[0]) ? args[0] : {
-      target: args[0], badchars: args[1], continuation: args[2], preserve: args[3], maxGadgets: args[4],
+      target: args[0], badchars: args[1], continuation: args[2], preserve: args[3], maxGadgets: args[4], owner: args[5], anchor: args[6],
     };
     const target = typeof options.target === "string" ? options.target.trim() : "";
     const badchars = parseBadcharsOption(options.badchars);
@@ -2306,6 +2306,8 @@ function bindApi(): OsedApi {
       : typeof options.preserve === "string" ? options.preserve.split(/[\s,]+/).filter(Boolean) : [];
     const maxGadgets = options.maxGadgets !== undefined ? Number(options.maxGadgets) : 12;
     const continuation = options.continuation !== undefined ? Number(options.continuation) : undefined;
+    const requestedOwner = typeof options.owner === "string" ? options.owner.trim().toLowerCase() : "";
+    const requestedAnchor = typeof options.anchor === "string" ? options.anchor.trim().toLowerCase() : "";
     if (!target) {
       const rows = [{ Error: 'rop.api_build requires target and continuation, e.g. rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10001000, "ecx").' }];
       renderRows("ROP API Resolution Builder", rows);
@@ -2324,7 +2326,20 @@ function bindApi(): OsedApi {
       renderRows("ROP API Resolution Builder", rows);
       return toDxResult("ROP API Resolution Builder", rows);
     }
-    const selected = buildBestApiResolution(currentRopCorpus, snapshot.candidates, { output, preserve, maxGadgets, badchars, continuation });
+    const matchesName = (actual: string, requested: string): boolean => actual.toLowerCase().replace(/\.dll$/, "") === requested.replace(/\.dll$/, "");
+    const constrainedCandidates = snapshot.candidates.filter((candidate) =>
+      (!requestedOwner || matchesName(candidate.ownerModule, requestedOwner))
+      && (!requestedAnchor || candidate.anchor?.symbol.toLowerCase() === requestedAnchor));
+    if ((requestedOwner || requestedAnchor) && constrainedCandidates.length === 0) {
+      const rows = [{ Error: `No Phase 1 candidate matches owner="${requestedOwner || "*"}" anchor="${requestedAnchor || "*"}".` }];
+      renderRows("ROP API Resolution Builder", rows);
+      return toDxResult("ROP API Resolution Builder", rows);
+    }
+    const globalFailures: string[] = [];
+    if (continuation === undefined) globalFailures.push("A concrete continuation address is required after the final RET.");
+    else if (!dwordIsByteSafe(BigInt(continuation), badchars)) globalFailures.push("Continuation address contains a forbidden byte.");
+    if (output.toLowerCase() !== "eax") globalFailures.push("Phase 2 currently supports EAX output only.");
+    const selected = buildBestApiResolution(currentRopCorpus, constrainedCandidates, { output, preserve, maxGadgets, badchars, continuation });
     if (!selected.candidate || !selected.plan) {
       const rows = selected.attempts.map((attempt) => ({
         Error: `${attempt.candidate.strategy} ${attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`,
@@ -2339,13 +2354,18 @@ function bindApi(): OsedApi {
     out.info(`Strategy: ${selected.candidate.strategy} | Output: ${output.toUpperCase()} | Expected: ${plan.expectedOutput !== undefined ? hex32(plan.expectedOutput) : "unavailable"}`);
     out.info(`State: ${plan.state} — static composition only; CHAIN_VERIFIED requires debugger execution through rop.prove.`);
     for (const note of plan.notes) out.info(note);
-    for (const reason of plan.unsatisfied) out.warn(reason);
+    if (globalFailures.length > 0) {
+      out.warn("Global constraints:");
+      for (const reason of globalFailures) out.warn(`  ${reason}`);
+    }
+    for (const reason of plan.unsatisfied.filter((reason) => !globalFailures.includes(reason))) out.warn(reason);
     if (plan.clobbers.length > 0) out.warn(`Clobbers: ${plan.clobbers.join(", ")}`);
     const rejected = selected.attempts.filter((attempt) => attempt.rejectionReasons.length > 0);
     if (rejected.length > 0) {
       out.info(`Candidate evaluation: ${selected.attempts.length} considered; ${rejected.length} rejected.`);
       for (const attempt of rejected) {
-        out.warn(`${attempt.candidate.strategy} ${attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol}: ${attempt.rejectionReasons.join(" ")}`);
+        const candidateReasons = attempt.rejectionReasons.filter((reason) => !globalFailures.includes(reason));
+        if (candidateReasons.length > 0) out.warn(`${attempt.candidate.strategy} ${attempt.candidate.anchor?.symbol ?? attempt.candidate.target.symbol}: ${candidateReasons.join(" ")}`);
       }
     }
     const rows: Array<Record<string, string>> = plan.steps.map((step, index) => ({
@@ -2354,7 +2374,7 @@ function bindApi(): OsedApi {
     if (rows.length === 0) rows.push({ Index: "", Type: "none", Value: "", Meaning: plan.unsatisfied.join(" ") || "No chain constructed." });
     renderRows("ROP API Resolution Builder", rows);
     setResult({
-      command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation }, success: plan.state === "CHAIN_CONSTRUCTED",
+      command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation, owner: requestedOwner || undefined, anchor: requestedAnchor || undefined }, success: plan.state === "CHAIN_CONSTRUCTED",
       findings: [{ snapshot, candidate: selected.candidate, plan, attempts: selected.attempts }], warnings: [...plan.unsatisfied, ...rejected.flatMap((attempt) => attempt.rejectionReasons)], errors: [],
     });
     return toDxResult("ROP API Resolution Builder", rows);

@@ -152,8 +152,8 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.api_build",
     description: "Bounded Phase 2 composer for API-address resolution into EAX. Revalidates Phase 1 evidence in the current stopped-debugger snapshot, then supports exact pop, mov-reg-[reg], add, and ret/ret-N gadgets. It requires an explicit continuation and never invokes the API.",
-    usage: 'dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?)',
-    examples: ['dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10001000, "ecx")'],
+    usage: 'dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?, owner?, anchor?)',
+    examples: ['dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10064A0F, "", 12, "libspp.dll", "QueryDosDeviceA")'],
     seeAlso: ["rop.api_plan", "rop.construct", "rop.verify", "rop.prove"],
   },
   {
