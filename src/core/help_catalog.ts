@@ -140,6 +140,23 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"],
   },
   {
+    name: "rop.api_plan",
+    description: "Read-only Phase 1 API-resolution analysis. Finds direct IAT slots and same-image exact-export anchors, validates live pointer/module/export evidence, and reports byte constraints. It never constructs or ranks ROP chains.",
+    usage: 'dx @$osed().rop.api_plan("MODULE!Symbol", badchars?)',
+    examples: [
+      'dx @$osed().rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")',
+      'dx @$osed().rop.api_plan("VirtualProtect")',
+    ],
+    seeAlso: ["sc.iat", "rop.slot_call", "rop.construct", "rop.prove"],
+  },
+  {
+    name: "rop.api_build",
+    description: "Bounded Phase 2 composer for API-address resolution into EAX. Revalidates Phase 1 evidence in the current stopped-debugger snapshot, then supports exact pop, mov-reg-[reg], add, and ret/ret-N gadgets. It requires an explicit continuation and never invokes the API.",
+    usage: 'dx @$osed().rop.api_build({target:"MODULE!Symbol", continuation:0xADDRESS, output?:"eax", preserve?:["ecx"], maxGadgets?:12, badchars?:"00 0A 0D"})',
+    examples: ['dx @$osed().rop.api_build({target:"KERNEL32!WriteProcessMemory", continuation:0x10001000, preserve:["ecx"], badchars:"00 0A 0D"})'],
+    seeAlso: ["rop.api_plan", "rop.construct", "rop.verify", "rop.prove"],
+  },
+  {
     name: "rop.query",
     description: "Filters the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",

@@ -3,6 +3,7 @@ import { formatAddress } from "../core/output";
 import * as out from "../core/output";
 import { DxResult, toDxResult } from "../core/dx_result";
 import { findHelpEntry, helpRows } from "../core/help_catalog";
+import { planApiResolution, type ApiPlanCandidate } from "../rop/api_plan";
 
 export type ModuleInfo = {
   name: string;
@@ -23,6 +24,7 @@ type PeHeaders = {
   ntHeader: bigint;
   machine: number;
   machineName: string;
+  timeDateStamp: number;
   entryPointRva: number;
   entryPointVa: bigint;
   imageBase: bigint;
@@ -64,6 +66,21 @@ export type IatEntry = {
   actualModule?: ModuleInfo;
   nearest?: { name: string; offset: bigint };
   status: string;
+};
+
+export type ApiPlanSnapshot = {
+  target?: { module: string; symbol: string; address: bigint; exportRva: number };
+  candidates: ApiPlanCandidate[];
+  error?: string;
+  targetIdentity?: {
+    name: string;
+    path: string;
+    base: bigint;
+    imageBase: bigint;
+    sizeOfImage: number;
+    timeDateStamp: number;
+    hash: "not-collected";
+  };
 };
 
 type ImportDescriptor = {
@@ -266,6 +283,14 @@ export class PEParser {
     }
 
     const machine = readUint16LE(ntHeader + BigInt(0x4));
+    // Some minimal/recovered PE fixtures omit the COFF timestamp.  Preserve
+    // existing parser tolerance and represent unavailable evidence as zero.
+    let timeDateStamp = 0;
+    try {
+      timeDateStamp = readUint32LE(ntHeader + BigInt(0x8));
+    } catch (_error) {
+      // Identity evidence remains incomplete; callers report the observation.
+    }
     const optionalHeader = ntHeader + BigInt(0x18);
     const optionalHeaderMagic = readUint16LE(optionalHeader);
     const isPe32Plus = optionalHeaderMagic === 0x20b;
@@ -289,6 +314,7 @@ export class PEParser {
       ntHeader,
       machine,
       machineName: machineToString(machine),
+      timeDateStamp,
       entryPointRva,
       entryPointVa: base + BigInt(entryPointRva),
       imageBase,
@@ -1252,6 +1278,65 @@ class ShellcodeHelper {
     }
   }
 
+  /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
+  public apiPlan(targetSpec: string, badchars: number[] = []): ApiPlanSnapshot {
+    const parsed = parseApiSpec(targetSpec);
+    if (!parsed) return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
+    try {
+      const modules = this.readModules();
+      const targetModules = parsed.module
+        ? modules.filter((module) => moduleNameMatches(module.name, parsed.module!))
+        : modules.filter((module) => this.exportResolver.resolve(module, parsed.symbol) !== undefined);
+      if (targetModules.length === 0) return { candidates: [], error: `No loaded export matches ${targetSpec}.` };
+      if (targetModules.length > 1) {
+        return { candidates: [], error: `Target ${parsed.symbol} is exported by multiple modules; specify MODULE!${parsed.symbol}.` };
+      }
+      const targetModule = targetModules[0];
+      const targetExport = this.exportResolver.resolve(targetModule, parsed.symbol);
+      if (!targetExport) return { candidates: [], error: `No export ${parsed.symbol} in ${targetModule.name}.` };
+      const forward = this.exportResolver.isForwarded(targetModule, targetExport);
+      if (forward.forwarded) {
+        return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
+      }
+      const headers = this.parser.parseHeaders(targetModule);
+      const imports = modules.flatMap((owner) => {
+        try {
+          const ownerHeaders = this.parser.parseHeaders(owner);
+          return this.iatResolver.enumerateIat(owner).map((entry) => ({
+            ownerModule: owner.name,
+            ownerBase: owner.base,
+            ownerImageBase: ownerHeaders.imageBase,
+            slot: entry.slot,
+            pointer: entry.target,
+            actualModule: entry.actualModule?.name,
+            actualModuleBase: entry.actualModule?.base,
+            importedSymbol: entry.symbol,
+            nearestSymbol: entry.nearest?.name,
+            nearestOffset: entry.nearest?.offset,
+          }));
+        } catch (_error) {
+          return [];
+        }
+      });
+      const target = { module: targetModule.name, symbol: targetExport.name, address: targetExport.va, exportRva: targetExport.rva };
+      return {
+        target,
+        candidates: planApiResolution(target, imports, badchars),
+        targetIdentity: {
+          name: targetModule.name,
+          path: targetModule.path,
+          base: targetModule.base,
+          imageBase: headers.imageBase,
+          sizeOfImage: headers.sizeOfImage,
+          timeDateStamp: headers.timeDateStamp,
+          hash: "not-collected",
+        },
+      };
+    } catch (error) {
+      return { candidates: [], error: formatError(error) };
+    }
+  }
+
   private findModule(name: string): LookupResult {
     const needle = normalizeNeedle(name);
     if (!needle) {
@@ -1627,6 +1712,22 @@ function moduleBasename(value: string): string {
   return parts[parts.length - 1] || normalized;
 }
 
+function moduleNameMatches(name: string, requested: string): boolean {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/\.dll$/, "");
+  return normalize(name) === normalize(requested);
+}
+
+function parseApiSpec(value: string): { module?: string; symbol: string } | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parts = trimmed.split("!");
+  if (parts.length === 1) return { symbol: parts[0].trim() || "" };
+  if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
+    return { module: parts[0].trim(), symbol: parts[1].trim() };
+  }
+  return undefined;
+}
+
 export function createShellcodeNamespace(): {
   peb: () => DxResult;
   modules: () => DxResult;
@@ -1647,6 +1748,8 @@ export function createShellcodeNamespace(): {
   iat: (module?: string, filter?: string) => DxResult;
   iat_find: (symbol: string) => DxResult;
   iat_ptr: (module: string, symbol: string) => DxResult;
+  /** Internal structured snapshot consumed by rop.api_plan. */
+  api_plan: (target: string, badchars?: number[]) => ApiPlanSnapshot;
 } {
   const helper = new ShellcodeHelper();
   const helperHelp = (name: string): DxResult => {
@@ -1696,5 +1799,6 @@ export function createShellcodeNamespace(): {
     iat: (module?: string, filter?: string) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
     iat_find: (symbol: string) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
     iat_ptr: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
+    api_plan: (target: string, badchars: number[] = []) => helper.apiPlan(target, badchars),
   };
 }

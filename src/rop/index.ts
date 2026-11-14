@@ -8,6 +8,8 @@ export * from "./value_solver";
 export * from "./register_setup";
 export * from "./frame_write";
 export * from "./slot_dispatch";
+export * from "./api_plan";
+export * from "./api_build";
 export * from "./planner";
 export * from "./emitter";
 export * from "./synthesizer";

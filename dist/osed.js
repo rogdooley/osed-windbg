@@ -1751,7 +1751,7 @@ var osed_bundle = (() => {
         all.push({ name: key2, value: parsed });
       }
     }
-    const pick = (...names) => {
+    const pick2 = (...names) => {
       for (const candidate of names) {
         const found = all.find((entry) => entry.name.toLowerCase() === candidate.toLowerCase());
         if (found) {
@@ -1760,9 +1760,9 @@ var osed_bundle = (() => {
       }
       return void 0;
     };
-    const ip = pointerSize === 8 ? pick("rip", "eip") : pick("eip", "rip");
-    const sp = pointerSize === 8 ? pick("rsp", "esp") : pick("esp", "rsp");
-    const ex = pick("exceptioncode", "exception", "lastExceptionCode");
+    const ip = pointerSize === 8 ? pick2("rip", "eip") : pick2("eip", "rip");
+    const sp = pointerSize === 8 ? pick2("rsp", "esp") : pick2("esp", "rsp");
+    const ex = pick2("exceptioncode", "exception", "lastExceptionCode");
     return {
       ip: ip == null ? void 0 : ip.value,
       ipName: ip == null ? void 0 : ip.name,
@@ -3698,7 +3698,7 @@ var osed_bundle = (() => {
   function queryRopGadgets(gadgets, query) {
     var _a, _b, _c;
     const reads = normalizeRegisters(query.reads);
-    const writes = normalizeRegisters(query.writes);
+    const writes2 = normalizeRegisters(query.writes);
     const preserves = normalizeRegisters(query.preserves);
     const preservesThroughout = normalizeRegisters(query.preservesThroughout);
     const transforms = ((_a = query.transforms) != null ? _a : []).map(normalizeTransformQuery);
@@ -3714,7 +3714,7 @@ var osed_bundle = (() => {
       if (!fieldSupportsAll(gadget.semanticSummary.summary.reads, reads)) {
         return false;
       }
-      if (!fieldSupportsAll(gadget.semanticSummary.summary.writes, writes)) {
+      if (!fieldSupportsAll(gadget.semanticSummary.summary.writes, writes2)) {
         return false;
       }
       if (!matchesPreserves(gadget, preserves)) {
@@ -4910,8 +4910,8 @@ var osed_bundle = (() => {
       const scratchSteps = emitGadgetWithSideEffects(scratchPop, `pop ${scratch}`);
       scratchSteps.splice(1, 0, valueStep(decomp.b, `${scratch} = ${hex32(decomp.b)}`));
       steps.push(...scratchSteps);
-      const op3 = mode === "add" ? "add" : "sub";
-      steps.push(...emitGadgetWithSideEffects(binGadget, `${op3} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
+      const op4 = mode === "add" ? "add" : "sub";
+      steps.push(...emitGadgetWithSideEffects(binGadget, `${op4} ${reg}, ${scratch} -> ${hex32(value >>> 0)}`));
       const recipe = {
         steps,
         recipe: mode === "add" ? "two-add" : "two-sub",
@@ -5044,7 +5044,7 @@ var osed_bundle = (() => {
   function analyzeGadget(gadget) {
     var _a, _b;
     const popRegs = [];
-    const writes = /* @__PURE__ */ new Set();
+    const writes2 = /* @__PURE__ */ new Set();
     const espFillers = [];
     const lastWriteWasPop = /* @__PURE__ */ new Map();
     let safe = true;
@@ -5058,7 +5058,7 @@ var osed_bundle = (() => {
       if (mnemonic === "pop") {
         const reg = (_b = dst != null ? dst : rawDst) != null ? _b : "?";
         popRegs.push(reg);
-        writes.add(reg);
+        writes2.add(reg);
         lastWriteWasPop.set(reg, true);
         continue;
       }
@@ -5089,18 +5089,18 @@ var osed_bundle = (() => {
           continue;
         }
         if (a) {
-          writes.add(a);
+          writes2.add(a);
           lastWriteWasPop.set(a, false);
         }
         if (b) {
-          writes.add(b);
+          writes2.add(b);
           lastWriteWasPop.set(b, false);
         }
         continue;
       }
       if (mnemonic === "cmp" || mnemonic === "test" || mnemonic === "nop") continue;
       if (dst) {
-        writes.add(dst);
+        writes2.add(dst);
         lastWriteWasPop.set(dst, false);
       }
     }
@@ -5108,7 +5108,7 @@ var osed_bundle = (() => {
     for (const [reg, wasPop] of lastWriteWasPop) {
       if (wasPop) cleanPops.add(reg);
     }
-    return { popRegs, cleanPops, writes, espFillers, safe };
+    return { popRegs, cleanPops, writes: writes2, espFillers, safe };
   }
   function describeGadget(gadget) {
     return gadget.instructions.map((insn) => insn.operands.length > 0 ? `${insn.mnemonic} ${insn.operands.join(", ")}` : insn.mnemonic).join(" ; ");
@@ -5621,6 +5621,183 @@ var osed_bundle = (() => {
   }
   function hex2(value) {
     return `0x${(value >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  }
+
+  // src/rop/api_plan.ts
+  function dwordIsByteSafe(value, badchars) {
+    const bad = new Set(badchars.map((byte) => byte & 255));
+    const word = Number(value & BigInt(4294967295)) >>> 0;
+    for (let shift = 0; shift < 32; shift += 8) {
+      if (bad.has(word >>> shift & 255)) return false;
+    }
+    return true;
+  }
+  function sameModule(left, right) {
+    const normalize = (name) => name.toLowerCase().replace(/\.dll$/, "");
+    return left !== void 0 && normalize(left) === normalize(right);
+  }
+  function planApiResolution(target, imports, badchars = []) {
+    const candidates2 = [];
+    for (const entry of imports) {
+      const pointerResolved = entry.pointer !== BigInt(0);
+      const targetModuleVerified = sameModule(entry.actualModule, target.module) && entry.actualModuleBase !== void 0;
+      const exactExport = entry.pointer === target.address;
+      const slotPayloadSafe = dwordIsByteSafe(entry.slot, badchars);
+      const base = {
+        target,
+        ownerModule: entry.ownerModule,
+        ownerBase: entry.ownerBase,
+        ownerImageBase: entry.ownerImageBase,
+        slot: entry.slot,
+        pointer: entry.pointer,
+        slotPayloadSafe,
+        pointerResolved,
+        targetModuleVerified
+      };
+      if (entry.importedSymbol.toLowerCase() === target.symbol.toLowerCase()) {
+        const exportRvaVerified = targetModuleVerified && exactExport;
+        candidates2.push(__spreadProps(__spreadValues({}, base), {
+          strategy: "direct-slot",
+          state: exportRvaVerified && slotPayloadSafe ? "ENCODABLE" : exportRvaVerified ? "ADDRESS_VALIDATED" : "DISCOVERED",
+          exportRvaVerified,
+          recommendation: slotPayloadSafe ? "Use rop.slot_call subject to corpus feasibility." : "Direct slot is validated but cannot be embedded; requires address construction."
+        }));
+        continue;
+      }
+      const anchorExact = entry.nearestOffset === BigInt(0) && !!entry.nearestSymbol;
+      if (!targetModuleVerified || !anchorExact || !pointerResolved) continue;
+      const delta = target.address - entry.pointer & BigInt(4294967295);
+      candidates2.push(__spreadProps(__spreadValues({}, base), {
+        strategy: "derived-address",
+        state: slotPayloadSafe ? "ENCODABLE" : "ADDRESS_VALIDATED",
+        exportRvaVerified: true,
+        anchor: { symbol: entry.nearestSymbol, pointer: entry.pointer, delta },
+        recommendation: slotPayloadSafe ? "Candidate for gadget feasibility analysis; no chain has been constructed." : "Anchor is validated but its slot requires address construction before gadget feasibility analysis."
+      }));
+    }
+    return candidates2.sort((left, right) => {
+      const strategy = left.strategy === right.strategy ? 0 : left.strategy === "direct-slot" ? -1 : 1;
+      if (strategy !== 0) return strategy;
+      if (left.slotPayloadSafe !== right.slotPayloadSafe) return left.slotPayloadSafe ? -1 : 1;
+      return Number(left.slot - right.slot);
+    });
+  }
+
+  // src/rop/api_build.ts
+  function op3(gadget, instruction, operand) {
+    var _a, _b;
+    return ((_b = (_a = gadget.instructions[instruction]) == null ? void 0 : _a.operands[operand]) != null ? _b : "").trim().toLowerCase();
+  }
+  function isRetTerminated(gadget) {
+    return retImmBytes(gadget) >= 0 && firstKnownAddress(gadget) !== void 0;
+  }
+  function writes(gadget) {
+    const result3 = /* @__PURE__ */ new Set();
+    for (const instruction of gadget.instructions) {
+      const mnemonic = instruction.mnemonic.toLowerCase();
+      const destination = op3(gadget, gadget.instructions.indexOf(instruction), 0);
+      if (["pop", "mov", "add", "sub", "adc", "sbb", "xor", "or", "and", "not", "neg", "inc", "dec", "xchg"].includes(mnemonic) && /^[a-z]{2,3}$/.test(destination)) result3.add(destination);
+      if (mnemonic === "xchg" && /^[a-z]{2,3}$/.test(op3(gadget, gadget.instructions.indexOf(instruction), 1))) {
+        result3.add(op3(gadget, gadget.instructions.indexOf(instruction), 1));
+      }
+    }
+    return [...result3];
+  }
+  function pick(index, predicate, preserve, output) {
+    return index.gadgets.filter((gadget) => isRetTerminated(gadget) && predicate(gadget)).filter((gadget) => writes(gadget).every((reg) => reg === output || !preserve.has(reg))).sort((left, right) => retImmBytes(left) - retImmBytes(right) || left.instructions.length - right.instructions.length || right.score - left.score)[0];
+  }
+  function pickPop(index, register2, preserve, output) {
+    return pick(index, (gadget) => gadget.instructions.length === 2 && gadget.instructions[0].mnemonic === "pop" && op3(gadget, 0, 0) === register2, preserve, output);
+  }
+  function pickLoad(index, output, preserve) {
+    return pick(index, (gadget) => gadget.instructions.length === 2 && gadget.instructions[0].mnemonic === "mov" && op3(gadget, 0, 0) === output && op3(gadget, 0, 1) === `[${output}]`, preserve, output);
+  }
+  function pickAdd(index, output, source, preserve) {
+    return pick(index, (gadget) => gadget.instructions.length >= 2 && gadget.instructions[0].mnemonic === "add" && op3(gadget, 0, 0) === output && op3(gadget, 0, 1) === source, preserve, output);
+  }
+  function addends(delta, badchars) {
+    const word = Number(delta & BigInt(4294967295)) >>> 0;
+    if (dwordIsByteSafe(BigInt(word), badchars)) return [word];
+    for (let byte = 1; byte < 256; byte += 1) {
+      const component = (byte << 24 | byte << 16 | byte << 8 | byte) >>> 0;
+      const second = word - component >>> 0;
+      if (dwordIsByteSafe(BigInt(component), badchars) && dwordIsByteSafe(BigInt(second), badchars)) return [component, second];
+    }
+    return void 0;
+  }
+  function buildApiResolution(index, candidate, options = {}) {
+    var _a, _b, _c, _d;
+    const output = ((_a = options.output) != null ? _a : "eax").toLowerCase();
+    const preserve = new Set(((_b = options.preserve) != null ? _b : []).map((reg) => reg.toLowerCase()));
+    const badchars = (_c = options.badchars) != null ? _c : [];
+    const maxGadgets = (_d = options.maxGadgets) != null ? _d : 12;
+    const unsatisfied = [];
+    const notes = [];
+    if (output !== "eax") return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 2 currently supports EAX output only."], notes };
+    if (!candidate.exportRvaVerified || !candidate.pointerResolved || !candidate.targetModuleVerified) {
+      return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: 0, stackBytes: 0, clobbers: [], unsatisfied: ["Phase 1 address evidence is incomplete; rebuild from a validated candidate."], notes };
+    }
+    if (options.continuation === void 0) unsatisfied.push("A concrete continuation address is required after the final RET.");
+    if (options.continuation !== void 0 && !dwordIsByteSafe(BigInt(options.continuation), badchars)) unsatisfied.push("Continuation address contains a forbidden byte.");
+    const popEax = pickPop(index, "eax", preserve, output);
+    const loadEax = pickLoad(index, output, preserve);
+    if (!popEax) unsatisfied.push("No exact `pop eax ; ret` gadget satisfies preservation constraints.");
+    if (!loadEax) unsatisfied.push("No exact `mov eax, [eax] ; ret` gadget satisfies preservation constraints.");
+    const operations = [];
+    if (popEax && loadEax) {
+      if (!candidate.slotPayloadSafe) unsatisfied.push("IAT slot contains a forbidden byte; dynamic slot-address construction is not implemented in this milestone.");
+      else {
+        operations.push({ gadget: popEax, operand: Number(candidate.slot), comment: `pop eax = IAT slot 0x${candidate.slot.toString(16).toUpperCase()}` });
+        operations.push({ gadget: loadEax, comment: "mov eax, [eax] (live IAT target)" });
+      }
+    }
+    if (candidate.strategy === "derived-address") {
+      const components = candidate.anchor ? addends(candidate.anchor.delta, badchars) : void 0;
+      if (!components) unsatisfied.push("No one- or two-addend byte-safe displacement decomposition was found.");
+      const popEbp = pickPop(index, "ebp", preserve, output);
+      const addEaxEbp = pickAdd(index, output, "ebp", preserve);
+      if (!popEbp) unsatisfied.push("No exact `pop ebp ; ret` gadget satisfies preservation constraints.");
+      if (!addEaxEbp) unsatisfied.push("No `add eax, ebp ; ... ; ret` gadget satisfies preservation constraints.");
+      if (components && popEbp && addEaxEbp) {
+        for (const component of components) {
+          operations.push({ gadget: popEbp, operand: component, comment: `pop ebp = 0x${component.toString(16).toUpperCase().padStart(8, "0")}` });
+          operations.push({ gadget: addEaxEbp, comment: "add eax, ebp" });
+        }
+        notes.push(`Displacement encoded as ${components.map((value) => `0x${value.toString(16).toUpperCase().padStart(8, "0")}`).join(" + ")}.`);
+      }
+    }
+    if (operations.length > maxGadgets) unsatisfied.push(`Construction needs ${operations.length} gadgets; maxGadgets is ${maxGadgets}.`);
+    for (const operation of operations) {
+      const address = firstKnownAddress(operation.gadget);
+      if (!dwordIsByteSafe(address, badchars)) unsatisfied.push(`Gadget address 0x${address.toString(16).toUpperCase()} contains a forbidden byte.`);
+      if (operation.operand !== void 0 && !dwordIsByteSafe(BigInt(operation.operand), badchars)) {
+        unsatisfied.push(`Operand 0x${operation.operand.toString(16).toUpperCase()} contains a forbidden byte.`);
+      }
+    }
+    if (unsatisfied.length > 0) return { state: "UNSATISFIED", strategy: candidate.strategy, steps: [], gadgetCount: operations.length, stackBytes: 0, clobbers: [], unsatisfied, notes };
+    const steps = [];
+    const clobbers = /* @__PURE__ */ new Set();
+    let pendingPadding = 0;
+    for (const operation of operations) {
+      steps.push({ kind: "gadget", address: firstKnownAddress(operation.gadget), comment: operation.comment });
+      for (let word = 0; word < pendingPadding; word += 1) steps.push({ kind: "value", value: 1094795585, comment: "ret immediate padding" });
+      pendingPadding = retImmBytes(operation.gadget) / 4;
+      if (operation.operand !== void 0) steps.push({ kind: "value", value: operation.operand, comment: operation.comment });
+      for (const reg of writes(operation.gadget)) if (reg !== output) clobbers.add(reg);
+    }
+    steps.push({ kind: "value", value: options.continuation, comment: "required continuation after API resolution" });
+    for (let word = 0; word < pendingPadding; word += 1) steps.push({ kind: "value", value: 1094795585, comment: "ret immediate padding" });
+    return {
+      state: "CHAIN_CONSTRUCTED",
+      strategy: candidate.strategy,
+      steps,
+      gadgetCount: operations.length,
+      stackBytes: steps.length * 4,
+      clobbers: [...clobbers].sort(),
+      expectedOutput: candidate.target.address,
+      unsatisfied: [],
+      notes
+    };
   }
 
   // src/rop/planner.ts
@@ -6858,16 +7035,16 @@ var osed_bundle = (() => {
         }
         const { consumed, sideEffects, popTargets } = simulateGadget(gadget, regs, steps, i);
         for (const { reg, stepIndex } of popTargets) {
-          const writes = (_a = registerWrites.get(reg)) != null ? _a : [];
-          writes.push(stepIndex);
-          registerWrites.set(reg, writes);
+          const writes2 = (_a = registerWrites.get(reg)) != null ? _a : [];
+          writes2.push(stepIndex);
+          registerWrites.set(reg, writes2);
         }
         for (const effect of sideEffects) {
           const match = /^(e[a-z]{2}) ←/.exec(effect);
           if (match) {
-            const writes = (_b = registerWrites.get(match[1])) != null ? _b : [];
-            writes.push(i);
-            registerWrites.set(match[1], writes);
+            const writes2 = (_b = registerWrites.get(match[1])) != null ? _b : [];
+            writes2.push(i);
+            registerWrites.set(match[1], writes2);
           }
         }
         trace.push({
@@ -6936,9 +7113,9 @@ var osed_bundle = (() => {
       i++;
     }
     const clobbers = [];
-    for (const [reg, writes] of registerWrites) {
-      if (writes.length > 1) {
-        clobbers.push(`${reg} set ${writes.length} times (steps ${writes.join(", ")}) \u2014 verify intended value survives to use`);
+    for (const [reg, writes2] of registerWrites) {
+      if (writes2.length > 1) {
+        clobbers.push(`${reg} set ${writes2.length} times (steps ${writes2.join(", ")}) \u2014 verify intended value survives to use`);
       }
     }
     assumptions.push("Trace assumes linear execution: no conditional branches taken");
@@ -10412,6 +10589,23 @@ var osed_bundle = (() => {
       seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"]
     },
     {
+      name: "rop.api_plan",
+      description: "Read-only Phase 1 API-resolution analysis. Finds direct IAT slots and same-image exact-export anchors, validates live pointer/module/export evidence, and reports byte constraints. It never constructs or ranks ROP chains.",
+      usage: 'dx @$osed().rop.api_plan("MODULE!Symbol", badchars?)',
+      examples: [
+        'dx @$osed().rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")',
+        'dx @$osed().rop.api_plan("VirtualProtect")'
+      ],
+      seeAlso: ["sc.iat", "rop.slot_call", "rop.construct", "rop.prove"]
+    },
+    {
+      name: "rop.api_build",
+      description: "Bounded Phase 2 composer for API-address resolution into EAX. Revalidates Phase 1 evidence in the current stopped-debugger snapshot, then supports exact pop, mov-reg-[reg], add, and ret/ret-N gadgets. It requires an explicit continuation and never invokes the API.",
+      usage: 'dx @$osed().rop.api_build({target:"MODULE!Symbol", continuation:0xADDRESS, output?:"eax", preserve?:["ecx"], maxGadgets?:12, badchars?:"00 0A 0D"})',
+      examples: ['dx @$osed().rop.api_build({target:"KERNEL32!WriteProcessMemory", continuation:0x10001000, preserve:["ecx"], badchars:"00 0A 0D"})'],
+      seeAlso: ["rop.api_plan", "rop.construct", "rop.verify", "rop.prove"]
+    },
+    {
       name: "rop.query",
       description: "Filters the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
@@ -10807,16 +11001,16 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-12T14:05:27.685Z" : globalThis[key2];
+        value = true ? "2026-11-14T19:22:34.007Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "20d75ffae21b" : globalThis[key2];
+        value = true ? "735c13b85987" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
   }
   function readBuildBoolean(key2, fallback) {
-    const value = true ? false : globalThis[key2];
+    const value = true ? true : globalThis[key2];
     return typeof value === "boolean" ? value : fallback;
   }
   function getVersionInfo() {
@@ -11039,6 +11233,8 @@ var osed_bundle = (() => {
     find_ptr: "Search executable memory for instruction bytes",
     "rop.scan": "Load gadgets into the semantic corpus",
     "rop.scan_live": "Discover gadgets in loaded modules",
+    "rop.api_plan": "Discover validated API address-resolution candidates",
+    "rop.api_build": "Construct a bounded API-address resolution chain",
     "rop.query": "Search gadgets by capability or instruction",
     "rop.capabilities": "Summarize available ROP primitives",
     "rop.plan": "Compare API-call construction strategies",
@@ -11141,7 +11337,7 @@ var osed_bundle = (() => {
     ["crash", ["triage", "findmsp", "stackmap", "landing"]],
     ["target", ["modules", "memory", "code_caves"]],
     ["payload", ["pattern_create", "pattern_offset", "badchars"]],
-    ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
+    ["rop", ["rop.scan_live", "rop.api_plan", "rop.api_build", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
     ["pe-api", ["sc.iat", "sc.resolve"]],
     ["shellcode", ["encode", "egghunter"]],
     ["seh", ["seh", "seh_ppr"]],
@@ -13122,13 +13318,13 @@ var osed_bundle = (() => {
       },
       execute(options) {
         var _a, _b;
-        const writes = parseWrites(options.writes);
+        const writes2 = parseWrites(options.writes);
         const argIndex = options.argIndex;
         const width = normalizeWidth(options.width);
         const normalizedExclude = normalizeByteArray((_a = options.exclude) != null ? _a : [0, 10, 13]);
         const prefix = (_b = options.prefix) != null ? _b : 0;
         const result3 = buildFormatString({
-          writes,
+          writes: writes2,
           argIndex,
           width,
           exclude: normalizedExclude.values,
@@ -13139,7 +13335,7 @@ var osed_bundle = (() => {
           warnings.push(normalizedExclude.warning);
         }
         section("Format String Builder");
-        info(`Writes:   ${writes.length} (${width}-granularity, ${result3.rows.length} chunks)`);
+        info(`Writes:   ${writes2.length} (${width}-granularity, ${result3.rows.length} chunks)`);
         info(`ArgIndex: ${argIndex}  Prefix: ${prefix}`);
         section("Chunk breakdown");
         table(
@@ -13599,6 +13795,11 @@ var osed_bundle = (() => {
         throw new Error(`Invalid NT header signature for ${module.name}.`);
       }
       const machine = readUint16LE(ntHeader + BigInt(4));
+      let timeDateStamp = 0;
+      try {
+        timeDateStamp = readUint32LE(ntHeader + BigInt(8));
+      } catch (_error) {
+      }
       const optionalHeader = ntHeader + BigInt(24);
       const optionalHeaderMagic = readUint16LE(optionalHeader);
       const isPe32Plus = optionalHeaderMagic === 523;
@@ -13617,6 +13818,7 @@ var osed_bundle = (() => {
         ntHeader,
         machine,
         machineName: machineToString(machine),
+        timeDateStamp,
         entryPointRva,
         entryPointVa: base + BigInt(entryPointRva),
         imageBase,
@@ -14460,6 +14662,65 @@ var osed_bundle = (() => {
         return this.errorRows(formatError(error2));
       }
     }
+    /** Capture a read-only, stopped-debugger snapshot for rop.api_plan. */
+    apiPlan(targetSpec, badchars = []) {
+      const parsed = parseApiSpec(targetSpec);
+      if (!parsed) return { candidates: [], error: 'Target must be "Symbol" or "MODULE!Symbol".' };
+      try {
+        const modules = this.readModules();
+        const targetModules = parsed.module ? modules.filter((module) => moduleNameMatches(module.name, parsed.module)) : modules.filter((module) => this.exportResolver.resolve(module, parsed.symbol) !== void 0);
+        if (targetModules.length === 0) return { candidates: [], error: `No loaded export matches ${targetSpec}.` };
+        if (targetModules.length > 1) {
+          return { candidates: [], error: `Target ${parsed.symbol} is exported by multiple modules; specify MODULE!${parsed.symbol}.` };
+        }
+        const targetModule = targetModules[0];
+        const targetExport = this.exportResolver.resolve(targetModule, parsed.symbol);
+        if (!targetExport) return { candidates: [], error: `No export ${parsed.symbol} in ${targetModule.name}.` };
+        const forward = this.exportResolver.isForwarded(targetModule, targetExport);
+        if (forward.forwarded) {
+          return { candidates: [], error: `${targetModule.name}!${parsed.symbol} is forwarded to ${forward.target}; forwarded target resolution is not yet implemented.` };
+        }
+        const headers = this.parser.parseHeaders(targetModule);
+        const imports = modules.flatMap((owner) => {
+          try {
+            const ownerHeaders = this.parser.parseHeaders(owner);
+            return this.iatResolver.enumerateIat(owner).map((entry) => {
+              var _a, _b, _c, _d;
+              return {
+                ownerModule: owner.name,
+                ownerBase: owner.base,
+                ownerImageBase: ownerHeaders.imageBase,
+                slot: entry.slot,
+                pointer: entry.target,
+                actualModule: (_a = entry.actualModule) == null ? void 0 : _a.name,
+                actualModuleBase: (_b = entry.actualModule) == null ? void 0 : _b.base,
+                importedSymbol: entry.symbol,
+                nearestSymbol: (_c = entry.nearest) == null ? void 0 : _c.name,
+                nearestOffset: (_d = entry.nearest) == null ? void 0 : _d.offset
+              };
+            });
+          } catch (_error) {
+            return [];
+          }
+        });
+        const target = { module: targetModule.name, symbol: targetExport.name, address: targetExport.va, exportRva: targetExport.rva };
+        return {
+          target,
+          candidates: planApiResolution(target, imports, badchars),
+          targetIdentity: {
+            name: targetModule.name,
+            path: targetModule.path,
+            base: targetModule.base,
+            imageBase: headers.imageBase,
+            sizeOfImage: headers.sizeOfImage,
+            timeDateStamp: headers.timeDateStamp,
+            hash: "not-collected"
+          }
+        };
+      } catch (error2) {
+        return { candidates: [], error: formatError(error2) };
+      }
+    }
     findModule(name) {
       const needle = normalizeNeedle(name);
       if (!needle) {
@@ -14759,6 +15020,20 @@ var osed_bundle = (() => {
     const parts = normalized.split(/[\\/]+/);
     return parts[parts.length - 1] || normalized;
   }
+  function moduleNameMatches(name, requested) {
+    const normalize = (value) => value.trim().toLowerCase().replace(/\.dll$/, "");
+    return normalize(name) === normalize(requested);
+  }
+  function parseApiSpec(value) {
+    const trimmed = value.trim();
+    if (!trimmed) return void 0;
+    const parts = trimmed.split("!");
+    if (parts.length === 1) return { symbol: parts[0].trim() || "" };
+    if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
+      return { module: parts[0].trim(), symbol: parts[1].trim() };
+    }
+    return void 0;
+  }
   function createShellcodeNamespace() {
     const helper = new ShellcodeHelper();
     const helperHelp = (name) => {
@@ -14803,7 +15078,8 @@ var osed_bundle = (() => {
       exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
       iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
       iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
-      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol))
+      iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
+      api_plan: (target, badchars = []) => helper.apiPlan(target, badchars)
     };
   }
 
@@ -14919,17 +15195,17 @@ var osed_bundle = (() => {
     if (b0 === 247) {
       const decoded = decodeModRM11(b1);
       if (!decoded) return void 0;
-      const op3 = b1 >> 3 & 7;
-      if (op3 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
-      if (op3 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
+      const op4 = b1 >> 3 & 7;
+      if (op4 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
+      if (op4 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
       return void 0;
     }
     if (b0 === 255) {
       const decoded = decodeModRM11(b1);
       if (!decoded) return void 0;
-      const op3 = b1 >> 3 & 7;
-      if (op3 === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
-      if (op3 === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
+      const op4 = b1 >> 3 & 7;
+      if (op4 === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
+      if (op4 === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
       return void 0;
     }
     if (b0 === 217) {
@@ -14941,10 +15217,10 @@ var osed_bundle = (() => {
       if (offset + 2 >= bytes.length) return void 0;
       const decoded = decodeModRM11(b1);
       if (!decoded) return void 0;
-      const op3 = b1 >> 3 & 7;
+      const op4 = b1 >> 3 & 7;
       const imm8 = bytes[offset + 2];
       const signed = imm8 > 127 ? imm8 - 256 : imm8;
-      const name = GRP1_NAMES[op3];
+      const name = GRP1_NAMES[op4];
       return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
     }
     for (const entry of ALU_EAX_IMM32) {
@@ -16834,6 +17110,7 @@ var osed_bundle = (() => {
   }
   function bindApi() {
     const api = {};
+    const sc = createShellcodeNamespace();
     const invoke = (commandName, args) => {
       if (args.length === 1 && args[0] === "help") {
         const result4 = registry.execute("help", { command: commandName });
@@ -18468,6 +18745,128 @@ var osed_bundle = (() => {
       });
       return toDxResult("ROP Slot Call", rows);
     };
+    const executeRopApiPlan = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_plan");
+      const target = typeof args[0] === "string" ? args[0].trim() : "";
+      const badchars = parseBadcharsOption(args[1]);
+      if (!target) {
+        const rows2 = [{ Error: 'rop.api_plan requires an API name, e.g. rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")' }];
+        renderRows("ROP API Resolution Planner", rows2);
+        setResult({ command: "rop.api_plan", args: {}, success: false, findings: [], warnings: [], errors: ["Missing target API."] });
+        return toDxResult("ROP API Resolution Planner", rows2);
+      }
+      const snapshot = sc.api_plan(target, badchars);
+      if (snapshot.error || !snapshot.target || !snapshot.targetIdentity) {
+        const message = (_a = snapshot.error) != null ? _a : "No target export was resolved.";
+        const rows2 = [{ Error: message }];
+        renderRows("ROP API Resolution Planner", rows2);
+        setResult({ command: "rop.api_plan", args: { target, badchars }, success: false, findings: [snapshot], warnings: [], errors: [message] });
+        return toDxResult("ROP API Resolution Planner", rows2);
+      }
+      const identity = snapshot.targetIdentity;
+      section("ROP API Resolution Planner (Phase 1 \u2014 discovery only)");
+      info(`Target: ${snapshot.target.module}!${snapshot.target.symbol} @ ${hex32(snapshot.target.address)} (RVA 0x${snapshot.target.exportRva.toString(16).toUpperCase()})`);
+      info(`Observed module: ${identity.name} base ${hex32(identity.base)} image base ${hex32(identity.imageBase)} size 0x${identity.sizeOfImage.toString(16).toUpperCase()} timestamp 0x${identity.timeDateStamp.toString(16).toUpperCase()} hash ${identity.hash}`);
+      info(`Snapshot provenance: stopped-debugger reads; target path ${identity.path || "<unknown>"}`);
+      info(`Badchars: ${badchars.length > 0 ? badchars.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ") : "none specified"}`);
+      const rows = snapshot.candidates.map((candidate) => {
+        var _a2, _b;
+        return {
+          Strategy: candidate.strategy,
+          State: candidate.state,
+          Owner: candidate.ownerModule,
+          Slot: hex32(candidate.slot),
+          Pointer: hex32(candidate.pointer),
+          Anchor: (_b = (_a2 = candidate.anchor) == null ? void 0 : _a2.symbol) != null ? _b : "",
+          Delta: candidate.anchor ? hex32(candidate.anchor.delta) : "",
+          "Slot bytes": candidate.slotPayloadSafe ? "safe" : "contains badchar",
+          "Address evidence": candidate.exportRvaVerified ? "validated" : "incomplete",
+          Recommendation: candidate.recommendation
+        };
+      });
+      if (rows.length === 0) {
+        rows.push({
+          Strategy: "neither",
+          State: "DISCOVERED",
+          Owner: "",
+          Slot: "",
+          Pointer: "",
+          Anchor: "",
+          Delta: "",
+          "Slot bytes": "",
+          "Address evidence": "",
+          Recommendation: "No direct IAT slot or same-image exact-export anchor was established."
+        });
+      }
+      renderRows("ROP API Resolution Planner", rows);
+      const warnings = snapshot.candidates.filter((candidate) => !candidate.slotPayloadSafe).map((candidate) => `${candidate.strategy} slot ${hex32(candidate.slot)} contains a forbidden byte; this does not rule out dynamic address construction.`);
+      setResult({ command: "rop.api_plan", args: { target, badchars }, success: snapshot.candidates.length > 0, findings: [snapshot], warnings, errors: [] });
+      return toDxResult("ROP API Resolution Planner", rows);
+    };
+    const executeRopApiBuild = (...args) => {
+      var _a;
+      if (args.length === 1 && args[0] === "help") return helperHelp("rop.api_build");
+      const options = isPlainObject(args[0]) ? args[0] : { target: args[0], badchars: args[1], continuation: args[2] };
+      const target = typeof options.target === "string" ? options.target.trim() : "";
+      const badchars = parseBadcharsOption(options.badchars);
+      const output = typeof options.output === "string" ? options.output : "eax";
+      const preserve = Array.isArray(options.preserve) ? options.preserve.filter((value) => typeof value === "string") : [];
+      const maxGadgets = options.maxGadgets !== void 0 ? Number(options.maxGadgets) : 12;
+      const continuation = options.continuation !== void 0 ? Number(options.continuation) : void 0;
+      if (!target) {
+        const rows2 = [{ Error: 'rop.api_build requires {target:"MODULE!Symbol", continuation:0xADDRESS}; it never invents a terminal continuation.' }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const stale = staleCorpusGuard("ROP API Resolution Builder", "rop.api_build");
+      if (stale) return stale;
+      const snapshot = sc.api_plan(target, badchars);
+      if (snapshot.error) {
+        const rows2 = [{ Error: snapshot.error }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const builds = snapshot.candidates.map((candidate) => ({ candidate, plan: buildApiResolution(currentRopCorpus, candidate, { output, preserve, maxGadgets, badchars, continuation }) }));
+      const selected = (_a = builds.find((entry) => entry.plan.state === "CHAIN_CONSTRUCTED")) != null ? _a : builds[0];
+      if (!selected) {
+        const rows2 = [{ Error: "No validated Phase 1 resolution candidate is available." }];
+        renderRows("ROP API Resolution Builder", rows2);
+        return toDxResult("ROP API Resolution Builder", rows2);
+      }
+      const plan = selected.plan;
+      section("ROP API Resolution Builder (Phase 2)");
+      info(`Strategy: ${selected.candidate.strategy} | Output: ${output.toUpperCase()} | Expected: ${plan.expectedOutput !== void 0 ? hex32(plan.expectedOutput) : "unavailable"}`);
+      info(`State: ${plan.state} \u2014 static composition only; CHAIN_VERIFIED requires debugger execution through rop.prove.`);
+      for (const note of plan.notes) info(note);
+      for (const reason of plan.unsatisfied) warn(reason);
+      if (plan.clobbers.length > 0) warn(`Clobbers: ${plan.clobbers.join(", ")}`);
+      const rows = plan.steps.map((step, index) => {
+        var _a2;
+        return {
+          Index: String(index),
+          Type: step.kind,
+          Value: step.address !== void 0 ? hex32(step.address) : step.value !== void 0 ? hex32(BigInt(step.value)) : (_a2 = step.placeholder) != null ? _a2 : "",
+          Meaning: step.comment
+        };
+      });
+      if (rows.length === 0) rows.push({ Index: "", Type: "none", Value: "", Meaning: plan.unsatisfied.join(" ") || "No chain constructed." });
+      renderRows("ROP API Resolution Builder", rows);
+      setResult({
+        command: "rop.api_build",
+        args: { target, output, preserve, maxGadgets, badchars, continuation },
+        success: plan.state === "CHAIN_CONSTRUCTED",
+        findings: [{ snapshot, candidate: selected.candidate, plan }],
+        warnings: plan.unsatisfied,
+        errors: []
+      });
+      return toDxResult("ROP API Resolution Builder", rows);
+    };
     const API_IAT_NAMES = {
       VirtualProtect: "VirtualProtect",
       VirtualAlloc: "VirtualAlloc",
@@ -19047,6 +19446,8 @@ var osed_bundle = (() => {
       frame_va: executeRopFrameVa,
       frame_write: executeRopFrameWrite,
       slot_call: executeRopSlotCall,
+      api_plan: executeRopApiPlan,
+      api_build: executeRopApiBuild,
       generate: executeRopGenerate,
       verify: executeRopVerify,
       prove: executeRopProve
@@ -19122,7 +19523,7 @@ var osed_bundle = (() => {
       lastResult = void 0;
       return true;
     };
-    api.sc = createShellcodeNamespace();
+    api.sc = sc;
     const analysisAddress = (value) => {
       if (typeof value === "bigint" && value >= BigInt(0)) return value;
       if (typeof value === "number" && Number.isInteger(value) && value >= 0) return BigInt(value);
