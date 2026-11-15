@@ -11051,10 +11051,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-15T18:28:06.083Z" : globalThis[key2];
+        value = true ? "2026-11-15T19:58:53.052Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "d53b619d6385" : globalThis[key2];
+        value = true ? "ba4d70f43ad6" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -19718,12 +19718,12 @@ var osed_bundle = (() => {
       result3.maxPerPattern = args[2];
       result3.append = args[3];
       result3.maxInstructionsPerGadget = args[4];
-      result3.maxBackwardGadgets = args[5];
     } else {
       result3.append = args[2];
       result3.maxPerPattern = args[3];
       result3.maxInstructionsPerGadget = args[4];
     }
+    result3.maxBackwardGadgets = args[5];
     return result3;
   }
   function isPlainObject(value) {

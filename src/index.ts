@@ -3265,12 +3265,12 @@ function parseScanLivePositionalArgs(args: unknown[]): Record<string, unknown> {
     result.maxPerPattern = args[2];
     result.append = args[3];
     result.maxInstructionsPerGadget = args[4];
-  result.maxBackwardGadgets = args[5];
   } else {
     result.append = args[2];
     result.maxPerPattern = args[3];
     result.maxInstructionsPerGadget = args[4];
   }
+  result.maxBackwardGadgets = args[5];
   return result;
 }
 
