@@ -210,6 +210,14 @@ describe("backward scanner instruction decoder", () => {
   });
 
   describe("multi-instruction sequences", () => {
+    it("decodes every instruction in the five-instruction ESP-capture regression gadget", () => {
+      // 54 41 15 10 8b 46 08 5e c3
+      const bytes = Uint8Array.from([0x54, 0x41, 0x15, 0x10, 0x8b, 0x46, 0x08, 0x5e, 0xc3]);
+      expect(tryDecodeInsn(bytes, 0)?.mnemonic).toBe("push esp");
+      expect(tryDecodeInsn(bytes, 1)?.mnemonic).toBe("inc ecx");
+      expect(tryDecodeInsn(bytes, 2)?.mnemonic).toBe("adc eax, 0x8468b10");
+      expect(tryDecodeInsn(bytes, 7)?.mnemonic).toBe("pop esi");
+    });
     it("decodes every non-terminator instruction in a four-instruction memory gadget", () => {
       // 55  87 01  5D  C3
       const bytes = Uint8Array.from([0x55, 0x87, 0x01, 0x5d, 0xc3]);

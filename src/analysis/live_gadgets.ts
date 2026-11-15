@@ -15,6 +15,7 @@ export interface LiveDiscoveryOptions {
   module?: string;
   badchars?: number[];
   maxPerPattern?: number;
+  maxInstructionsPerGadget?: number;
 }
 
 export interface LiveDiscoveryResult {
@@ -66,7 +67,7 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
   const backward = scanBackward({
     module: options.module,
     maxResults: 10000,
-    maxInstructionsPerGadget: 4,
+    maxInstructionsPerGadget: Math.min(Math.max(Math.floor(options.maxInstructionsPerGadget ?? 6), 1), 12),
     maxBackwardBytes: 12,
   });
   for (const w of backward.warnings) warningSet.add(w);

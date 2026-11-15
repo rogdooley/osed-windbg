@@ -776,6 +776,7 @@ function bindApi(): OsedApi {
       {
         badchars: Array.isArray(parsedBadchars) ? parsedBadchars : undefined,
         maxPerPattern: options.maxPerPattern as number | undefined,
+        maxInstructionsPerGadget: options.maxInstructionsPerGadget as number | undefined,
       },
       Boolean(options.append),
     );
@@ -954,6 +955,37 @@ function bindApi(): OsedApi {
     renderRows("ROP Corpus Validate", rows);
     setResult({ command: "rop.corpus.validate", args: {}, success: true, findings: rows, warnings: [], errors: [] });
     return toDxResult("ROP Corpus Validate", rows);
+  };
+
+  const executeCorpusLookup = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.corpus.lookup");
+    const address = Number(args[0]);
+    if (!Number.isFinite(address)) {
+      const rows = [{ Status: "ERROR", Detail: "rop.corpus.lookup requires a numeric gadget address." }];
+      renderRows("ROP Corpus Lookup", rows);
+      return toDxResult("ROP Corpus Lookup", rows);
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Status: "ERROR", Detail: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Corpus Lookup", rows);
+      return toDxResult("ROP Corpus Lookup", rows);
+    }
+    const matches = currentRopCorpus.gadgets.filter((gadget) => gadget.locations.some((location) => location.virtualAddress === (address >>> 0)));
+    if (matches.length === 0) {
+      const rows = [{ Status: "NOT_FOUND", Address: hex32(BigInt(address)), Detail: "Address is not in the active corpus; lookup does not scan memory." }];
+      renderRows("ROP Corpus Lookup", rows);
+      return toDxResult("ROP Corpus Lookup", rows);
+    }
+    const rows = matches.map((gadget) => ({
+      Status: "FOUND", Address: hex32(BigInt(address)), Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+      StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
+      Reads: formatSemanticField(gadget.semanticSummary.summary.reads), Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
+      Capabilities: gadget.capabilities.map((capability) => capability.kind).join(", "),
+      Locations: gadget.locations.map((location) => location.module ?? "unknown").join(", "), Validation: corpusValidation,
+    }));
+    renderRows("ROP Corpus Lookup", rows);
+    setResult({ command: "rop.corpus.lookup", args: { address }, success: true, findings: matches, warnings: [], errors: [] });
+    return toDxResult("ROP Corpus Lookup", rows);
   };
 
   const executeRopQuery = (...args: unknown[]): DxResult => {
@@ -2380,6 +2412,13 @@ function bindApi(): OsedApi {
       Index: String(index), Type: step.kind, Value: step.address !== undefined ? hex32(step.address) : step.value !== undefined ? hex32(BigInt(step.value)) : step.placeholder ?? "", Meaning: step.comment,
     }));
     if (rows.length === 0) rows.push({ Index: "", Type: "none", Value: "", Meaning: plan.unsatisfied.join(" ") || "No chain constructed." });
+    if (plan.state === "CHAIN_CONSTRUCTED") {
+      out.section("Python — API Resolution Fragment");
+      out.info(`# Resolves ${selected.candidate.target.module}!${selected.candidate.target.symbol} into EAX; it does not construct or invoke the API call frame.`);
+      out.info(`# Expected EAX: ${plan.expectedOutput !== undefined ? hex32(plan.expectedOutput) : "unknown"}`);
+      if (plan.clobbers.length > 0) out.info(`# Clobbers: ${plan.clobbers.join(", ")}`);
+      for (const line of formatChainPython({ steps: plan.steps })) out.print(line);
+    }
     renderRows("ROP API Resolution Builder", rows);
     setResult({
       command: "rop.api_build", args: { target, output, preserve, maxGadgets, badchars, continuation, owner: requestedOwner || undefined, anchor: requestedAnchor || undefined }, success: plan.state === "CHAIN_CONSTRUCTED",
@@ -3073,6 +3112,7 @@ function bindApi(): OsedApi {
       report: executeCorpusReport,
       import: executeCorpusImport,
       validate: executeCorpusValidate,
+      lookup: executeCorpusLookup,
     },
     query: executeRopQuery,
     capabilities: executeRopCapabilities,
@@ -3214,18 +3254,16 @@ function bindApi(): OsedApi {
 function parseScanLivePositionalArgs(args: unknown[]): Record<string, unknown> {
   const result: Record<string, unknown> = { module: args[0] };
   result.badchars = parseHexByteList(args[1]);
-  let idx = 2;
-  if (idx < args.length && typeof args[idx] === "boolean") {
-    result.append = args[idx];
-    idx++;
-  } else if (idx < args.length && typeof args[idx] === "number") {
-    result.maxPerPattern = args[idx];
-    idx++;
-    if (idx < args.length) {
-      result.append = args[idx];
-    }
-  } else if (idx < args.length) {
-    result.append = args[idx];
+  // Stable DX positional form: module, badchars, append, maxPerPattern,
+  // maxInstructionsPerGadget. Retain the legacy numeric third argument.
+  if (typeof args[2] === "number") {
+    result.maxPerPattern = args[2];
+    result.append = args[3];
+    result.maxInstructionsPerGadget = args[4];
+  } else {
+    result.append = args[2];
+    result.maxPerPattern = args[3];
+    result.maxInstructionsPerGadget = args[4];
   }
   return result;
 }

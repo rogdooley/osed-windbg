@@ -157,6 +157,25 @@ function aggregateRegisterTransforms(instructionSemantics: SemanticSequence["ins
   return state;
 }
 
+// Track the one stack value that can be proven without a general memory model:
+// `push esp` stores the entry ESP at the temporary top-of-stack; a later pop
+// into a register recovers it only when no intervening instruction touches ESP
+// or that stack slot. This deliberately fails closed for nested stack activity.
+function balancedEspCapture(instructions: InstructionSequence["instructions"]): Register | undefined {
+  for (let start = 0; start < instructions.length; start += 1) {
+    const first = instructions[start];
+    if (first.mnemonic !== "push" || first.operands[0]?.trim().toLowerCase() !== "esp") continue;
+    for (let index = start + 1; index < instructions.length; index += 1) {
+      const current = instructions[index];
+      const mnemonic = current.mnemonic.toLowerCase();
+      const operands = current.operands.map((operand) => operand.trim().toLowerCase());
+      if (mnemonic === "pop" && operands.length === 1 && operands[0] !== "esp") return operands[0] as Register;
+      if (mnemonic === "push" || mnemonic === "pop" || mnemonic === "ret" || operands.some((operand) => operand.includes("esp") || operand.includes("[esp"))) break;
+    }
+  }
+  return undefined;
+}
+
 function appendField<T>(current: SemanticField<T>, next: SemanticField<T>): SemanticField<T> {
   return mergeField(current, next);
 }
@@ -244,6 +263,8 @@ export function composeSemanticSequence(sequence: InstructionSequence): Semantic
 
   summary.stackDelta = aggregateStackDelta(instructionSemantics);
   summary.registerTransforms = aggregateRegisterTransforms(instructionSemantics);
+  const capture = balancedEspCapture(sequence.instructions);
+  if (capture) summary.registerTransforms[capture] = registerIdentity("esp");
 
   return {
     schemaVersion: SEMANTIC_SCHEMA_VERSION,

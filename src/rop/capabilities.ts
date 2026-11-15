@@ -190,6 +190,16 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
     }
   }
 
+  // A balanced `push esp ... pop reg` preserves a copy of the entry ESP in a
+  // general register.  The semantic composer proves the value flow; require
+  // that proof rather than recognizing an unsafe textual pattern here.
+  for (const register of ["eax", "ecx", "edx", "ebx", "ebp", "esi", "edi"]) {
+    const transform = semantic.summary.registerTransforms[register as keyof typeof semantic.summary.registerTransforms];
+    if (transform?.kind === "affine" && transform.base === "esp" && transform.offset.kind === "constant" && transform.offset.value === 0) {
+      add({ kind: "STACK_POINTER_CAPTURE", register, targetRegister: "esp", evidence: ["balanced push esp / pop register"] });
+    }
+  }
+
   if (categories.includes("STACK_PIVOT")) {
     add({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
   }

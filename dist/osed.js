@@ -3958,6 +3958,12 @@ var osed_bundle = (() => {
         }
       }
     }
+    for (const register2 of ["eax", "ecx", "edx", "ebx", "ebp", "esi", "edi"]) {
+      const transform = semantic.summary.registerTransforms[register2];
+      if ((transform == null ? void 0 : transform.kind) === "affine" && transform.base === "esp" && transform.offset.kind === "constant" && transform.offset.value === 0) {
+        add({ kind: "STACK_POINTER_CAPTURE", register: register2, targetRegister: "esp", evidence: ["balanced push esp / pop register"] });
+      }
+    }
     if (categories.includes("STACK_PIVOT")) {
       add({ kind: "STACK_PIVOT", evidence: ["category:STACK_PIVOT"] });
     }
@@ -7998,6 +8004,21 @@ var osed_bundle = (() => {
     }
     return state;
   }
+  function balancedEspCapture(instructions) {
+    var _a;
+    for (let start = 0; start < instructions.length; start += 1) {
+      const first = instructions[start];
+      if (first.mnemonic !== "push" || ((_a = first.operands[0]) == null ? void 0 : _a.trim().toLowerCase()) !== "esp") continue;
+      for (let index = start + 1; index < instructions.length; index += 1) {
+        const current = instructions[index];
+        const mnemonic = current.mnemonic.toLowerCase();
+        const operands = current.operands.map((operand) => operand.trim().toLowerCase());
+        if (mnemonic === "pop" && operands.length === 1 && operands[0] !== "esp") return operands[0];
+        if (mnemonic === "push" || mnemonic === "pop" || mnemonic === "ret" || operands.some((operand) => operand.includes("esp") || operand.includes("[esp"))) break;
+      }
+    }
+    return void 0;
+  }
   function appendField(current, next) {
     return mergeField(current, next);
   }
@@ -8070,6 +8091,8 @@ var osed_bundle = (() => {
     }
     summary.stackDelta = aggregateStackDelta(instructionSemantics);
     summary.registerTransforms = aggregateRegisterTransforms(instructionSemantics);
+    const capture = balancedEspCapture(sequence.instructions);
+    if (capture) summary.registerTransforms[capture] = registerIdentity("esp");
     return {
       schemaVersion: SEMANTIC_SCHEMA_VERSION,
       instructionSequenceId: sequence.id,
@@ -10598,13 +10621,21 @@ var osed_bundle = (() => {
     {
       name: "rop.scan_live",
       description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
-      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?)",
+      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?)",
       examples: [
         'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
         'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
-        'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)'
+        'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)',
+        'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6)'
       ],
       seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"]
+    },
+    {
+      name: "rop.corpus.lookup",
+      description: "Read-only exact-address lookup in the active ROP corpus. Reports NOT_FOUND without scanning memory.",
+      usage: "dx @$osed().rop.corpus.lookup(address)",
+      examples: ["dx @$osed().rop.corpus.lookup(0x10154112)"],
+      seeAlso: ["rop.scan_live", "rop.query", "rop.corpus.report"]
     },
     {
       name: "rop.api_plan",
@@ -11019,10 +11050,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-14T20:29:27.537Z" : globalThis[key2];
+        value = true ? "2026-11-15T17:51:37.619Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "51305682fa13" : globalThis[key2];
+        value = true ? "2b561daa73ab" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15351,7 +15382,7 @@ var osed_bundle = (() => {
 
   // src/analysis/live_gadgets.ts
   function discoverLiveGadgets(options = {}) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const pointerSize = getPointerSize();
     const patterns = knownPatternsForPointerSize(pointerSize);
     const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
@@ -15385,7 +15416,7 @@ var osed_bundle = (() => {
     const backward = scanBackward({
       module: options.module,
       maxResults: 1e4,
-      maxInstructionsPerGadget: 4,
+      maxInstructionsPerGadget: Math.min(Math.max(Math.floor((_d = options.maxInstructionsPerGadget) != null ? _d : 6), 1), 12),
       maxBackwardBytes: 12
     });
     for (const w of backward.warnings) warningSet.add(w);
@@ -15399,7 +15430,7 @@ var osed_bundle = (() => {
         rejected++;
         continue;
       }
-      hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: (_d = findModuleByAddress(gadget.address)) == null ? void 0 : _d.name });
+      hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: (_e = findModuleByAddress(gadget.address)) == null ? void 0 : _e.name });
       backwardAdded++;
     }
     return {
@@ -15410,7 +15441,7 @@ var osed_bundle = (() => {
         scanned,
         rejected,
         discovered: hits.length,
-        backwardTerminators: (_e = backward.stats.terminatorsFound) != null ? _e : 0,
+        backwardTerminators: (_f = backward.stats.terminatorsFound) != null ? _f : 0,
         backwardGadgets: backwardAdded
       }
     };
@@ -17414,7 +17445,8 @@ var osed_bundle = (() => {
         modules.length > 0 ? modules : [void 0],
         {
           badchars: Array.isArray(parsedBadchars) ? parsedBadchars : void 0,
-          maxPerPattern: options.maxPerPattern
+          maxPerPattern: options.maxPerPattern,
+          maxInstructionsPerGadget: options.maxInstructionsPerGadget
         },
         Boolean(options.append)
       );
@@ -17579,6 +17611,43 @@ var osed_bundle = (() => {
       renderRows("ROP Corpus Validate", rows);
       setResult({ command: "rop.corpus.validate", args: {}, success: true, findings: rows, warnings: [], errors: [] });
       return toDxResult("ROP Corpus Validate", rows);
+    };
+    const executeCorpusLookup = (...args) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("rop.corpus.lookup");
+      const address = Number(args[0]);
+      if (!Number.isFinite(address)) {
+        const rows2 = [{ Status: "ERROR", Detail: "rop.corpus.lookup requires a numeric gadget address." }];
+        renderRows("ROP Corpus Lookup", rows2);
+        return toDxResult("ROP Corpus Lookup", rows2);
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Status: "ERROR", Detail: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Corpus Lookup", rows2);
+        return toDxResult("ROP Corpus Lookup", rows2);
+      }
+      const matches = currentRopCorpus.gadgets.filter((gadget) => gadget.locations.some((location) => location.virtualAddress === address >>> 0));
+      if (matches.length === 0) {
+        const rows2 = [{ Status: "NOT_FOUND", Address: hex32(BigInt(address)), Detail: "Address is not in the active corpus; lookup does not scan memory." }];
+        renderRows("ROP Corpus Lookup", rows2);
+        return toDxResult("ROP Corpus Lookup", rows2);
+      }
+      const rows = matches.map((gadget) => ({
+        Status: "FOUND",
+        Address: hex32(BigInt(address)),
+        Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
+        StackDelta: formatSemanticField(gadget.semanticSummary.summary.stackDelta),
+        Reads: formatSemanticField(gadget.semanticSummary.summary.reads),
+        Writes: formatSemanticField(gadget.semanticSummary.summary.writes),
+        Capabilities: gadget.capabilities.map((capability2) => capability2.kind).join(", "),
+        Locations: gadget.locations.map((location) => {
+          var _a;
+          return (_a = location.module) != null ? _a : "unknown";
+        }).join(", "),
+        Validation: corpusValidation
+      }));
+      renderRows("ROP Corpus Lookup", rows);
+      setResult({ command: "rop.corpus.lookup", args: { address }, success: true, findings: matches, warnings: [], errors: [] });
+      return toDxResult("ROP Corpus Lookup", rows);
     };
     const executeRopQuery = (...args) => {
       var _b;
@@ -18924,6 +18993,13 @@ var osed_bundle = (() => {
         };
       });
       if (rows.length === 0) rows.push({ Index: "", Type: "none", Value: "", Meaning: plan.unsatisfied.join(" ") || "No chain constructed." });
+      if (plan.state === "CHAIN_CONSTRUCTED") {
+        section("Python \u2014 API Resolution Fragment");
+        info(`# Resolves ${selected.candidate.target.module}!${selected.candidate.target.symbol} into EAX; it does not construct or invoke the API call frame.`);
+        info(`# Expected EAX: ${plan.expectedOutput !== void 0 ? hex32(plan.expectedOutput) : "unknown"}`);
+        if (plan.clobbers.length > 0) info(`# Clobbers: ${plan.clobbers.join(", ")}`);
+        for (const line of formatChainPython({ steps: plan.steps })) print(line);
+      }
       renderRows("ROP API Resolution Builder", rows);
       setResult({
         command: "rop.api_build",
@@ -19494,7 +19570,8 @@ var osed_bundle = (() => {
         export: executeCorpusExport,
         report: executeCorpusReport,
         import: executeCorpusImport,
-        validate: executeCorpusValidate
+        validate: executeCorpusValidate,
+        lookup: executeCorpusLookup
       },
       query: executeRopQuery,
       capabilities: executeRopCapabilities,
@@ -19627,18 +19704,14 @@ var osed_bundle = (() => {
   function parseScanLivePositionalArgs(args) {
     const result3 = { module: args[0] };
     result3.badchars = parseHexByteList(args[1]);
-    let idx = 2;
-    if (idx < args.length && typeof args[idx] === "boolean") {
-      result3.append = args[idx];
-      idx++;
-    } else if (idx < args.length && typeof args[idx] === "number") {
-      result3.maxPerPattern = args[idx];
-      idx++;
-      if (idx < args.length) {
-        result3.append = args[idx];
-      }
-    } else if (idx < args.length) {
-      result3.append = args[idx];
+    if (typeof args[2] === "number") {
+      result3.maxPerPattern = args[2];
+      result3.append = args[3];
+      result3.maxInstructionsPerGadget = args[4];
+    } else {
+      result3.append = args[2];
+      result3.maxPerPattern = args[3];
+      result3.maxInstructionsPerGadget = args[4];
     }
     return result3;
   }

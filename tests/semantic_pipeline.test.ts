@@ -43,6 +43,18 @@ describe("semantic pipeline", () => {
     expect(semantic.summary.stackDelta.values.exact.has(12)).toBe(true);
   });
 
+  test("proves balanced push-ESP/pop capture while keeping ADC flag-dependent", async () => {
+    const provider = new RPPlusProvider("0x10154112: push esp ; inc ecx ; adc eax, 0x08468B10 ; pop esi ; ret ;");
+    const [sequence] = await loadAll(provider);
+    const semantic = composeSemanticSequence(sequence);
+    const gadget = buildRopGadgetFromSequence(sequence);
+    expect(semantic.summary.stackDelta.values.exact.has(4)).toBe(true);
+    expect(semantic.summary.registerTransforms.esi).toEqual({ kind: "affine", base: "esp", offset: { kind: "constant", value: 0 } });
+    expect(semantic.summary.registerTransforms.esp).toEqual({ kind: "affine", base: "esp", offset: { kind: "constant", value: 4 } });
+    expect(semantic.summary.registerTransforms.eax.kind).toBe("unknown");
+    expect(gadget.capabilities).toContainEqual(expect.objectContaining({ kind: "STACK_POINTER_CAPTURE", register: "esi", targetRegister: "esp" }));
+  });
+
   test("net transforms rebase sequential pop stack slots to entry ESP", async () => {
     const provider = new RPPlusProvider("0x1000: pop esi ; pop edi ; ret ;");
     const [sequence] = await loadAll(provider);

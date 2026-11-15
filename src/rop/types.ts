@@ -44,6 +44,7 @@ export type CapabilityKind =
   | "STACK_COPY"
   | "STACK_READ"
   | "STACK_WRITE"
+  | "STACK_POINTER_CAPTURE"
   | "DISPATCH_PUSHAD"
   | "DISPATCH_RET"
   | "DISPATCH_CALL_REGISTER"
