@@ -131,12 +131,13 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   {
     name: "rop.scan_live",
     description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
-    usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?)",
+    usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?, maxBackwardGadgets?)",
     examples: [
       'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
       'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
       'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)',
       'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6)',
+      'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", false, 40, 6, 50000)',
     ],
     seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"],
   },

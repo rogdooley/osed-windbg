@@ -210,18 +210,38 @@ The `str` namespace provides small string helpers for exploit workflow evidence 
 
 The `rop` runtime namespace includes semantic gadget queries, corpus-backed chain builders, and flat stdcall frame emitters. Load a corpus first with `rop.scan(...)` (pasted RP++ output) or `rop.scan_live(...)` (live target memory) before using `rop.query(...)`, `rop.capabilities()`, or `rop.chain*()` helpers. The `rop.frame_*()` helpers emit data-only stdcall frames and do not require a loaded corpus.
 
+### Calling conventions and option reference
+
+WinDbg `dx` does **not** accept JavaScript object literals such as `{target:"..."}`. Use the positional forms documented below. Object-shaped options are only for callers already executing JavaScript in the script host.
+
+| Command | Positional options | Notes |
+| --- | --- | --- |
+| `rop.scan_live` | `module, badchars, append, maxPerPattern, maxInstructionsPerGadget, maxBackwardGadgets` | `append` is `true` to retain the active corpus; otherwise the scan replaces it. `maxPerPattern` limits retained hits for each pattern. The instruction limit defaults to 6, range 1–12. `maxBackwardGadgets` bounds raw backward candidates and defaults to 10,000. |
+| `rop.query` | `field, value, executableOnly, verbose` | `verbose=true` adds semantic reads, writes, memory effects, terminator, and all capabilities. Supported fields are `reads`, `writes`, `preserves`, `preservesThroughout`, `capability`, `terminator`, `stackDelta`, `memoryReads`, `memoryWrites`, and `executableOnly`. Exact addresses use `rop.corpus.lookup`, not `rop.query`. |
+| `rop.corpus.lookup` | `address` | Searches only the active corpus. `NOT_FOUND` means the address was not discovered/imported; it never triggers a scan. |
+| `rop.api_plan` | `target, badchars` | Discovery/evidence only; it does not choose gadgets or create a chain. |
+| `rop.api_build` | `target, badchars, continuation, preserve, maxGadgets, owner, anchor` | `continuation` is a concrete post-resolution destination. `preserve` is a space- or comma-separated register list. `owner` and `anchor` pin a Phase 1 candidate. |
+
+Typical live-discovery loop:
+
+```text
+dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D 23 25 26 2B 3D", false, 40, 6, 50000)
+dx @$osed().rop.corpus.lookup(0x10154112)
+dx @$osed().rop.query("capability", "STACK_POINTER_CAPTURE", false, true)
+```
+
 | Helper | Syntax | Example | Notes |
 | --- | --- | --- | --- |
 | `rop.find` | `dx @$osed().rop.find(module?, maxResults?, executableOnly?, mode?)` | `dx @$osed().rop.find("essfunc")` | Runs the legacy ROP helper/module triage from the ROP namespace. |
 | `rop.scan` | `dx @$osed().rop.scan(text, options?)` | `dx @$osed().rop.scan("0x1000: pop eax ; ret ;")` | Builds a capability index from pasted RP++ output. |
-| `rop.scan_live` | `dx @$osed().rop.scan_live(module?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?)` | `dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6)` | Discovers gadgets directly from live target memory (bad-char-filtered addresses), feeds them through the semantic pipeline, and loads the same queryable corpus — no RP++ text, reads only. The optional final instruction limit defaults to 6 (bounded to 1–12). |
+| `rop.scan_live` | `dx @$osed().rop.scan_live(module?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?, maxBackwardGadgets?)` | `dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6, 50000)` | Discovers gadgets directly from live target memory. The final budget bounds raw backward candidates (default 10,000; max 100,000). The corpus summary reports whether backward discovery completed or reached this limit. |
 | `rop.corpus.lookup` | `dx @$osed().rop.corpus.lookup(address)` | `dx @$osed().rop.corpus.lookup(0x10154112)` | Read-only exact-address lookup in the active corpus. Returns `NOT_FOUND` without scanning memory. |
 | `rop.api_plan` | `dx @$osed().rop.api_plan("MODULE!Symbol", badchars?)` | `dx @$osed().rop.api_plan("KERNEL32!WriteProcessMemory", "00 0A 0D")` | Read-only Phase 1 API address-resolution analysis. Reports validated `direct-slot` and same-image `derived-address` candidates, including live IAT, export-RVA, module-identity, and byte-safety evidence. It does not select gadgets, construct chains, or claim dispatch feasibility. |
 | `rop.api_build` | `dx @$osed().rop.api_build(target, badchars?, continuation?, preserve?, maxGadgets?, owner?, anchor?)` | `dx @$osed().rop.api_build("KERNEL32!WriteProcessMemory", "00 0A 0D", 0x10064A0F, "", 12, "libspp.dll", "QueryDosDeviceA")` | Bounded Phase 2 construction into EAX. Revalidates live Phase 1 evidence, composes exact pop/dereference/add/RET chains, and checks gadget addresses, operands, `ret N` padding, and declared preservation. `continuation` is required; `preserve` is a space- or comma-separated register list. Optional `owner` and `anchor` select a specific Phase 1 candidate. It neither invokes the API nor claims debugger verification. |
 | `rop.corpus.export` | `dx @$osed().rop.corpus.export(path?)` | `dx @$osed().rop.corpus.export("C:\\labs\\rop-corpus.json")` | Writes compact gadget instructions, locations, and validation fingerprints as versioned JSON; semantic metadata is regenerated on import. The completion row reports bytes and elapsed time. With no path, prints JSON for inspection. |
 | `rop.corpus.import` | `dx @$osed().rop.corpus.import(path)` | `dx @$osed().rop.corpus.import("C:\\labs\\rop-corpus.json")` | Loads a version-compatible JSON corpus in an inactive, stale state. It cannot service queries or emit chains yet. |
 | `rop.corpus.validate` | `dx @$osed().rop.corpus.validate()` | `dx @$osed().rop.corpus.validate()` | Activates the imported corpus only when its saved module names, paths, bases, sizes, and sampled gadget bytes match the current target. |
-| `rop.query` | `dx @$osed().rop.query(field, value, executableOnly?, verbose?)` | `dx @$osed().rop.query("capability", "LOAD_REGISTER")` | Filters the loaded corpus by semantic fields and capabilities. Default output is compact; use `{capability:"MEMORY_WRITE", verbose:true}` for detailed effects. |
+| `rop.query` | `dx @$osed().rop.query(field, value, executableOnly?, verbose?)` | `dx @$osed().rop.query("capability", "LOAD_REGISTER", false, true)` | Filters the loaded corpus by semantic fields and capabilities. Default output is compact; pass `true` as the fourth argument for detailed effects. |
 | `rop.capabilities` | `dx @$osed().rop.capabilities()` | `dx @$osed().rop.capabilities()` | Summarizes the capability inventory in the loaded corpus. |
 | `rop.construct` | `dx @$osed().rop.construct(register, value, badchars?)` | `dx @$osed().rop.construct("edx", 0x1000, [0x00])` | Finds a short gadget sequence to construct a 32-bit value in a register when the value contains badchar bytes. Tries seven recipes in order: direct pop, negate, bitwise complement, two-add decomposition, two-sub decomposition, zero-add, zero-sub-neg. Reports the recipe used, scratch register (if any), total stack bytes, and emits Python `pack()` lines. Requires a loaded corpus. |
 | `rop.chain` | `dx @$osed().rop.chain(register, value, register2?, value2?, ...)` | `dx @$osed().rop.chain("eax", 0xDEADBEEF, "ebx", 0x1000)` | Constructs a register-setup chain from the loaded corpus using real-address gadgets. It can zero value-0 targets with `xor reg, reg ; ret`, co-satisfy compatible registers with pure multi-pop gadgets, and fall back to single `pop reg ; ret`. Emits a paste-ready Python `pack()` layout; reports registers it cannot satisfy. Read-only — emits a chain, never writes target memory. |

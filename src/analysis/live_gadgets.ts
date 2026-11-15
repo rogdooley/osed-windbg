@@ -16,6 +16,7 @@ export interface LiveDiscoveryOptions {
   badchars?: number[];
   maxPerPattern?: number;
   maxInstructionsPerGadget?: number;
+  maxBackwardGadgets?: number;
 }
 
 export interface LiveDiscoveryResult {
@@ -66,7 +67,7 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
   const seenAddresses = new Set(hits.map((h) => h.address.toString()));
   const backward = scanBackward({
     module: options.module,
-    maxResults: 10000,
+    maxResults: Math.min(Math.max(Math.floor(options.maxBackwardGadgets ?? 10000), 1), 100000),
     maxInstructionsPerGadget: Math.min(Math.max(Math.floor(options.maxInstructionsPerGadget ?? 6), 1), 12),
     maxBackwardBytes: 12,
   });
@@ -95,6 +96,10 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
       discovered: hits.length,
       backwardTerminators: backward.stats.terminatorsFound ?? 0,
       backwardGadgets: backwardAdded,
+      backwardRawCandidates: backward.stats.gadgetsDiscovered ?? 0,
+      backwardFiltered: Math.max(0, (backward.stats.gadgetsDiscovered ?? 0) - backwardAdded),
+      backwardLimit: backward.stats.candidateLimit ?? 0,
+      backwardComplete: backward.stats.stoppedEarly === 1 ? 0 : 1,
     },
   };
 }

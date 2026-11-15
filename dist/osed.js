@@ -10621,12 +10621,13 @@ var osed_bundle = (() => {
     {
       name: "rop.scan_live",
       description: "Discovers live gadgets across one or more modules and replaces or appends to the semantic corpus.",
-      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?)",
+      usage: "dx @$osed().rop.scan_live(moduleOrModules?, badchars?, append?, maxPerPattern?, maxInstructionsPerGadget?, maxBackwardGadgets?)",
       examples: [
         'dx @$osed().rop.scan_live("compression", "00 0A 0D")',
         'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true)',
         'dx @$osed().rop.scan_live("crypto", "00 0A 0D", true, 5)',
-        'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6)'
+        'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", true, 40, 6)',
+        'dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D", false, 40, 6, 50000)'
       ],
       seeAlso: ["rop.capabilities", "rop.corpus.export", "rop.generate"]
     },
@@ -11050,10 +11051,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-15T17:51:37.619Z" : globalThis[key2];
+        value = true ? "2026-11-15T18:28:06.083Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "2b561daa73ab" : globalThis[key2];
+        value = true ? "d53b619d6385" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15366,7 +15367,7 @@ var osed_bundle = (() => {
               return {
                 gadgets,
                 warnings,
-                stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, stoppedEarly: 1 }
+                stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
               };
             }
           }
@@ -15376,13 +15377,13 @@ var osed_bundle = (() => {
     return {
       gadgets,
       warnings,
-      stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, stoppedEarly: 0 }
+      stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
     };
   }
 
   // src/analysis/live_gadgets.ts
   function discoverLiveGadgets(options = {}) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const pointerSize = getPointerSize();
     const patterns = knownPatternsForPointerSize(pointerSize);
     const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
@@ -15415,8 +15416,8 @@ var osed_bundle = (() => {
     const seenAddresses = new Set(hits.map((h) => h.address.toString()));
     const backward = scanBackward({
       module: options.module,
-      maxResults: 1e4,
-      maxInstructionsPerGadget: Math.min(Math.max(Math.floor((_d = options.maxInstructionsPerGadget) != null ? _d : 6), 1), 12),
+      maxResults: Math.min(Math.max(Math.floor((_d = options.maxBackwardGadgets) != null ? _d : 1e4), 1), 1e5),
+      maxInstructionsPerGadget: Math.min(Math.max(Math.floor((_e = options.maxInstructionsPerGadget) != null ? _e : 6), 1), 12),
       maxBackwardBytes: 12
     });
     for (const w of backward.warnings) warningSet.add(w);
@@ -15430,7 +15431,7 @@ var osed_bundle = (() => {
         rejected++;
         continue;
       }
-      hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: (_e = findModuleByAddress(gadget.address)) == null ? void 0 : _e.name });
+      hits.push({ mnemonic: gadget.mnemonic, address: gadget.address, module: (_f = findModuleByAddress(gadget.address)) == null ? void 0 : _f.name });
       backwardAdded++;
     }
     return {
@@ -15441,8 +15442,12 @@ var osed_bundle = (() => {
         scanned,
         rejected,
         discovered: hits.length,
-        backwardTerminators: (_f = backward.stats.terminatorsFound) != null ? _f : 0,
-        backwardGadgets: backwardAdded
+        backwardTerminators: (_g = backward.stats.terminatorsFound) != null ? _g : 0,
+        backwardGadgets: backwardAdded,
+        backwardRawCandidates: (_h = backward.stats.gadgetsDiscovered) != null ? _h : 0,
+        backwardFiltered: Math.max(0, ((_i = backward.stats.gadgetsDiscovered) != null ? _i : 0) - backwardAdded),
+        backwardLimit: (_j = backward.stats.candidateLimit) != null ? _j : 0,
+        backwardComplete: backward.stats.stoppedEarly === 1 ? 0 : 1
       }
     };
   }
@@ -17338,17 +17343,21 @@ var osed_bundle = (() => {
       const capRows = summarizeCapabilities(currentRopCorpus);
       const stats = discoveries.reduce(
         (total, discovery) => {
-          var _a2, _b;
+          var _a2, _b, _c, _d, _e, _f;
           return {
             patterns: total.patterns + discovery.stats.patterns,
             scanned: total.scanned + discovery.stats.scanned,
             discovered: total.discovered + discovery.stats.discovered,
             rejected: total.rejected + discovery.stats.rejected,
             backwardTerminators: total.backwardTerminators + ((_a2 = discovery.stats.backwardTerminators) != null ? _a2 : 0),
-            backwardGadgets: total.backwardGadgets + ((_b = discovery.stats.backwardGadgets) != null ? _b : 0)
+            backwardGadgets: total.backwardGadgets + ((_b = discovery.stats.backwardGadgets) != null ? _b : 0),
+            backwardRawCandidates: total.backwardRawCandidates + ((_c = discovery.stats.backwardRawCandidates) != null ? _c : 0),
+            backwardFiltered: total.backwardFiltered + ((_d = discovery.stats.backwardFiltered) != null ? _d : 0),
+            backwardLimit: total.backwardLimit + ((_e = discovery.stats.backwardLimit) != null ? _e : 0),
+            backwardComplete: Math.min(total.backwardComplete, (_f = discovery.stats.backwardComplete) != null ? _f : 1)
           };
         },
-        { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0 }
+        { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 }
       );
       const warnings = discoveries.flatMap((discovery) => discovery.warnings);
       const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
@@ -17399,7 +17408,7 @@ var osed_bundle = (() => {
       info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
       info(`Capabilities: ${capRows.length}`);
       if (stats.backwardTerminators > 0) {
-        info(`Backward scanner: ${stats.backwardTerminators} terminators, ${stats.backwardGadgets} new gadgets`);
+        info(`Backward scan: ${stats.backwardTerminators} terminators | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
       }
       for (const warning of warnings) {
         warn(warning);
@@ -17446,7 +17455,8 @@ var osed_bundle = (() => {
         {
           badchars: Array.isArray(parsedBadchars) ? parsedBadchars : void 0,
           maxPerPattern: options.maxPerPattern,
-          maxInstructionsPerGadget: options.maxInstructionsPerGadget
+          maxInstructionsPerGadget: options.maxInstructionsPerGadget,
+          maxBackwardGadgets: options.maxBackwardGadgets
         },
         Boolean(options.append)
       );
@@ -19708,6 +19718,7 @@ var osed_bundle = (() => {
       result3.maxPerPattern = args[2];
       result3.append = args[3];
       result3.maxInstructionsPerGadget = args[4];
+      result3.maxBackwardGadgets = args[5];
     } else {
       result3.append = args[2];
       result3.maxPerPattern = args[3];

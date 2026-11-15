@@ -664,8 +664,12 @@ function bindApi(): OsedApi {
         rejected: total.rejected + discovery.stats.rejected,
         backwardTerminators: total.backwardTerminators + (discovery.stats.backwardTerminators ?? 0),
         backwardGadgets: total.backwardGadgets + (discovery.stats.backwardGadgets ?? 0),
+        backwardRawCandidates: total.backwardRawCandidates + (discovery.stats.backwardRawCandidates ?? 0),
+        backwardFiltered: total.backwardFiltered + (discovery.stats.backwardFiltered ?? 0),
+        backwardLimit: total.backwardLimit + (discovery.stats.backwardLimit ?? 0),
+        backwardComplete: Math.min(total.backwardComplete, discovery.stats.backwardComplete ?? 1),
       }),
-      { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0 },
+      { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 },
     );
     const warnings = discoveries.flatMap((discovery) => discovery.warnings);
     const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
@@ -718,7 +722,7 @@ function bindApi(): OsedApi {
     out.info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
     out.info(`Capabilities: ${capRows.length}`);
     if (stats.backwardTerminators > 0) {
-      out.info(`Backward scanner: ${stats.backwardTerminators} terminators, ${stats.backwardGadgets} new gadgets`);
+      out.info(`Backward scan: ${stats.backwardTerminators} terminators | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
     }
 
     for (const warning of warnings) {
@@ -777,6 +781,7 @@ function bindApi(): OsedApi {
         badchars: Array.isArray(parsedBadchars) ? parsedBadchars : undefined,
         maxPerPattern: options.maxPerPattern as number | undefined,
         maxInstructionsPerGadget: options.maxInstructionsPerGadget as number | undefined,
+        maxBackwardGadgets: options.maxBackwardGadgets as number | undefined,
       },
       Boolean(options.append),
     );
@@ -3260,6 +3265,7 @@ function parseScanLivePositionalArgs(args: unknown[]): Record<string, unknown> {
     result.maxPerPattern = args[2];
     result.append = args[3];
     result.maxInstructionsPerGadget = args[4];
+  result.maxBackwardGadgets = args[5];
   } else {
     result.append = args[2];
     result.maxPerPattern = args[3];

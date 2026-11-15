@@ -279,7 +279,7 @@ export function scanBackward(options: BackwardScanOptions): {
             return {
               gadgets,
               warnings,
-              stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, stoppedEarly: 1 },
+              stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 },
             };
           }
         }
@@ -290,6 +290,6 @@ export function scanBackward(options: BackwardScanOptions): {
   return {
     gadgets,
     warnings,
-    stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, stoppedEarly: 0 },
+    stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 },
   };
 }
