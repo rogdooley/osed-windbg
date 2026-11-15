@@ -117,6 +117,33 @@ describe("backward scanner instruction decoder", () => {
     });
   });
 
+  describe("effective-address decoding", () => {
+    it("decodes LEA through the ESP SIB form with disp8", () => {
+      // lea eax, [esp+0x24]: 8D 44 24 24. ESP addressing always has a SIB byte.
+      expect(decode([0x8d, 0x44, 0x24, 0x24])).toBe("lea eax, dword [esp+0x24]");
+      expect(decodeLen([0x8d, 0x44, 0x24, 0x24])).toBe(4);
+    });
+
+    it("decodes LEA with a negative displacement", () => {
+      // lea esi, [ebp-0x10]: 8D 75 F0
+      expect(decode([0x8d, 0x75, 0xf0])).toBe("lea esi, dword [ebp-0x10]");
+    });
+
+    it("decodes SIB index and scale without confusing it for a memory read", () => {
+      // lea eax, [ebx+ecx*4+0x10]: 8D 44 8B 10
+      expect(decode([0x8d, 0x44, 0x8b, 0x10])).toBe("lea eax, dword [ebx+ecx*4+0x10]");
+    });
+
+    it("reuses effective-address decoding for displacement MOV forms", () => {
+      expect(decode([0x8b, 0x46, 0x10])).toBe("mov eax, dword [esi+0x10]");
+      expect(decode([0x89, 0x46, 0x10])).toBe("mov dword [esi+0x10], eax");
+    });
+
+    it("reuses effective-address decoding for indirect dispatch", () => {
+      expect(decode([0xff, 0x64, 0x24, 0x08])).toBe("jmp dword [esp+0x8]");
+    });
+  });
+
   describe("neg and not (F7)", () => {
     it("decodes neg eax", () => {
       // F7 /3: ModRM = C0 | (3 << 3) | eax=0 = 0xD8
@@ -175,6 +202,21 @@ describe("backward scanner instruction decoder", () => {
 
     it("decodes xor eax, imm32", () => {
       expect(decode([0x35, 0x01, 0x00, 0x00, 0x00])).toBe("xor eax, 0x1");
+    });
+  });
+
+  describe("group 1 with imm32 (opcode 81)", () => {
+    it("decodes add esp, imm32", () => {
+      expect(decode([0x81, 0xc4, 0x20, 0x00, 0x00, 0x00])).toBe("add esp, 0x20");
+      expect(decodeLen([0x81, 0xc4, 0x20, 0x00, 0x00, 0x00])).toBe(6);
+    });
+  });
+
+  describe("immediate constants", () => {
+    it("decodes MOV reg, imm32 and PUSH immediate forms", () => {
+      expect(decode([0xb8, 0xef, 0xbe, 0xad, 0xde])).toBe("mov eax, 0xdeadbeef");
+      expect(decode([0x68, 0x44, 0x33, 0x22, 0x11])).toBe("push 0x11223344");
+      expect(decode([0x6a, 0xf0])).toBe("push 0xfffffff0");
     });
   });
 

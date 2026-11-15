@@ -70,18 +70,91 @@ function formatHex(value: number): string {
   return `0x${(value >>> 0).toString(16)}`;
 }
 
-function decodeModRM11(modrm: number): { reg: number; rm: number } | undefined {
-  if ((modrm & 0xc0) !== 0xc0) return undefined;
-  return { reg: (modrm >> 3) & 7, rm: modrm & 7 };
+interface DecodedModRM {
+  reg: number;
+  rm?: number;
+  memory?: string;
+  length: number;
 }
 
-// Bounded memory form: `[reg]` only.  SIB and displacement encodings are
-// deliberately excluded until their full address syntax is modeled.
-function decodeModRMBaseMemory(modrm: number): { reg: number; rm: number } | undefined {
-  if ((modrm & 0xc0) !== 0x00) return undefined;
+function signedByte(value: number): number {
+  return value > 0x7f ? value - 0x100 : value;
+}
+
+function signedDword(bytes: Uint8Array, offset: number): number | undefined {
+  if (offset + 3 >= bytes.length) return undefined;
+  return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) | 0;
+}
+
+function formatDisplacement(value: number): string {
+  if (value === 0) return "";
+  return value < 0 ? `-0x${(-value).toString(16)}` : `+0x${value.toString(16)}`;
+}
+
+// Decode the complete x86 ModRM addressing family once.  Consumers choose
+// whether a decoded memory operand has semantics they can model; decoding a
+// byte sequence must not depend on a particular gadget pattern.
+function decodeModRM(bytes: Uint8Array, offset: number): DecodedModRM | undefined {
+  if (offset >= bytes.length) return undefined;
+  const modrm = bytes[offset];
+  const mod = modrm >> 6;
+  const reg = (modrm >> 3) & 7;
   const rm = modrm & 7;
-  if (rm === 4 || rm === 5) return undefined;
-  return { reg: (modrm >> 3) & 7, rm };
+  if (mod === 3) return { reg, rm, length: 1 };
+
+  let cursor = offset + 1;
+  let base: string | undefined;
+  let index: string | undefined;
+  let scale = 1;
+  let displacement = 0;
+  let hasDisplacement = false;
+
+  if (rm === 4) {
+    if (cursor >= bytes.length) return undefined;
+    const sib = bytes[cursor++];
+    scale = 1 << (sib >> 6);
+    const indexId = (sib >> 3) & 7;
+    const baseId = sib & 7;
+    if (indexId !== 4) index = REG_NAMES[indexId];
+    if (!(mod === 0 && baseId === 5)) base = REG_NAMES[baseId];
+    if (mod === 0 && baseId === 5) {
+      const value = signedDword(bytes, cursor);
+      if (value === undefined) return undefined;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    }
+  } else if (mod === 0 && rm === 5) {
+    const value = signedDword(bytes, cursor);
+    if (value === undefined) return undefined;
+    displacement = value;
+    hasDisplacement = true;
+    cursor += 4;
+  } else {
+    base = REG_NAMES[rm];
+  }
+
+  if (mod === 1) {
+    if (cursor >= bytes.length) return undefined;
+    displacement = signedByte(bytes[cursor++]);
+    hasDisplacement = true;
+  } else if (mod === 2) {
+    const value = signedDword(bytes, cursor);
+    if (value === undefined) return undefined;
+    displacement = value;
+    hasDisplacement = true;
+    cursor += 4;
+  }
+
+  const terms: string[] = [];
+  if (base) terms.push(base);
+  if (index) terms.push(scale === 1 ? index : `${index}*${scale}`);
+  let expression = terms.join("+");
+  if (hasDisplacement || !expression) {
+    if (!expression) expression = formatHex(displacement);
+    else expression += formatDisplacement(displacement);
+  }
+  return { reg, memory: `dword [${expression}]`, length: cursor - offset };
 }
 
 export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | undefined {
@@ -100,33 +173,53 @@ export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | 
   if (b0 === 0xf8) return { length: 1, mnemonic: "clc" };
   if (b0 === 0xf9) return { length: 1, mnemonic: "stc" };
 
+  if (b0 === 0x68) {
+    const immediate = signedDword(bytes, offset + 1);
+    if (immediate === undefined) return undefined;
+    return { length: 5, mnemonic: `push ${formatHex(immediate)}` };
+  }
+  if (b0 === 0x6a) {
+    if (offset + 1 >= bytes.length) return undefined;
+    return { length: 2, mnemonic: `push ${formatHex(signedByte(bytes[offset + 1]))}` };
+  }
+  if (b0 >= 0xb8 && b0 <= 0xbf) {
+    const immediate = signedDword(bytes, offset + 1);
+    if (immediate === undefined) return undefined;
+    return { length: 5, mnemonic: `mov ${REG_NAMES[b0 - 0xb8]}, ${formatHex(immediate)}` };
+  }
+
   if (offset + 1 >= bytes.length) return undefined;
   const b1 = bytes[offset + 1];
 
   for (const entry of ALU_REG_OPCODES) {
     if (b0 === entry.opcode) {
-      const decoded = decodeModRM11(b1);
-      if (decoded) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded) return undefined;
+      if (decoded.rm !== undefined) {
         const dst = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
         const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
-        return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
+        return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
       }
       // Memory operands are only decoded for the data-movement instructions
       // whose semantics are modeled below. The remaining ALU forms retain the
       // register-only boundary rather than inventing incomplete addressing.
       if (entry.name !== "xchg" && entry.name !== "mov") return undefined;
-      const memory = decodeModRMBaseMemory(b1);
-      if (!memory) return undefined;
-      const mem = `dword [${REG_NAMES[memory.rm]}]`;
-      const dst = entry.form === "rm" ? mem : REG_NAMES[memory.reg];
-      const src = entry.form === "rm" ? REG_NAMES[memory.reg] : mem;
-      return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
+      if (!decoded.memory) return undefined;
+      const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
+      const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
+      return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
     }
   }
 
+  if (b0 === 0x8d) {
+    const decoded = decodeModRM(bytes, offset + 1);
+    if (!decoded?.memory) return undefined;
+    return { length: 1 + decoded.length, mnemonic: `lea ${REG_NAMES[decoded.reg]}, ${decoded.memory}` };
+  }
+
   if (b0 === 0xf7) {
-    const decoded = decodeModRM11(b1);
-    if (!decoded) return undefined;
+    const decoded = decodeModRM(bytes, offset + 1);
+    if (!decoded || decoded.rm === undefined) return undefined;
     const op = (b1 >> 3) & 7;
     if (op === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
     if (op === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
@@ -134,11 +227,13 @@ export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | 
   }
 
   if (b0 === 0xff) {
-    const decoded = decodeModRM11(b1);
+    const decoded = decodeModRM(bytes, offset + 1);
     if (!decoded) return undefined;
     const op = (b1 >> 3) & 7;
-    if (op === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
-    if (op === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
+    const operand = decoded.rm !== undefined ? REG_NAMES[decoded.rm] : decoded.memory;
+    if (!operand) return undefined;
+    if (op === 2) return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
+    if (op === 4) return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
     return undefined;
   }
 
@@ -150,13 +245,23 @@ export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | 
 
   if (b0 === 0x83) {
     if (offset + 2 >= bytes.length) return undefined;
-    const decoded = decodeModRM11(b1);
-    if (!decoded) return undefined;
+    const decoded = decodeModRM(bytes, offset + 1);
+    if (!decoded || decoded.rm === undefined) return undefined;
     const op = (b1 >> 3) & 7;
     const imm8 = bytes[offset + 2];
     const signed = imm8 > 0x7f ? imm8 - 0x100 : imm8;
     const name = GRP1_NAMES[op];
     return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? (signed >>> 0) : imm8)}` };
+  }
+
+  if (b0 === 0x81) {
+    const decoded = decodeModRM(bytes, offset + 1);
+    if (!decoded || decoded.rm === undefined) return undefined;
+    const immediateOffset = offset + 1 + decoded.length;
+    const imm = signedDword(bytes, immediateOffset);
+    if (imm === undefined) return undefined;
+    const op = (b1 >> 3) & 7;
+    return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
   }
 
   for (const entry of ALU_EAX_IMM32) {

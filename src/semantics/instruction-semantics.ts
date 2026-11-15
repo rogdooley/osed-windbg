@@ -111,13 +111,21 @@ function parseOperand(text: string): ParsedOperand {
   return { kind: "unknown", text: normalized };
 }
 
-function memoryBaseRegister(text: string): Register | undefined {
-  const match = text.toLowerCase().match(/\[([a-z]{3})\]/);
-  if (!match) {
-    return undefined;
+function memoryRegisters(text: string): Register[] {
+  const expression = text.toLowerCase().match(/\[([^\]]+)\]/)?.[1];
+  if (!expression) return [];
+  const matches = expression.match(/\b(?:eax|ecx|edx|ebx|esp|ebp|esi|edi)\b/g) ?? [];
+  const registers: Register[] = [];
+  for (const register of matches) {
+    if (REGISTERS.includes(register as Register) && !registers.includes(register as Register)) {
+      registers.push(register as Register);
+    }
   }
-  const register = match[1] as Register;
-  return REGISTERS.includes(register) ? register : undefined;
+  return registers;
+}
+
+function memoryBaseRegister(text: string): Register | undefined {
+  return memoryRegisters(text)[0];
 }
 
 function isRegisterOperand(operand: ParsedOperand): operand is ParsedOperand & { register: Register } {
@@ -295,6 +303,22 @@ const RULES: Rule[] = [
     },
   },
   {
+    name: "push-imm",
+    match: (instruction) => instruction.mnemonic === "push" && instruction.operands.length === 1,
+    evaluate: (instruction) => {
+      const operand = parseOperand(instruction.operands[0]);
+      if (operand.kind !== "immediate") return {};
+      return {
+        reads: ["esp"],
+        writes: ["esp"],
+        stackDelta: { exact: [-4] },
+        memoryWrites: ["[esp]"],
+        registerEffects: { esp: selfPlus(-4) },
+        evidence: [`PUSH ${operand.text} decrements stack pointer`],
+      };
+    },
+  },
+  {
     name: "ret",
     match: (instruction) => instruction.mnemonic === "ret",
     evaluate: (instruction) => {
@@ -331,6 +355,21 @@ const RULES: Rule[] = [
     },
   },
   {
+    name: "mov-reg-imm",
+    match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = parseOperand(instruction.operands[1]);
+      const value = immediateOperand(instruction);
+      if (!isRegisterOperand(left) || right.kind !== "immediate" || value === undefined) return {};
+      return {
+        writes: [left.register],
+        registerEffects: { [left.register]: constantExpr(value) },
+        evidence: [`MOV ${left.register}, ${right.text}`],
+      };
+    },
+  },
+  {
     name: "mov-reg-mem",
     match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
     evaluate: (instruction) => {
@@ -339,10 +378,10 @@ const RULES: Rule[] = [
       if (!isRegisterOperand(left) || right.kind !== "memory") {
         return {};
       }
-      const baseRegister = memoryBaseRegister(right.text);
+      const addressRegisters = memoryRegisters(right.text);
       const address = memoryAddressExpression(right.text);
       return {
-        reads: baseRegister ? [baseRegister] : [],
+        reads: addressRegisters,
         writes: [left.register],
         memoryReads: [right.text],
         registerEffects: { [left.register]: address ? memoryExpr(address) : unknownExpr() },
@@ -359,9 +398,10 @@ const RULES: Rule[] = [
       if (left.kind !== "memory" || !isRegisterOperand(right)) {
         return {};
       }
-      const base = memoryBaseRegister(left.text);
+      const addressRegisters = memoryRegisters(left.text);
+      const base = addressRegisters[0];
       return {
-        reads: [right.register, ...(base ? [base] : [])],
+        reads: [right.register, ...addressRegisters],
         writes: base === "esp" ? ["esp"] : [],
         memoryWrites: [left.text],
         evidence: [`MOV ${left.text}, ${right.register}`],
@@ -685,9 +725,9 @@ const RULES: Rule[] = [
       const memory = left.kind === "memory" ? left : right.kind === "memory" ? right : undefined;
       const register = isRegisterOperand(left) ? left : isRegisterOperand(right) ? right : undefined;
       if (!memory || !register) return {};
-      const base = memoryBaseRegister(memory.text);
+      const addressRegisters = memoryRegisters(memory.text);
       return {
-        reads: [...(base ? [base] : []), register.register],
+        reads: [...addressRegisters, register.register],
         writes: [register.register],
         memoryReads: [memory.text],
         memoryWrites: [memory.text],
@@ -706,14 +746,15 @@ const RULES: Rule[] = [
         return {};
       }
       const address = memoryAddressExpression(right.text);
-      if (!address) {
-        return {};
-      }
-      const base = memoryBaseRegister(right.text);
+      const addressRegisters = memoryRegisters(right.text);
       return {
-        reads: base ? [base] : [],
+        reads: addressRegisters,
         writes: [left.register],
-        registerEffects: { [left.register]: address },
+        // The current affine transform domain proves base+constant forms.
+        // Indexed/scaled SIB forms retain exact dependencies but deliberately
+        // become unknown instead of being misrepresented as a simple affine
+        // address.
+        registerEffects: { [left.register]: address ?? unknownExpr() },
         evidence: [`LEA ${left.register}, ${right.text}`],
       };
     },
@@ -736,23 +777,33 @@ const RULES: Rule[] = [
   {
     name: "call",
     match: (instruction) => instruction.mnemonic === "call" && instruction.operands.length >= 1,
-    evaluate: (instruction) => ({
-      reads: instruction.operands.length > 0 ? [parseOperand(instruction.operands[0]).register ?? "eax"] : ["eax"],
-      writes: ["esp"],
-      stackDelta: { exact: [-4] },
-      flowEffects: ["CALL"],
-      registerEffects: { esp: selfPlus(-4) },
-      evidence: [`CALL ${instruction.operands.join(", ")}`],
-    }),
+    evaluate: (instruction) => {
+      const operand = parseOperand(instruction.operands[0]);
+      const addressRegisters = operand.kind === "memory" ? memoryRegisters(operand.text) : [];
+      return {
+        reads: operand.kind === "register" ? [operand.register!] : addressRegisters,
+        writes: ["esp"],
+        stackDelta: { exact: [-4] },
+        memoryReads: operand.kind === "memory" ? [operand.text] : [],
+        flowEffects: ["CALL"],
+        registerEffects: { esp: selfPlus(-4) },
+        evidence: [`CALL ${instruction.operands.join(", ")}`],
+      };
+    },
   },
   {
     name: "jmp",
     match: (instruction) => instruction.mnemonic === "jmp" && instruction.operands.length >= 1,
-    evaluate: (instruction) => ({
-      reads: instruction.operands.length > 0 ? [parseOperand(instruction.operands[0]).register ?? "eax"] : ["eax"],
-      flowEffects: ["JUMP"],
-      evidence: [`JMP ${instruction.operands.join(", ")}`],
-    }),
+    evaluate: (instruction) => {
+      const operand = parseOperand(instruction.operands[0]);
+      const addressRegisters = operand.kind === "memory" ? memoryRegisters(operand.text) : [];
+      return {
+        reads: operand.kind === "register" ? [operand.register!] : addressRegisters,
+        memoryReads: operand.kind === "memory" ? [operand.text] : [],
+        flowEffects: ["JUMP"],
+        evidence: [`JMP ${instruction.operands.join(", ")}`],
+      };
+    },
   },
   {
     name: "nop",

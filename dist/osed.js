@@ -7221,13 +7221,18 @@ var osed_bundle = (() => {
     }
     return { kind: "unknown", text: normalized };
   }
-  function memoryBaseRegister(text) {
-    const match = text.toLowerCase().match(/\[([a-z]{3})\]/);
-    if (!match) {
-      return void 0;
+  function memoryRegisters(text) {
+    var _a, _b;
+    const expression = (_a = text.toLowerCase().match(/\[([^\]]+)\]/)) == null ? void 0 : _a[1];
+    if (!expression) return [];
+    const matches = (_b = expression.match(/\b(?:eax|ecx|edx|ebx|esp|ebp|esi|edi)\b/g)) != null ? _b : [];
+    const registers = [];
+    for (const register2 of matches) {
+      if (REGISTERS.includes(register2) && !registers.includes(register2)) {
+        registers.push(register2);
+      }
     }
-    const register2 = match[1];
-    return REGISTERS.includes(register2) ? register2 : void 0;
+    return registers;
   }
   function isRegisterOperand(operand) {
     return operand.kind === "register" && operand.register !== void 0;
@@ -7379,6 +7384,22 @@ var osed_bundle = (() => {
       }
     },
     {
+      name: "push-imm",
+      match: (instruction) => instruction.mnemonic === "push" && instruction.operands.length === 1,
+      evaluate: (instruction) => {
+        const operand = parseOperand(instruction.operands[0]);
+        if (operand.kind !== "immediate") return {};
+        return {
+          reads: ["esp"],
+          writes: ["esp"],
+          stackDelta: { exact: [-4] },
+          memoryWrites: ["[esp]"],
+          registerEffects: { esp: selfPlus(-4) },
+          evidence: [`PUSH ${operand.text} decrements stack pointer`]
+        };
+      }
+    },
+    {
       name: "ret",
       match: (instruction) => instruction.mnemonic === "ret",
       evaluate: (instruction) => {
@@ -7413,6 +7434,21 @@ var osed_bundle = (() => {
       }
     },
     {
+      name: "mov-reg-imm",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = parseOperand(instruction.operands[1]);
+        const value = immediateOperand(instruction);
+        if (!isRegisterOperand(left) || right.kind !== "immediate" || value === void 0) return {};
+        return {
+          writes: [left.register],
+          registerEffects: { [left.register]: constantExpr(value) },
+          evidence: [`MOV ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
       name: "mov-reg-mem",
       match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
       evaluate: (instruction) => {
@@ -7421,10 +7457,10 @@ var osed_bundle = (() => {
         if (!isRegisterOperand(left) || right.kind !== "memory") {
           return {};
         }
-        const baseRegister = memoryBaseRegister(right.text);
+        const addressRegisters = memoryRegisters(right.text);
         const address = memoryAddressExpression(right.text);
         return {
-          reads: baseRegister ? [baseRegister] : [],
+          reads: addressRegisters,
           writes: [left.register],
           memoryReads: [right.text],
           registerEffects: { [left.register]: address ? memoryExpr(address) : unknownExpr() },
@@ -7441,9 +7477,10 @@ var osed_bundle = (() => {
         if (left.kind !== "memory" || !isRegisterOperand(right)) {
           return {};
         }
-        const base = memoryBaseRegister(left.text);
+        const addressRegisters = memoryRegisters(left.text);
+        const base = addressRegisters[0];
         return {
-          reads: [right.register, ...base ? [base] : []],
+          reads: [right.register, ...addressRegisters],
           writes: base === "esp" ? ["esp"] : [],
           memoryWrites: [left.text],
           evidence: [`MOV ${left.text}, ${right.register}`]
@@ -7767,9 +7804,9 @@ var osed_bundle = (() => {
         const memory = left.kind === "memory" ? left : right.kind === "memory" ? right : void 0;
         const register2 = isRegisterOperand(left) ? left : isRegisterOperand(right) ? right : void 0;
         if (!memory || !register2) return {};
-        const base = memoryBaseRegister(memory.text);
+        const addressRegisters = memoryRegisters(memory.text);
         return {
-          reads: [...base ? [base] : [], register2.register],
+          reads: [...addressRegisters, register2.register],
           writes: [register2.register],
           memoryReads: [memory.text],
           memoryWrites: [memory.text],
@@ -7788,14 +7825,15 @@ var osed_bundle = (() => {
           return {};
         }
         const address = memoryAddressExpression(right.text);
-        if (!address) {
-          return {};
-        }
-        const base = memoryBaseRegister(right.text);
+        const addressRegisters = memoryRegisters(right.text);
         return {
-          reads: base ? [base] : [],
+          reads: addressRegisters,
           writes: [left.register],
-          registerEffects: { [left.register]: address },
+          // The current affine transform domain proves base+constant forms.
+          // Indexed/scaled SIB forms retain exact dependencies but deliberately
+          // become unknown instead of being misrepresented as a simple affine
+          // address.
+          registerEffects: { [left.register]: address != null ? address : unknownExpr() },
           evidence: [`LEA ${left.register}, ${right.text}`]
         };
       }
@@ -7819,11 +7857,13 @@ var osed_bundle = (() => {
       name: "call",
       match: (instruction) => instruction.mnemonic === "call" && instruction.operands.length >= 1,
       evaluate: (instruction) => {
-        var _a;
+        const operand = parseOperand(instruction.operands[0]);
+        const addressRegisters = operand.kind === "memory" ? memoryRegisters(operand.text) : [];
         return {
-          reads: instruction.operands.length > 0 ? [(_a = parseOperand(instruction.operands[0]).register) != null ? _a : "eax"] : ["eax"],
+          reads: operand.kind === "register" ? [operand.register] : addressRegisters,
           writes: ["esp"],
           stackDelta: { exact: [-4] },
+          memoryReads: operand.kind === "memory" ? [operand.text] : [],
           flowEffects: ["CALL"],
           registerEffects: { esp: selfPlus(-4) },
           evidence: [`CALL ${instruction.operands.join(", ")}`]
@@ -7834,9 +7874,11 @@ var osed_bundle = (() => {
       name: "jmp",
       match: (instruction) => instruction.mnemonic === "jmp" && instruction.operands.length >= 1,
       evaluate: (instruction) => {
-        var _a;
+        const operand = parseOperand(instruction.operands[0]);
+        const addressRegisters = operand.kind === "memory" ? memoryRegisters(operand.text) : [];
         return {
-          reads: instruction.operands.length > 0 ? [(_a = parseOperand(instruction.operands[0]).register) != null ? _a : "eax"] : ["eax"],
+          reads: operand.kind === "register" ? [operand.register] : addressRegisters,
+          memoryReads: operand.kind === "memory" ? [operand.text] : [],
           flowEffects: ["JUMP"],
           evidence: [`JMP ${instruction.operands.join(", ")}`]
         };
@@ -11051,10 +11093,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-15T19:58:53.052Z" : globalThis[key2];
+        value = true ? "2026-11-15T21:40:34.873Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "ba4d70f43ad6" : globalThis[key2];
+        value = true ? "873b61a11c62" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15199,15 +15241,74 @@ var osed_bundle = (() => {
   function formatHex(value) {
     return `0x${(value >>> 0).toString(16)}`;
   }
-  function decodeModRM11(modrm) {
-    if ((modrm & 192) !== 192) return void 0;
-    return { reg: modrm >> 3 & 7, rm: modrm & 7 };
+  function signedByte(value) {
+    return value > 127 ? value - 256 : value;
   }
-  function decodeModRMBaseMemory(modrm) {
-    if ((modrm & 192) !== 0) return void 0;
+  function signedDword(bytes, offset) {
+    if (offset + 3 >= bytes.length) return void 0;
+    return bytes[offset] | bytes[offset + 1] << 8 | bytes[offset + 2] << 16 | bytes[offset + 3] << 24 | 0;
+  }
+  function formatDisplacement(value) {
+    if (value === 0) return "";
+    return value < 0 ? `-0x${(-value).toString(16)}` : `+0x${value.toString(16)}`;
+  }
+  function decodeModRM(bytes, offset) {
+    if (offset >= bytes.length) return void 0;
+    const modrm = bytes[offset];
+    const mod = modrm >> 6;
+    const reg = modrm >> 3 & 7;
     const rm = modrm & 7;
-    if (rm === 4 || rm === 5) return void 0;
-    return { reg: modrm >> 3 & 7, rm };
+    if (mod === 3) return { reg, rm, length: 1 };
+    let cursor = offset + 1;
+    let base;
+    let index;
+    let scale = 1;
+    let displacement = 0;
+    let hasDisplacement = false;
+    if (rm === 4) {
+      if (cursor >= bytes.length) return void 0;
+      const sib = bytes[cursor++];
+      scale = 1 << (sib >> 6);
+      const indexId = sib >> 3 & 7;
+      const baseId = sib & 7;
+      if (indexId !== 4) index = REG_NAMES[indexId];
+      if (!(mod === 0 && baseId === 5)) base = REG_NAMES[baseId];
+      if (mod === 0 && baseId === 5) {
+        const value = signedDword(bytes, cursor);
+        if (value === void 0) return void 0;
+        displacement = value;
+        hasDisplacement = true;
+        cursor += 4;
+      }
+    } else if (mod === 0 && rm === 5) {
+      const value = signedDword(bytes, cursor);
+      if (value === void 0) return void 0;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    } else {
+      base = REG_NAMES[rm];
+    }
+    if (mod === 1) {
+      if (cursor >= bytes.length) return void 0;
+      displacement = signedByte(bytes[cursor++]);
+      hasDisplacement = true;
+    } else if (mod === 2) {
+      const value = signedDword(bytes, cursor);
+      if (value === void 0) return void 0;
+      displacement = value;
+      hasDisplacement = true;
+      cursor += 4;
+    }
+    const terms = [];
+    if (base) terms.push(base);
+    if (index) terms.push(scale === 1 ? index : `${index}*${scale}`);
+    let expression = terms.join("+");
+    if (hasDisplacement || !expression) {
+      if (!expression) expression = formatHex(displacement);
+      else expression += formatDisplacement(displacement);
+    }
+    return { reg, memory: `dword [${expression}]`, length: cursor - offset };
   }
   function tryDecodeInsn(bytes, offset) {
     if (offset >= bytes.length) return void 0;
@@ -15223,39 +15324,59 @@ var osed_bundle = (() => {
     if (b0 === 201) return { length: 1, mnemonic: "leave" };
     if (b0 === 248) return { length: 1, mnemonic: "clc" };
     if (b0 === 249) return { length: 1, mnemonic: "stc" };
+    if (b0 === 104) {
+      const immediate = signedDword(bytes, offset + 1);
+      if (immediate === void 0) return void 0;
+      return { length: 5, mnemonic: `push ${formatHex(immediate)}` };
+    }
+    if (b0 === 106) {
+      if (offset + 1 >= bytes.length) return void 0;
+      return { length: 2, mnemonic: `push ${formatHex(signedByte(bytes[offset + 1]))}` };
+    }
+    if (b0 >= 184 && b0 <= 191) {
+      const immediate = signedDword(bytes, offset + 1);
+      if (immediate === void 0) return void 0;
+      return { length: 5, mnemonic: `mov ${REG_NAMES[b0 - 184]}, ${formatHex(immediate)}` };
+    }
     if (offset + 1 >= bytes.length) return void 0;
     const b1 = bytes[offset + 1];
     for (const entry of ALU_REG_OPCODES) {
       if (b0 === entry.opcode) {
-        const decoded = decodeModRM11(b1);
-        if (decoded) {
+        const decoded = decodeModRM(bytes, offset + 1);
+        if (!decoded) return void 0;
+        if (decoded.rm !== void 0) {
           const dst2 = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
           const src2 = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
-          return { length: 2, mnemonic: `${entry.name} ${dst2}, ${src2}` };
+          return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst2}, ${src2}` };
         }
         if (entry.name !== "xchg" && entry.name !== "mov") return void 0;
-        const memory = decodeModRMBaseMemory(b1);
-        if (!memory) return void 0;
-        const mem = `dword [${REG_NAMES[memory.rm]}]`;
-        const dst = entry.form === "rm" ? mem : REG_NAMES[memory.reg];
-        const src = entry.form === "rm" ? REG_NAMES[memory.reg] : mem;
-        return { length: 2, mnemonic: `${entry.name} ${dst}, ${src}` };
+        if (!decoded.memory) return void 0;
+        const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
+        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
+        return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
       }
     }
+    if (b0 === 141) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!(decoded == null ? void 0 : decoded.memory)) return void 0;
+      return { length: 1 + decoded.length, mnemonic: `lea ${REG_NAMES[decoded.reg]}, ${decoded.memory}` };
+    }
     if (b0 === 247) {
-      const decoded = decodeModRM11(b1);
-      if (!decoded) return void 0;
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0) return void 0;
       const op4 = b1 >> 3 & 7;
       if (op4 === 2) return { length: 2, mnemonic: `not ${REG_NAMES[decoded.rm]}` };
       if (op4 === 3) return { length: 2, mnemonic: `neg ${REG_NAMES[decoded.rm]}` };
       return void 0;
     }
     if (b0 === 255) {
-      const decoded = decodeModRM11(b1);
+      const decoded = decodeModRM(bytes, offset + 1);
       if (!decoded) return void 0;
       const op4 = b1 >> 3 & 7;
-      if (op4 === 2) return { length: 2, mnemonic: `call ${REG_NAMES[decoded.rm]}` };
-      if (op4 === 4) return { length: 2, mnemonic: `jmp ${REG_NAMES[decoded.rm]}` };
+      const operand = decoded.rm !== void 0 ? REG_NAMES[decoded.rm] : decoded.memory;
+      if (!operand) return void 0;
+      if (op4 === 2) return { length: 1 + decoded.length, mnemonic: `call ${operand}` };
+      if (op4 === 4) return { length: 1 + decoded.length, mnemonic: `jmp ${operand}` };
       return void 0;
     }
     if (b0 === 217) {
@@ -15265,13 +15386,22 @@ var osed_bundle = (() => {
     }
     if (b0 === 131) {
       if (offset + 2 >= bytes.length) return void 0;
-      const decoded = decodeModRM11(b1);
-      if (!decoded) return void 0;
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0) return void 0;
       const op4 = b1 >> 3 & 7;
       const imm8 = bytes[offset + 2];
       const signed = imm8 > 127 ? imm8 - 256 : imm8;
       const name = GRP1_NAMES[op4];
       return { length: 3, mnemonic: `${name} ${REG_NAMES[decoded.rm]}, ${formatHex(signed < 0 ? signed >>> 0 : imm8)}` };
+    }
+    if (b0 === 129) {
+      const decoded = decodeModRM(bytes, offset + 1);
+      if (!decoded || decoded.rm === void 0) return void 0;
+      const immediateOffset = offset + 1 + decoded.length;
+      const imm = signedDword(bytes, immediateOffset);
+      if (imm === void 0) return void 0;
+      const op4 = b1 >> 3 & 7;
+      return { length: 1 + decoded.length + 4, mnemonic: `${GRP1_NAMES[op4]} ${REG_NAMES[decoded.rm]}, ${formatHex(imm)}` };
     }
     for (const entry of ALU_EAX_IMM32) {
       if (b0 === entry.opcode) {

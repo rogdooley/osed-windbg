@@ -106,6 +106,48 @@ describe("semantic pipeline", () => {
     });
   });
 
+  test("LEA through ESP SIB computes an address without reading memory", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: lea eax, dword [esp+0x24] ; ret ;"));
+    const semantic = composeSemanticSequence(sequence);
+    const lea = analyzeInstruction(sequence.instructions[0], 0);
+
+    expect(semantic.summary.registerTransforms.eax).toEqual({
+      kind: "affine",
+      base: "esp",
+      offset: { kind: "constant", value: 36 },
+    });
+    expect(lea.memoryReads.values.exact.size).toBe(0);
+  });
+
+  test("LEA preserves a signed displacement in its affine transform", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: lea esi, dword [ebp-0x10] ; ret ;"));
+    const semantic = composeSemanticSequence(sequence);
+
+    expect(semantic.summary.registerTransforms.esi).toEqual({
+      kind: "affine",
+      base: "ebp",
+      offset: { kind: "constant", value: -16 },
+    });
+  });
+
+  test("memory-indirect dispatch reads its effective-address registers and memory", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: jmp dword [esp+0x8] ;"));
+    const jump = analyzeInstruction(sequence.instructions[0], 0);
+
+    expect(jump.reads.values.exact).toEqual(new Set(["esp"]));
+    expect(jump.memoryReads.values.exact).toEqual(new Set(["dword [esp+0x8]"]));
+  });
+
+  test("scaled-index LEA keeps exact dependencies but does not claim an affine transform", async () => {
+    const [sequence] = await loadAll(new RPPlusProvider("0x1000: lea eax, dword [ebx+ecx*4+0x10] ; ret ;"));
+    const lea = analyzeInstruction(sequence.instructions[0], 0);
+    const semantic = composeSemanticSequence(sequence);
+
+    expect(lea.reads.values.exact).toEqual(new Set(["ebx", "ecx"]));
+    expect(lea.memoryReads.values.exact.size).toBe(0);
+    expect(semantic.summary.registerTransforms.eax).toEqual({ kind: "unknown" });
+  });
+
   test("net transforms degrade beyond one register offset plus constant boundary", async () => {
     const provider = new RPPlusProvider("0x1000: add esi, ecx ; add esi, 4 ; ret ;");
     const [sequence] = await loadAll(provider);
