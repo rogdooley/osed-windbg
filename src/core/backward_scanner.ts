@@ -12,6 +12,7 @@ export interface DecodedGadget {
   address: bigint;
   mnemonic: string;
   retImm: number;
+  kind: "RET_CHAIN" | "JMP_DISPATCH" | "CALL_DISPATCH";
 }
 
 const REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
@@ -307,6 +308,18 @@ function hasUsefulEffect(insns: DecodedInsn[]): boolean {
   return true;
 }
 
+function dispatchKind(mnemonic: string): DecodedGadget["kind"] | undefined {
+  if (mnemonic.startsWith("jmp ")) return "JMP_DISPATCH";
+  if (mnemonic.startsWith("call ")) return "CALL_DISPATCH";
+  return undefined;
+}
+
+// A RET chain is sequential only until its terminal RET. A CALL/JMP before it
+// transfers control away, so the listed RET is not reached by fall-through.
+export function isSequentialRetChain(mnemonics: readonly string[]): boolean {
+  return !mnemonics.some((mnemonic) => dispatchKind(mnemonic) !== undefined);
+}
+
 export function scanBackward(options: BackwardScanOptions): {
   gadgets: DecodedGadget[];
   warnings: string[];
@@ -332,6 +345,8 @@ export function scanBackward(options: BackwardScanOptions): {
   const seen = new Set<string>();
   const gadgets: DecodedGadget[] = [];
   let terminatorsFound = 0;
+  let dispatchFound = 0;
+  let nonSequentialRejected = 0;
 
   for (const section of scope.sections) {
     const readAhead = maxBack + 6;
@@ -345,18 +360,36 @@ export function scanBackward(options: BackwardScanOptions): {
       const scanLimit = Math.min(bytes.length, remaining < 0x4000 ? remaining : 0x4000);
 
       for (let i = 0; i < scanLimit; i++) {
+        // Decode dispatch instructions from every byte boundary. This retains
+        // overlapping streams while keeping CALL/JMP out of RET-chain paths.
+        const standalone = tryDecodeInsn(bytes, i);
+        const standaloneKind = standalone ? dispatchKind(standalone.mnemonic) : undefined;
+        if (standaloneKind) {
+          const addr = chunkStart + BigInt(i);
+          const key = addr.toString();
+          if (!seen.has(key)) {
+            seen.add(key);
+            gadgets.push({ address: addr, mnemonic: standalone!.mnemonic, retImm: 0, kind: standaloneKind });
+            dispatchFound++;
+            if (gadgets.length >= maxResults) {
+              return {
+                gadgets,
+                warnings,
+                stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 },
+              };
+            }
+          }
+        }
+
         let retMnemonic: string;
-        let retLen: number;
         let retImm = 0;
 
         if (bytes[i] === 0xc3) {
           retMnemonic = "ret";
-          retLen = 1;
         } else if (bytes[i] === 0xc2 && i + 2 < bytes.length) {
           retImm = bytes[i + 1] | (bytes[i + 2] << 8);
           if (retImm === 0 || retImm > 0x1000) continue;
           retMnemonic = `ret ${formatHex(retImm)}`;
-          retLen = 3;
         } else {
           continue;
         }
@@ -370,6 +403,10 @@ export function scanBackward(options: BackwardScanOptions): {
           const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
           if (!insns || insns.length === 0) continue;
           if (!hasUsefulEffect(insns)) continue;
+          if (!isSequentialRetChain(insns.map((insn) => insn.mnemonic))) {
+            nonSequentialRejected++;
+            continue;
+          }
 
           const addr = chunkStart + BigInt(candidateStart);
           const key = addr.toString();
@@ -378,13 +415,13 @@ export function scanBackward(options: BackwardScanOptions): {
 
           const parts = insns.map((insn) => insn.mnemonic);
           parts.push(retMnemonic);
-          gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm });
+          gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm, kind: "RET_CHAIN" });
 
           if (gadgets.length >= maxResults) {
             return {
               gadgets,
               warnings,
-              stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 },
+              stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 },
             };
           }
         }
@@ -395,6 +432,6 @@ export function scanBackward(options: BackwardScanOptions): {
   return {
     gadgets,
     warnings,
-    stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 },
+    stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 },
   };
 }

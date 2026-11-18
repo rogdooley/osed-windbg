@@ -132,6 +132,13 @@ export function deriveCapabilities(semantic: SemanticSequence, categories: RopCa
         add({ kind: "LOAD_MEMORY", register: left, evidence: [text] });
       }
     }
+    if (step.instruction.mnemonic === "lea" && step.instruction.operands.length === 2) {
+      const [destination, address] = operands;
+      // LEA is address calculation, not a memory load. Keep the complete
+      // effective-address operand as provenance so callers can inspect the
+      // base/index/scale/displacement form that produced the capability.
+      add({ kind: "REGISTER_LEA", register: destination, targetRegister: address, evidence: [text] });
+    }
     if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
       const [left, right] = operands;
       if (left.includes("[") || right.includes("[")) {

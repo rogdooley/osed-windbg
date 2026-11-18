@@ -128,8 +128,21 @@ The result set is effectively "clean `pop eax ; ret`."
 
 Common `capability` kinds: `LOAD_REGISTER`, `ZERO_REGISTER`, `MOVE_REGISTER`,
 `EXCHANGE_REGISTER`, `REGISTER_ADD`, `REGISTER_SUB`, `REGISTER_XOR`,
-`REGISTER_NEGATE`, `REGISTER_NOT`, `STACK_PIVOT`, `MEMORY_READ`, `MEMORY_WRITE`,
+`REGISTER_NEGATE`, `REGISTER_NOT`, `REGISTER_LEA`, `STACK_PIVOT`, `MEMORY_READ`, `MEMORY_WRITE`,
 and the dispatch kinds (`DISPATCH_RET`, `DISPATCH_JMP_REGISTER`, …).
+
+## Control-transfer roles
+
+`RET`-terminated sequences are ordinary ROP-chain candidates. Standalone
+`JMP reg` / `JMP [mem]` and `CALL reg` / `CALL [mem]` instructions are retained
+as dispatch candidates in the same corpus and can be queried through either
+their dispatch capability or `terminator: "JUMP"` / `terminator: "CALL"`.
+
+The backward scanner never packages a sequence containing a nonterminal `JMP`
+or `CALL` as a `RET` chain: execution cannot fall through that transfer to the
+listed `RET`. `CALL` candidates record the `ESP -= 4` return-address push and
+therefore score below otherwise equivalent `JMP` candidates. Automatic chain
+construction remains RET-chain-only.
 
 ## Recipe book
 

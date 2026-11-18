@@ -233,6 +233,114 @@ function classify(value: bigint, marker: number, bounds: { base?: bigint; limit?
   return "";
 }
 
+export type FormatSpecifierFinding = { token: string; conversion: string; disclosure: boolean; write: boolean };
+
+export function analyzeFormatString(text: string): FormatSpecifierFinding[] {
+  const findings: FormatSpecifierFinding[] = [];
+  const expression = /%(?:\d+\$)?[-+ #0']*(?:\*|\d+)?(?:\.(?:\*|\d+)?)?(?:hh|h|ll|l|j|z|t|L)?([%cCdiouxXfFeEgGaAnpsS])/g;
+  for (const match of text.matchAll(expression)) {
+    const conversion = match[1].toLowerCase();
+    if (conversion === "%") continue;
+    findings.push({
+      token: match[0],
+      conversion,
+      disclosure: conversion === "p" || conversion === "s" || conversion === "n",
+      write: conversion === "n",
+    });
+  }
+  return findings;
+}
+
+function readAsciiString(address: bigint, max: number): { text: string; terminated: boolean } | undefined {
+  const bytes: number[] = [];
+  for (let offset = 0; offset < max; offset += 1) {
+    const next = tryReadMemory(address + BigInt(offset), 1);
+    if (!next) return undefined;
+    if (next[0] === 0) return { text: String.fromCharCode(...bytes), terminated: true };
+    bytes.push(next[0]);
+  }
+  return { text: String.fromCharCode(...bytes), terminated: false };
+}
+
+const FORMAT_ARGUMENT_OFFSETS: Record<string, number> = {
+  printf: 4,
+  fprintf: 8,
+  sprintf: 8,
+  snprintf: 12,
+};
+
+function createFmtInspectCommand(): Command {
+  return {
+    name: "fmt_inspect",
+    description: "Inspect a paused x86 printf-family call and classify its format argument.",
+    usage: "dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)",
+    examples: [
+      'dx @$osed().fmt.inspect("printf")',
+      'dx @$osed().fmt.inspect("snprintf")',
+      'dx @$osed().fmt.inspect("printf", 4, 512)',
+    ],
+    schema: {
+      family: { type: "string", enum: ["printf", "fprintf", "sprintf", "snprintf"], default: "printf" },
+      formatArgOffset: { type: "number", min: 0 },
+      max: { type: "number", min: 1, max: 4096, default: 512 },
+    },
+    execute(options: Record<string, unknown>): CommandResult {
+      const pointerSize = getPointerSize();
+      if (pointerSize !== 4) {
+        return {
+          command: "fmt_inspect", args: options, success: false, findings: [], warnings: [],
+          errors: ["fmt.inspect currently supports x86 cdecl printf-family calls only; x64 ABI argument decoding is not implemented."],
+        };
+      }
+      const sp = readStackPointer(pointerSize);
+      if (sp === undefined) {
+        return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: ["ESP is unavailable — break at a supported printf-family call entry or call site."] };
+      }
+      const family = options.family as string;
+      const formatArgOffset = (options.formatArgOffset as number | undefined) ?? FORMAT_ARGUMENT_OFFSETS[family];
+      const pointerBytes = tryReadMemory(sp + BigInt(formatArgOffset), 4);
+      if (!pointerBytes) {
+        return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
+      }
+      const formatAddress = BigInt(pointerBytes[0] | (pointerBytes[1] << 8) | (pointerBytes[2] << 16) | (pointerBytes[3] << 24)) & BigInt(0xffffffff);
+      const string = readAsciiString(formatAddress, options.max as number);
+      if (!string) {
+        return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read format string at ${out.formatAddress(formatAddress, pointerSize)}.`] };
+      }
+      const specifiers = analyzeFormatString(string.text);
+      const writes = specifiers.filter((specifier) => specifier.write);
+      const disclosures = specifiers.filter((specifier) => specifier.disclosure);
+      let markerIndex: number | undefined;
+      for (let index = 0; index < 40; index += 1) {
+        const cell = tryReadMemory(sp + BigInt(formatArgOffset + 4 + index * 4), 4);
+        if (!cell) break;
+        const value = (cell[0] | (cell[1] << 8) | (cell[2] << 16) | (cell[3] << 24)) >>> 0;
+        if (value === 0x41414141) { markerIndex = index + 1; break; }
+      }
+      const warnings: string[] = [];
+      if (!string.terminated) warnings.push(`Format string was truncated at ${options.max} bytes without a terminator.`);
+      out.section("FORMAT CALL INSPECTION");
+      out.info(`Family: ${family} | ABI: x86 cdecl | ESP: ${out.formatAddress(sp, pointerSize)}`);
+      out.print(`Format argument: ESP+0x${formatArgOffset.toString(16).toUpperCase()} -> ${out.formatAddress(formatAddress, pointerSize)}`);
+      out.print(`Format text: ${JSON.stringify(string.text)}`);
+      out.table(
+        [{ key: "token", header: "Specifier", width: 16 }, { key: "meaning", header: "Classification", width: 30 }],
+        specifiers.map((specifier) => ({ token: specifier.token, meaning: specifier.write ? "potential %n memory-write primitive" : specifier.disclosure ? "potential disclosure primitive" : "format conversion" })),
+      );
+      out.section("ASSESSMENT");
+      out.print(`  Controlled marker in scanned varargs: ${markerIndex === undefined ? "not observed" : `%${markerIndex}$`}`);
+      out.print(`  Potential disclosure specifiers: ${disclosures.length}`);
+      out.print(`  Potential write specifiers (%n): ${writes.length}`);
+      out.print("  Reachability, attacker control, and externally observable output are not established.");
+      return {
+        command: "fmt_inspect", args: options, success: true,
+        findings: [{ family, esp: sp, formatArgOffset, formatAddress, format: string.text, terminated: string.terminated, specifiers, markerIndex }],
+        warnings, errors: [],
+      };
+    },
+  };
+}
+
 function createFmtOffsetCommand(): Command {
   return {
     name: "fmt_offset",
@@ -327,5 +435,5 @@ function createFmtOffsetCommand(): Command {
 }
 
 export function createFmtCommands(): Command[] {
-  return [createFmtBuildCommand(), createFmtOffsetCommand()];
+  return [createFmtBuildCommand(), createFmtOffsetCommand(), createFmtInspectCommand()];
 }

@@ -104,6 +104,11 @@ describe("semantic pipeline", () => {
       base: "eax",
       offset: { kind: "constant", value: 4 },
     });
+    expect(buildRopGadgetFromSequence(sequence).capabilities).toContainEqual(expect.objectContaining({
+      kind: "REGISTER_LEA",
+      register: "esi",
+      targetRegister: "[eax+4]",
+    }));
   });
 
   test("LEA through ESP SIB computes an address without reading memory", async () => {
@@ -225,6 +230,21 @@ describe("semantic pipeline", () => {
     const index = buildCapabilityIndex(buildRopIndexFromSequences([sequence]));
     expect(index.query({ capability: "DISPATCH_JMP_MEMORY" })).toHaveLength(1);
     expect(index.query({ capability: "DISPATCH_JMP_REGISTER" })).toHaveLength(0);
+  });
+
+  test("CALL dispatch records its pushed return address and is less preferred than JMP", async () => {
+    const [callSequence] = await loadAll(new RPPlusProvider("0x1000: call eax ;"));
+    const [jumpSequence] = await loadAll(new RPPlusProvider("0x2000: jmp eax ;"));
+    const call = buildRopGadgetFromSequence(callSequence);
+    const jump = buildRopGadgetFromSequence(jumpSequence);
+    const index = buildCapabilityIndex(buildRopIndexFromSequences([callSequence, jumpSequence]));
+
+    expect(call.semanticSummary.summary.stackDelta.values.exact).toEqual(new Set([-4]));
+    expect(call.semanticSummary.summary.flowEffects.values.exact).toEqual(new Set(["CALL"]));
+    expect(call.capabilities).toContainEqual(expect.objectContaining({ kind: "DISPATCH_CALL_REGISTER", register: "eax" }));
+    expect(index.query({ terminator: "CALL" })).toHaveLength(1);
+    expect(index.query({ terminator: "JUMP" })).toHaveLength(1);
+    expect(call.score).toBeLessThan(jump.score);
   });
 
   test("memory xchg is represented as memory access, not register exchange", async () => {

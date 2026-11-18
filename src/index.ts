@@ -66,7 +66,7 @@ import { createStringCommands } from "./commands/strings";
 import { createFindStackBytesCommand } from "./commands/find_stack_bytes";
 import { createFindMemBytesCommand } from "./commands/find_mem_bytes";
 import { createStackmapCommand } from "./commands/stackmap";
-import { createLeakClassifyCommand } from "./commands/leak";
+import { createLeakCommands } from "./commands/leak";
 import type { SerializedLandingEvidence } from "./analysis/landing";
 import { ProofController, ProofSessionStore, WinDbgProofAdapter, type ProofPlanInput } from "./rop/proof";
 import { formatCorpusReport, type CorpusReportModule, type CorpusReportOrigin, type CorpusReportValidation } from "./rop/corpus_report";
@@ -433,7 +433,7 @@ function registerAll(): void {
     createFindStackBytesCommand(),
     createLandingCommand(),
     createStackmapCommand(),
-    createLeakClassifyCommand(),
+    ...createLeakCommands(),
     createMathCommand(),
     createVersionCommand(),
     ...createStringCommands(),
@@ -663,13 +663,15 @@ function bindApi(): OsedApi {
         discovered: total.discovered + discovery.stats.discovered,
         rejected: total.rejected + discovery.stats.rejected,
         backwardTerminators: total.backwardTerminators + (discovery.stats.backwardTerminators ?? 0),
+        backwardDispatch: total.backwardDispatch + (discovery.stats.backwardDispatch ?? 0),
+        backwardNonSequentialRejected: total.backwardNonSequentialRejected + (discovery.stats.backwardNonSequentialRejected ?? 0),
         backwardGadgets: total.backwardGadgets + (discovery.stats.backwardGadgets ?? 0),
         backwardRawCandidates: total.backwardRawCandidates + (discovery.stats.backwardRawCandidates ?? 0),
         backwardFiltered: total.backwardFiltered + (discovery.stats.backwardFiltered ?? 0),
         backwardLimit: total.backwardLimit + (discovery.stats.backwardLimit ?? 0),
         backwardComplete: Math.min(total.backwardComplete, discovery.stats.backwardComplete ?? 1),
       }),
-      { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 },
+      { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardDispatch: 0, backwardNonSequentialRejected: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 },
     );
     const warnings = discoveries.flatMap((discovery) => discovery.warnings);
     const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
@@ -722,7 +724,7 @@ function bindApi(): OsedApi {
     out.info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
     out.info(`Capabilities: ${capRows.length}`);
     if (stats.backwardTerminators > 0) {
-      out.info(`Backward scan: ${stats.backwardTerminators} terminators | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
+      out.info(`Backward scan: ${stats.backwardTerminators} RET terminators | ${stats.backwardDispatch} dispatch candidates | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | ${stats.backwardNonSequentialRejected} non-sequential RET paths excluded | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
     }
 
     for (const warning of warnings) {
@@ -3148,6 +3150,18 @@ function bindApi(): OsedApi {
       if (args.length === 1 && args[0] === "help") return helperHelp("leak.classify");
       return invoke("leak_classify", args);
     },
+    scan: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("leak.scan");
+      return invoke("leak_scan", args);
+    },
+    analyze: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("leak.analyze");
+      return invoke("leak_analyze", args);
+    },
+    base: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("leak.base");
+      return invoke("leak_base", args);
+    },
   };
   api.rop_find = (...args: unknown[]) => invoke("rop", args);
 
@@ -3166,6 +3180,10 @@ function bindApi(): OsedApi {
   api.fmt = {
     build: (...args: unknown[]) => invoke("fmt_build", args),
     offset: (...args: unknown[]) => invoke("fmt_offset", args),
+    inspect: (...args: unknown[]) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("fmt.inspect");
+      return invoke("fmt_inspect", args);
+    },
   };
   api.str = {
     read: (...args: unknown[]) => {
@@ -3421,6 +3439,8 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       };
     case "fmt_offset":
       return { marker: args[0], count: args[1], firstArg: args[2] };
+    case "fmt_inspect":
+      return { family: args[0], formatArgOffset: args[1], max: args[2] };
     case "encode":
       return {
         shellcode: args[0],
@@ -3484,6 +3504,12 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
       return { address: args[0] };
     case "leak_classify":
       return { value: args[0] };
+    case "leak_scan":
+      return { address: args[0], length: args[1] };
+    case "leak_analyze":
+      return { text: args[0] };
+    case "leak_base":
+      return { pointer: args[0], rva: args[1] };
     default:
       return { value: args[0] };
   }

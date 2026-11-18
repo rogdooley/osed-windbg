@@ -1,5 +1,5 @@
 import { describe, expect, test, it } from "vitest";
-import { tryDecodeInsn } from "../src/core/backward_scanner";
+import { isSequentialRetChain, tryDecodeInsn } from "../src/core/backward_scanner";
 
 describe("backward scanner instruction decoder", () => {
   function decode(bytes: number[]): string | undefined {
@@ -8,6 +8,12 @@ describe("backward scanner instruction decoder", () => {
   function decodeLen(bytes: number[]): number | undefined {
     return tryDecodeInsn(Uint8Array.from(bytes), 0)?.length;
   }
+
+  it("does not treat nonterminal control transfers as sequential RET chains", () => {
+    expect(isSequentialRetChain(["pop eax", "add eax, 0x10"])).toBe(true);
+    expect(isSequentialRetChain(["pop eax", "jmp ebx"])).toBe(false);
+    expect(isSequentialRetChain(["pop eax", "call dword [ebx]"])).toBe(false);
+  });
 
   describe("single-byte instructions", () => {
     it("decodes inc reg", () => {

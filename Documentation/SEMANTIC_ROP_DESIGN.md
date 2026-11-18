@@ -133,7 +133,7 @@ The capability index tags each gadget with one or more `CapabilityKind` values:
 ### Arithmetic
 - `REGISTER_ADD`, `REGISTER_SUB`, `REGISTER_XOR`
 - `REGISTER_ADC`, `REGISTER_SBB`
-- `REGISTER_OR`, `REGISTER_AND`, `REGISTER_NOT`
+- `REGISTER_OR`, `REGISTER_AND`, `REGISTER_NOT`, `REGISTER_LEA`
 - `REGISTER_NEGATE`, `REGISTER_INCREMENT`, `REGISTER_DECREMENT`
 
 ### Control flow

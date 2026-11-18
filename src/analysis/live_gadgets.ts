@@ -95,6 +95,8 @@ export function discoverLiveGadgets(options: LiveDiscoveryOptions = {}): LiveDis
       rejected,
       discovered: hits.length,
       backwardTerminators: backward.stats.terminatorsFound ?? 0,
+      backwardDispatch: backward.stats.dispatchFound ?? 0,
+      backwardNonSequentialRejected: backward.stats.nonSequentialRejected ?? 0,
       backwardGadgets: backwardAdded,
       backwardRawCandidates: backward.stats.gadgetsDiscovered ?? 0,
       backwardFiltered: Math.max(0, (backward.stats.gadgetsDiscovered ?? 0) - backwardAdded),

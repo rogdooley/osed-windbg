@@ -53,6 +53,27 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     limitations: ["Classification is debugger-observed evidence, not proof that an application exposes the value."],
   },
   {
+    name: "leak.scan",
+    description: "Scans an explicitly bounded range for pointer-sized values and classifies their current targets.",
+    usage: "dx @$osed().leak.scan(address, length?)",
+    examples: ["dx @$osed().leak.scan(0x0014DD28, 0x400)"],
+    limitations: ["Reads debugger memory only; it does not establish that any pointer is externally disclosed."],
+  },
+  {
+    name: "leak.analyze",
+    description: "Extracts hexadecimal pointer candidates from supplied output text and correlates them with the current target.",
+    usage: "dx @$osed().leak.analyze(text)",
+    examples: ['dx @$osed().leak.analyze("Error processing request at 76A31240")'],
+    limitations: ["Supplied text is leak-derived evidence, not independent proof of attacker observability."],
+  },
+  {
+    name: "leak.base",
+    description: "Calculates a candidate module base from a pointer and RVA, then validates it against the current target mapping.",
+    usage: "dx @$osed().leak.base(pointer, rva)",
+    examples: ["dx @$osed().leak.base(0x76A31240, 0x1240)"],
+    limitations: ["A base is validated only when it matches a currently loaded module; this does not establish exploit usability."],
+  },
+  {
     name: "pattern.create",
     description: "Generates cyclic pattern text.",
     usage: "dx @$osed().pattern.create(length, type?)",
@@ -81,6 +102,13 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Finds the controlled format-string parameter index.",
     usage: "dx @$osed().fmt.offset(marker?, count?, firstArg?)",
     examples: ["dx @$osed().fmt.offset(0x41414141, 40)"],
+  },
+  {
+    name: "fmt.inspect",
+    description: "Inspects a paused x86 cdecl printf-family call, its format-string argument, and its format specifiers.",
+    usage: "dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)",
+    examples: ['dx @$osed().fmt.inspect("printf")', 'dx @$osed().fmt.inspect("snprintf")'],
+    limitations: ["Manual, read-only inspection only. x64 ABI argument decoding is not implemented.", "A dangerous specifier does not establish reachability or attacker control."],
   },
   {
     name: "str.read",

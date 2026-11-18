@@ -3901,6 +3901,10 @@ var osed_bundle = (() => {
           add({ kind: "LOAD_MEMORY", register: left, evidence: [text] });
         }
       }
+      if (step.instruction.mnemonic === "lea" && step.instruction.operands.length === 2) {
+        const [destination, address] = operands;
+        add({ kind: "REGISTER_LEA", register: destination, targetRegister: address, evidence: [text] });
+      }
       if (step.instruction.mnemonic === "xchg" && step.instruction.operands.length === 2) {
         const [left, right] = operands;
         if (left.includes("[") || right.includes("[")) {
@@ -10585,6 +10589,27 @@ var osed_bundle = (() => {
       limitations: ["Classification is debugger-observed evidence, not proof that an application exposes the value."]
     },
     {
+      name: "leak.scan",
+      description: "Scans an explicitly bounded range for pointer-sized values and classifies their current targets.",
+      usage: "dx @$osed().leak.scan(address, length?)",
+      examples: ["dx @$osed().leak.scan(0x0014DD28, 0x400)"],
+      limitations: ["Reads debugger memory only; it does not establish that any pointer is externally disclosed."]
+    },
+    {
+      name: "leak.analyze",
+      description: "Extracts hexadecimal pointer candidates from supplied output text and correlates them with the current target.",
+      usage: "dx @$osed().leak.analyze(text)",
+      examples: ['dx @$osed().leak.analyze("Error processing request at 76A31240")'],
+      limitations: ["Supplied text is leak-derived evidence, not independent proof of attacker observability."]
+    },
+    {
+      name: "leak.base",
+      description: "Calculates a candidate module base from a pointer and RVA, then validates it against the current target mapping.",
+      usage: "dx @$osed().leak.base(pointer, rva)",
+      examples: ["dx @$osed().leak.base(0x76A31240, 0x1240)"],
+      limitations: ["A base is validated only when it matches a currently loaded module; this does not establish exploit usability."]
+    },
+    {
       name: "pattern.create",
       description: "Generates cyclic pattern text.",
       usage: "dx @$osed().pattern.create(length, type?)",
@@ -10613,6 +10638,13 @@ var osed_bundle = (() => {
       description: "Finds the controlled format-string parameter index.",
       usage: "dx @$osed().fmt.offset(marker?, count?, firstArg?)",
       examples: ["dx @$osed().fmt.offset(0x41414141, 40)"]
+    },
+    {
+      name: "fmt.inspect",
+      description: "Inspects a paused x86 cdecl printf-family call, its format-string argument, and its format specifiers.",
+      usage: "dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)",
+      examples: ['dx @$osed().fmt.inspect("printf")', 'dx @$osed().fmt.inspect("snprintf")'],
+      limitations: ["Manual, read-only inspection only. x64 ABI argument decoding is not implemented.", "A dangerous specifier does not establish reachability or attacker control."]
     },
     {
       name: "str.read",
@@ -11093,10 +11125,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-15T21:40:34.873Z" : globalThis[key2];
+        value = true ? "2026-11-17T23:50:04.166Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "873b61a11c62" : globalThis[key2];
+        value = true ? "4326f460bd3a" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11389,17 +11421,25 @@ var osed_bundle = (() => {
     "str.refs": "Find executable pointers to a string",
     "str.bytes": "Encode text as payload bytes",
     "leak.classify": "Classify a pointer without dereferencing",
+    "leak.scan": "Scan bounded memory for pointer candidates",
+    "leak.analyze": "Analyze supplied output for pointer candidates",
+    "leak.base": "Calculate and validate a module base",
     "pattern.create": "Generate cyclic pattern text",
     "pattern.offset": "Find an offset in a pattern family",
     fmt_build: "Construct format-string payload components",
     fmt_offset: "Find the controlled parameter index",
+    fmt_inspect: "Inspect a paused printf-family format argument",
     "fmt.build": "Construct format-string payload components",
     "fmt.offset": "Find the controlled parameter index",
+    "fmt.inspect": "Inspect a paused printf-family format argument",
     exploit: "Emit exploit-development command workflows",
     "exploit.state": "View or update cached exploit state",
     "exploit.clear": "Clear the cached exploit state",
     math: "Format an integer as hex, signed, unsigned, LE",
     leak_classify: "Classify a pointer without dereferencing",
+    leak_scan: "Scan bounded memory for pointer candidates",
+    leak_analyze: "Analyze supplied output for pointer candidates",
+    leak_base: "Calculate and validate a module base",
     help: "List commands or show detailed help",
     reload: "Clear and re-register command registry",
     version: "Show loaded build identity"
@@ -13568,6 +13608,119 @@ var osed_bundle = (() => {
     }
     return "";
   }
+  function analyzeFormatString(text) {
+    const findings = [];
+    const expression = /%(?:\d+\$)?[-+ #0']*(?:\*|\d+)?(?:\.(?:\*|\d+)?)?(?:hh|h|ll|l|j|z|t|L)?([%cCdiouxXfFeEgGaAnpsS])/g;
+    for (const match of text.matchAll(expression)) {
+      const conversion = match[1].toLowerCase();
+      if (conversion === "%") continue;
+      findings.push({
+        token: match[0],
+        conversion,
+        disclosure: conversion === "p" || conversion === "s" || conversion === "n",
+        write: conversion === "n"
+      });
+    }
+    return findings;
+  }
+  function readAsciiString(address, max) {
+    const bytes = [];
+    for (let offset = 0; offset < max; offset += 1) {
+      const next = tryReadMemory(address + BigInt(offset), 1);
+      if (!next) return void 0;
+      if (next[0] === 0) return { text: String.fromCharCode(...bytes), terminated: true };
+      bytes.push(next[0]);
+    }
+    return { text: String.fromCharCode(...bytes), terminated: false };
+  }
+  var FORMAT_ARGUMENT_OFFSETS = {
+    printf: 4,
+    fprintf: 8,
+    sprintf: 8,
+    snprintf: 12
+  };
+  function createFmtInspectCommand() {
+    return {
+      name: "fmt_inspect",
+      description: "Inspect a paused x86 printf-family call and classify its format argument.",
+      usage: "dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)",
+      examples: [
+        'dx @$osed().fmt.inspect("printf")',
+        'dx @$osed().fmt.inspect("snprintf")',
+        'dx @$osed().fmt.inspect("printf", 4, 512)'
+      ],
+      schema: {
+        family: { type: "string", enum: ["printf", "fprintf", "sprintf", "snprintf"], default: "printf" },
+        formatArgOffset: { type: "number", min: 0 },
+        max: { type: "number", min: 1, max: 4096, default: 512 }
+      },
+      execute(options) {
+        var _a;
+        const pointerSize = getPointerSize();
+        if (pointerSize !== 4) {
+          return {
+            command: "fmt_inspect",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: ["fmt.inspect currently supports x86 cdecl printf-family calls only; x64 ABI argument decoding is not implemented."]
+          };
+        }
+        const sp = readStackPointer(pointerSize);
+        if (sp === void 0) {
+          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: ["ESP is unavailable \u2014 break at a supported printf-family call entry or call site."] };
+        }
+        const family = options.family;
+        const formatArgOffset = (_a = options.formatArgOffset) != null ? _a : FORMAT_ARGUMENT_OFFSETS[family];
+        const pointerBytes = tryReadMemory(sp + BigInt(formatArgOffset), 4);
+        if (!pointerBytes) {
+          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
+        }
+        const formatAddress2 = BigInt(pointerBytes[0] | pointerBytes[1] << 8 | pointerBytes[2] << 16 | pointerBytes[3] << 24) & BigInt(4294967295);
+        const string = readAsciiString(formatAddress2, options.max);
+        if (!string) {
+          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read format string at ${formatAddress(formatAddress2, pointerSize)}.`] };
+        }
+        const specifiers = analyzeFormatString(string.text);
+        const writes2 = specifiers.filter((specifier) => specifier.write);
+        const disclosures = specifiers.filter((specifier) => specifier.disclosure);
+        let markerIndex;
+        for (let index = 0; index < 40; index += 1) {
+          const cell = tryReadMemory(sp + BigInt(formatArgOffset + 4 + index * 4), 4);
+          if (!cell) break;
+          const value = (cell[0] | cell[1] << 8 | cell[2] << 16 | cell[3] << 24) >>> 0;
+          if (value === 1094795585) {
+            markerIndex = index + 1;
+            break;
+          }
+        }
+        const warnings = [];
+        if (!string.terminated) warnings.push(`Format string was truncated at ${options.max} bytes without a terminator.`);
+        section("FORMAT CALL INSPECTION");
+        info(`Family: ${family} | ABI: x86 cdecl | ESP: ${formatAddress(sp, pointerSize)}`);
+        print(`Format argument: ESP+0x${formatArgOffset.toString(16).toUpperCase()} -> ${formatAddress(formatAddress2, pointerSize)}`);
+        print(`Format text: ${JSON.stringify(string.text)}`);
+        table(
+          [{ key: "token", header: "Specifier", width: 16 }, { key: "meaning", header: "Classification", width: 30 }],
+          specifiers.map((specifier) => ({ token: specifier.token, meaning: specifier.write ? "potential %n memory-write primitive" : specifier.disclosure ? "potential disclosure primitive" : "format conversion" }))
+        );
+        section("ASSESSMENT");
+        print(`  Controlled marker in scanned varargs: ${markerIndex === void 0 ? "not observed" : `%${markerIndex}$`}`);
+        print(`  Potential disclosure specifiers: ${disclosures.length}`);
+        print(`  Potential write specifiers (%n): ${writes2.length}`);
+        print("  Reachability, attacker control, and externally observable output are not established.");
+        return {
+          command: "fmt_inspect",
+          args: options,
+          success: true,
+          findings: [{ family, esp: sp, formatArgOffset, formatAddress: formatAddress2, format: string.text, terminated: string.terminated, specifiers, markerIndex }],
+          warnings,
+          errors: []
+        };
+      }
+    };
+  }
   function createFmtOffsetCommand() {
     return {
       name: "fmt_offset",
@@ -13653,7 +13806,7 @@ var osed_bundle = (() => {
     };
   }
   function createFmtCommands() {
-    return [createFmtBuildCommand(), createFmtOffsetCommand()];
+    return [createFmtBuildCommand(), createFmtOffsetCommand(), createFmtInspectCommand()];
   }
 
   // src/core/dx_result.ts
@@ -13938,7 +14091,7 @@ var osed_bundle = (() => {
         const nameRva = readUint32LE(namesVa + BigInt(i * 4));
         const ordinalIndex = readUint16LE(ordinalsVa + BigInt(i * 2));
         const nameAddress = module.base + BigInt(nameRva);
-        namesByIndex.set(ordinalIndex, readAsciiString(nameAddress, 512));
+        namesByIndex.set(ordinalIndex, readAsciiString2(nameAddress, 512));
       }
       const entries = [];
       for (let index = 0; index < exportInfo.numberOfFunctions; index += 1) {
@@ -14059,7 +14212,7 @@ var osed_bundle = (() => {
       if (entry.rva >= start && entry.rva < end) {
         return {
           forwarded: true,
-          target: readAsciiString(module.base + BigInt(entry.rva), 512)
+          target: readAsciiString2(module.base + BigInt(entry.rva), 512)
         };
       }
       return { forwarded: false, target: "" };
@@ -14103,7 +14256,7 @@ var osed_bundle = (() => {
         if (firstThunk === 0) {
           continue;
         }
-        const dllName = nameRva === 0 ? "<unknown>" : readAsciiString(owner.base + BigInt(nameRva), 260);
+        const dllName = nameRva === 0 ? "<unknown>" : readAsciiString2(owner.base + BigInt(nameRva), 260);
         const expectedModule = this.findByDllName(modules, dllName);
         const intBaseRva = originalFirstThunk !== 0 ? originalFirstThunk : firstThunk;
         let intPtr = owner.base + BigInt(intBaseRva);
@@ -14267,7 +14420,7 @@ var osed_bundle = (() => {
       }
       const byName = owner.base + intValue + BigInt(2);
       try {
-        return { name: readAsciiString(byName, 512) };
+        return { name: readAsciiString2(byName, 512) };
       } catch (error2) {
         return {
           name: "<unreadable-name>",
@@ -14533,7 +14686,7 @@ var osed_bundle = (() => {
         for (let i = 0; i < exportDir.numberOfNames; i += 1) {
           const candidateNameRva = readUint32LE(namesVa + BigInt(i * 4));
           const candidateOrdinal = readUint16LE(ordinalsVa + BigInt(i * 2));
-          const candidate = readAsciiString(lookup.module.base + BigInt(candidateNameRva), 512);
+          const candidate = readAsciiString2(lookup.module.base + BigInt(candidateNameRva), 512);
           if (candidate.toLowerCase() === entry.name.toLowerCase()) {
             nameRva = candidateNameRva;
             ordinalIndex = candidateOrdinal;
@@ -14604,7 +14757,7 @@ var osed_bundle = (() => {
         let functionRva = 0;
         for (let i = 0; i < exportDir.numberOfNames; i += 1) {
           const nameRva = readUint32LE(namesVa + BigInt(i * 4));
-          const name = readAsciiString(lookup.module.base + BigInt(nameRva), 512);
+          const name = readAsciiString2(lookup.module.base + BigInt(nameRva), 512);
           if (verbose) {
             rows.push({ Step: "Walk", Value: `${i}: ${name}` });
           }
@@ -15014,7 +15167,7 @@ var osed_bundle = (() => {
     }
     return void 0;
   }
-  function readAsciiString(address, maxLength) {
+  function readAsciiString2(address, maxLength) {
     const chars = [];
     const chunkSize = 64;
     for (let offset = 0; offset < maxLength; offset += chunkSize) {
@@ -15435,6 +15588,14 @@ var osed_bundle = (() => {
     if (insns.length === 1 && isPatternScannerGadget(insns[0].mnemonic)) return false;
     return true;
   }
+  function dispatchKind(mnemonic) {
+    if (mnemonic.startsWith("jmp ")) return "JMP_DISPATCH";
+    if (mnemonic.startsWith("call ")) return "CALL_DISPATCH";
+    return void 0;
+  }
+  function isSequentialRetChain(mnemonics) {
+    return !mnemonics.some((mnemonic) => dispatchKind(mnemonic) !== void 0);
+  }
   function scanBackward(options) {
     var _a, _b, _c;
     if (getPointerSize() !== 4) {
@@ -15454,6 +15615,8 @@ var osed_bundle = (() => {
     const seen = /* @__PURE__ */ new Set();
     const gadgets = [];
     let terminatorsFound = 0;
+    let dispatchFound = 0;
+    let nonSequentialRejected = 0;
     for (const section2 of scope.sections) {
       const readAhead = maxBack + 6;
       for (let offset = 0; offset < section2.size; offset += 16384) {
@@ -15464,17 +15627,32 @@ var osed_bundle = (() => {
         if (!bytes) continue;
         const scanLimit = Math.min(bytes.length, remaining < 16384 ? remaining : 16384);
         for (let i = 0; i < scanLimit; i++) {
+          const standalone = tryDecodeInsn(bytes, i);
+          const standaloneKind = standalone ? dispatchKind(standalone.mnemonic) : void 0;
+          if (standaloneKind) {
+            const addr = chunkStart + BigInt(i);
+            const key2 = addr.toString();
+            if (!seen.has(key2)) {
+              seen.add(key2);
+              gadgets.push({ address: addr, mnemonic: standalone.mnemonic, retImm: 0, kind: standaloneKind });
+              dispatchFound++;
+              if (gadgets.length >= maxResults) {
+                return {
+                  gadgets,
+                  warnings,
+                  stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
+                };
+              }
+            }
+          }
           let retMnemonic;
-          let retLen;
           let retImm = 0;
           if (bytes[i] === 195) {
             retMnemonic = "ret";
-            retLen = 1;
           } else if (bytes[i] === 194 && i + 2 < bytes.length) {
             retImm = bytes[i + 1] | bytes[i + 2] << 8;
             if (retImm === 0 || retImm > 4096) continue;
             retMnemonic = `ret ${formatHex(retImm)}`;
-            retLen = 3;
           } else {
             continue;
           }
@@ -15486,18 +15664,22 @@ var osed_bundle = (() => {
             const insns = tryDecodeSequence(bytes, candidateStart, termStart, maxInsns);
             if (!insns || insns.length === 0) continue;
             if (!hasUsefulEffect(insns)) continue;
+            if (!isSequentialRetChain(insns.map((insn) => insn.mnemonic))) {
+              nonSequentialRejected++;
+              continue;
+            }
             const addr = chunkStart + BigInt(candidateStart);
             const key2 = addr.toString();
             if (seen.has(key2)) continue;
             seen.add(key2);
             const parts = insns.map((insn) => insn.mnemonic);
             parts.push(retMnemonic);
-            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm });
+            gadgets.push({ address: addr, mnemonic: parts.join(" ; "), retImm, kind: "RET_CHAIN" });
             if (gadgets.length >= maxResults) {
               return {
                 gadgets,
                 warnings,
-                stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
+                stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 1 }
               };
             }
           }
@@ -15507,13 +15689,13 @@ var osed_bundle = (() => {
     return {
       gadgets,
       warnings,
-      stats: { terminatorsFound, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
+      stats: { terminatorsFound, dispatchFound, nonSequentialRejected, gadgetsDiscovered: gadgets.length, candidateLimit: maxResults, stoppedEarly: 0 }
     };
   }
 
   // src/analysis/live_gadgets.ts
   function discoverLiveGadgets(options = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     const pointerSize = getPointerSize();
     const patterns = knownPatternsForPointerSize(pointerSize);
     const filter = badcharAddressFilter((_a = options.badchars) != null ? _a : [], pointerSize);
@@ -15573,10 +15755,12 @@ var osed_bundle = (() => {
         rejected,
         discovered: hits.length,
         backwardTerminators: (_g = backward.stats.terminatorsFound) != null ? _g : 0,
+        backwardDispatch: (_h = backward.stats.dispatchFound) != null ? _h : 0,
+        backwardNonSequentialRejected: (_i = backward.stats.nonSequentialRejected) != null ? _i : 0,
         backwardGadgets: backwardAdded,
-        backwardRawCandidates: (_h = backward.stats.gadgetsDiscovered) != null ? _h : 0,
-        backwardFiltered: Math.max(0, ((_i = backward.stats.gadgetsDiscovered) != null ? _i : 0) - backwardAdded),
-        backwardLimit: (_j = backward.stats.candidateLimit) != null ? _j : 0,
+        backwardRawCandidates: (_j = backward.stats.gadgetsDiscovered) != null ? _j : 0,
+        backwardFiltered: Math.max(0, ((_k = backward.stats.gadgetsDiscovered) != null ? _k : 0) - backwardAdded),
+        backwardLimit: (_l = backward.stats.candidateLimit) != null ? _l : 0,
         backwardComplete: backward.stats.stoppedEarly === 1 ? 0 : 1
       }
     };
@@ -16816,8 +17000,72 @@ var osed_bundle = (() => {
     const kind = memory.source === "unavailable" || memory.state === "unknown" ? "unknown" : memory.state === "free" ? "unmapped" : memory.state === "reserve" ? "reserved" : "memory_pointer";
     return { value, pointerSize, provenance: "debugger_observed", kind, memory };
   }
+  function extractHexPointers(text, pointerSize) {
+    const minimumDigits = pointerSize === 8 ? 8 : 6;
+    const maximumDigits = pointerSize * 2;
+    const expression = new RegExp(`(?:0x)?[0-9a-fA-F]{${minimumDigits},${maximumDigits}}`, "g");
+    const values = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const match of text.matchAll(expression)) {
+      const token = match[0];
+      const value = BigInt(token.startsWith("0x") || token.startsWith("0X") ? token : `0x${token}`);
+      const key2 = value.toString();
+      if (!seen.has(key2)) {
+        seen.add(key2);
+        values.push(value);
+      }
+    }
+    return values;
+  }
+  function deriveModuleBase(pointer, rva, pointerSize, findModule) {
+    if (rva > pointer) {
+      return {
+        pointer,
+        rva,
+        pointerSize,
+        alignmentPlausible: false,
+        moduleMatched: false,
+        provenance: "leak_derived",
+        reason: "RVA exceeds the observed pointer."
+      };
+    }
+    const base = pointer - rva;
+    const module = findModule(pointer);
+    const moduleMatched = module !== void 0 && module.base === base && pointer - module.base === rva;
+    return {
+      pointer,
+      rva,
+      base,
+      pointerSize,
+      alignmentPlausible: (base & BigInt(4095)) === BigInt(0),
+      moduleMatched,
+      module: moduleMatched && module ? { name: module.name, base: module.base, aslr: module.aslr } : void 0,
+      provenance: "leak_derived",
+      reason: moduleMatched ? void 0 : "Calculated base does not match a loaded module in the current target."
+    };
+  }
 
   // src/commands/leak.ts
+  var MAX_SCAN_BYTES = 65536;
+  var MAX_ANALYZE_CHARS = 65536;
+  function readPointerFromBytes(bytes, pointerSize) {
+    let value = BigInt(0);
+    for (let index = 0; index < pointerSize; index += 1) {
+      value |= BigInt(bytes[index]) << BigInt(index * 8);
+    }
+    return value;
+  }
+  function classificationLabel(result3) {
+    var _a;
+    if (result3.kind === "module_pointer" && result3.module) {
+      return `${(_a = result3.module.name.split(/[\\/]/).pop()) != null ? _a : result3.module.name}+0x${result3.module.rva.toString(16).toUpperCase()}`;
+    }
+    if (result3.kind === "memory_pointer") return "Mapped memory";
+    if (result3.kind === "reserved") return "Reserved memory";
+    if (result3.kind === "unmapped") return "Unmapped";
+    if (result3.kind === "null") return "Null";
+    return "Unknown";
+  }
   function createLeakClassifyCommand() {
     return {
       name: "leak_classify",
@@ -16856,6 +17104,145 @@ var osed_bundle = (() => {
         return { command: "leak_classify", args: options, success: true, findings: [result3], warnings: [], errors: [] };
       }
     };
+  }
+  function createLeakScanCommand() {
+    return {
+      name: "leak_scan",
+      description: "Find pointer-sized candidates in an explicitly bounded memory range.",
+      usage: "dx @$osed().leak.scan(address, length?)",
+      examples: ["dx @$osed().leak.scan(0x0014DD28, 0x400)"],
+      schema: {
+        address: { type: ["number", "string"], required: true },
+        length: { type: "number", min: 1, max: MAX_SCAN_BYTES, default: 1024 }
+      },
+      execute(options) {
+        const pointerSize = getPointerSize();
+        const address = normalizeAddress(options.address);
+        const length = options.length;
+        const rows = [];
+        const warnings = [];
+        let unreadable = 0;
+        for (let offset = 0; offset + pointerSize <= length; offset += pointerSize) {
+          const source = address + BigInt(offset);
+          const bytes = tryReadMemory(source, pointerSize);
+          if (!bytes) {
+            unreadable++;
+            continue;
+          }
+          const value = readPointerFromBytes(bytes, pointerSize);
+          if (value === BigInt(0)) continue;
+          const result3 = classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion);
+          if (result3.kind === "module_pointer" || result3.kind === "memory_pointer") {
+            rows.push({ source, value, result: result3 });
+          }
+        }
+        if (unreadable > 0) warnings.push(`${unreadable} pointer-sized cells could not be read.`);
+        const modulePointers = rows.filter((row) => row.result.kind === "module_pointer").length;
+        const aslrPointers = rows.filter((row) => {
+          var _a;
+          return ((_a = row.result.module) == null ? void 0 : _a.aslr) === "enabled";
+        }).length;
+        section("POINTER CANDIDATES");
+        table(
+          [
+            { key: "source", header: "Source", width: pointerSize === 8 ? 18 : 12 },
+            { key: "value", header: "Value", width: pointerSize === 8 ? 18 : 12 },
+            { key: "target", header: "Target", width: 34 },
+            { key: "aslr", header: "ASLR", width: 8 }
+          ],
+          rows.map((row) => {
+            var _a, _b, _c;
+            return {
+              source: formatAddress(row.source, pointerSize),
+              value: formatAddress(row.value, pointerSize),
+              target: classificationLabel(row.result),
+              aslr: (_c = (_b = (_a = row.result.module) == null ? void 0 : _a.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
+            };
+          })
+        );
+        section("SUMMARY");
+        print(`  Pointer-sized cells examined: ${Math.floor(length / pointerSize)}`);
+        print(`  Module pointers: ${modulePointers}`);
+        print(`  Potential ASLR disclosures: ${aslrPointers}`);
+        section("PROVENANCE");
+        print("  debugger_observed");
+        print("  No externally observable disclosure established.");
+        return { command: "leak_scan", args: options, success: true, findings: rows, warnings, errors: [], stats: { examined: Math.floor(length / pointerSize), candidates: rows.length, modulePointers, aslrPointers, unreadable } };
+      }
+    };
+  }
+  function createLeakAnalyzeCommand() {
+    return {
+      name: "leak_analyze",
+      description: "Extract and classify hexadecimal pointer candidates from supplied output text.",
+      usage: "dx @$osed().leak.analyze(text)",
+      examples: ['dx @$osed().leak.analyze("Error processing request at 76A31240")'],
+      schema: { text: { type: "string", required: true } },
+      execute(options) {
+        const text = options.text;
+        if (text.length > MAX_ANALYZE_CHARS) throw new Error(`Text exceeds the ${MAX_ANALYZE_CHARS}-character analysis limit.`);
+        const pointerSize = getPointerSize();
+        const values = extractHexPointers(text, pointerSize);
+        const findings = values.map((value) => __spreadProps(__spreadValues({}, classifyPointer(value, pointerSize, findModuleByAddress, memoryRegion)), {
+          provenance: "leak_derived"
+        }));
+        const modulePointers = findings.filter((finding) => finding.kind === "module_pointer").length;
+        const aslrPointers = findings.filter((finding) => {
+          var _a;
+          return ((_a = finding.module) == null ? void 0 : _a.aslr) === "enabled";
+        }).length;
+        section("OUTPUT POINTER ANALYSIS");
+        table(
+          [
+            { key: "value", header: "Value", width: pointerSize === 8 ? 18 : 12 },
+            { key: "target", header: "Target", width: 34 },
+            { key: "aslr", header: "ASLR", width: 8 }
+          ],
+          findings.map((finding) => {
+            var _a, _b, _c;
+            return {
+              value: formatAddress(finding.value, pointerSize),
+              target: classificationLabel(finding),
+              aslr: (_c = (_b = (_a = finding.module) == null ? void 0 : _a.aslr) == null ? void 0 : _b.toUpperCase()) != null ? _c : "n/a"
+            };
+          })
+        );
+        section("PROVENANCE");
+        print("  leak_derived (parsed from supplied text)");
+        print("  Attacker observability and exploit usability are not established.");
+        return { command: "leak_analyze", args: options, success: true, findings, warnings: [], errors: [], stats: { extracted: values.length, modulePointers, aslrPointers } };
+      }
+    };
+  }
+  function createLeakBaseCommand() {
+    return {
+      name: "leak_base",
+      description: "Derive and validate a module base from an observed pointer and known RVA.",
+      usage: "dx @$osed().leak.base(pointer, rva)",
+      examples: ["dx @$osed().leak.base(0x76A31240, 0x1240)"],
+      schema: { pointer: { type: ["number", "string"], required: true }, rva: { type: ["number", "string"], required: true } },
+      execute(options) {
+        var _a, _b, _c;
+        const pointerSize = getPointerSize();
+        const result3 = deriveModuleBase(normalizeAddress(options.pointer), normalizeAddress(options.rva), pointerSize, findModuleByAddress);
+        section("LEAKED POINTER");
+        print(`  Address: ${formatAddress(result3.pointer, pointerSize)}`);
+        print(`  Known RVA: 0x${result3.rva.toString(16).toUpperCase()}`);
+        section("CALCULATED BASE");
+        print(`  ${result3.base === void 0 ? "unavailable" : formatAddress(result3.base, pointerSize)}`);
+        section("VALIDATION");
+        print(`  PE alignment: ${result3.alignmentPlausible ? "plausible" : "not plausible"}`);
+        print(`  Module mapping: ${result3.moduleMatched ? `matched (${(_b = (_a = result3.module) == null ? void 0 : _a.name.split(/[\\/]/).pop()) != null ? _b : "module"})` : "not matched in current target"}`);
+        if (result3.reason) print(`  Note: ${result3.reason}`);
+        section("PROVENANCE");
+        print("  leak_derived");
+        print("  Exploit usability is not established.");
+        return { command: "leak_base", args: options, success: result3.base !== void 0, findings: [result3], warnings: result3.moduleMatched ? [] : ["Calculated base is not validated against a loaded module in the current target."], errors: result3.base === void 0 ? [(_c = result3.reason) != null ? _c : "Unable to calculate a base."] : [] };
+      }
+    };
+  }
+  function createLeakCommands() {
+    return [createLeakClassifyCommand(), createLeakScanCommand(), createLeakAnalyzeCommand(), createLeakBaseCommand()];
   }
 
   // src/rop/corpus_report.ts
@@ -17275,7 +17662,7 @@ var osed_bundle = (() => {
       createFindStackBytesCommand(),
       createLandingCommand(),
       createStackmapCommand(),
-      createLeakClassifyCommand(),
+      ...createLeakCommands(),
       createMathCommand(),
       createVersionCommand(),
       ...createStringCommands(),
@@ -17473,21 +17860,23 @@ var osed_bundle = (() => {
       const capRows = summarizeCapabilities(currentRopCorpus);
       const stats = discoveries.reduce(
         (total, discovery) => {
-          var _a2, _b, _c, _d, _e, _f;
+          var _a2, _b, _c, _d, _e, _f, _g, _h;
           return {
             patterns: total.patterns + discovery.stats.patterns,
             scanned: total.scanned + discovery.stats.scanned,
             discovered: total.discovered + discovery.stats.discovered,
             rejected: total.rejected + discovery.stats.rejected,
             backwardTerminators: total.backwardTerminators + ((_a2 = discovery.stats.backwardTerminators) != null ? _a2 : 0),
-            backwardGadgets: total.backwardGadgets + ((_b = discovery.stats.backwardGadgets) != null ? _b : 0),
-            backwardRawCandidates: total.backwardRawCandidates + ((_c = discovery.stats.backwardRawCandidates) != null ? _c : 0),
-            backwardFiltered: total.backwardFiltered + ((_d = discovery.stats.backwardFiltered) != null ? _d : 0),
-            backwardLimit: total.backwardLimit + ((_e = discovery.stats.backwardLimit) != null ? _e : 0),
-            backwardComplete: Math.min(total.backwardComplete, (_f = discovery.stats.backwardComplete) != null ? _f : 1)
+            backwardDispatch: total.backwardDispatch + ((_b = discovery.stats.backwardDispatch) != null ? _b : 0),
+            backwardNonSequentialRejected: total.backwardNonSequentialRejected + ((_c = discovery.stats.backwardNonSequentialRejected) != null ? _c : 0),
+            backwardGadgets: total.backwardGadgets + ((_d = discovery.stats.backwardGadgets) != null ? _d : 0),
+            backwardRawCandidates: total.backwardRawCandidates + ((_e = discovery.stats.backwardRawCandidates) != null ? _e : 0),
+            backwardFiltered: total.backwardFiltered + ((_f = discovery.stats.backwardFiltered) != null ? _f : 0),
+            backwardLimit: total.backwardLimit + ((_g = discovery.stats.backwardLimit) != null ? _g : 0),
+            backwardComplete: Math.min(total.backwardComplete, (_h = discovery.stats.backwardComplete) != null ? _h : 1)
           };
         },
-        { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 }
+        { patterns: 0, scanned: 0, discovered: 0, rejected: 0, backwardTerminators: 0, backwardDispatch: 0, backwardNonSequentialRejected: 0, backwardGadgets: 0, backwardRawCandidates: 0, backwardFiltered: 0, backwardLimit: 0, backwardComplete: 1 }
       );
       const warnings = discoveries.flatMap((discovery) => discovery.warnings);
       const badcharsArray = Array.isArray(options.badchars) ? options.badchars : [];
@@ -17538,7 +17927,7 @@ var osed_bundle = (() => {
       info(`Semantic gadgets: ${currentRopCorpus.gadgets.length} (deduplicated)`);
       info(`Capabilities: ${capRows.length}`);
       if (stats.backwardTerminators > 0) {
-        info(`Backward scan: ${stats.backwardTerminators} terminators | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
+        info(`Backward scan: ${stats.backwardTerminators} RET terminators | ${stats.backwardDispatch} dispatch candidates | ${stats.backwardRawCandidates}/${stats.backwardLimit} raw candidates | ${stats.backwardGadgets} accepted | ${stats.backwardFiltered} filtered | ${stats.backwardNonSequentialRejected} non-sequential RET paths excluded | complete: ${stats.backwardComplete === 1 ? "yes" : "no (candidate limit reached)"}`);
       }
       for (const warning of warnings) {
         warn(warning);
@@ -19741,6 +20130,18 @@ var osed_bundle = (() => {
       classify: (...args) => {
         if (args.length === 1 && args[0] === "help") return helperHelp("leak.classify");
         return invoke("leak_classify", args);
+      },
+      scan: (...args) => {
+        if (args.length === 1 && args[0] === "help") return helperHelp("leak.scan");
+        return invoke("leak_scan", args);
+      },
+      analyze: (...args) => {
+        if (args.length === 1 && args[0] === "help") return helperHelp("leak.analyze");
+        return invoke("leak_analyze", args);
+      },
+      base: (...args) => {
+        if (args.length === 1 && args[0] === "help") return helperHelp("leak.base");
+        return invoke("leak_base", args);
       }
     };
     api.rop_find = (...args) => invoke("rop", args);
@@ -19757,7 +20158,11 @@ var osed_bundle = (() => {
     };
     api.fmt = {
       build: (...args) => invoke("fmt_build", args),
-      offset: (...args) => invoke("fmt_offset", args)
+      offset: (...args) => invoke("fmt_offset", args),
+      inspect: (...args) => {
+        if (args.length === 1 && args[0] === "help") return helperHelp("fmt.inspect");
+        return invoke("fmt_inspect", args);
+      }
     };
     api.str = {
       read: (...args) => {
@@ -19985,6 +20390,8 @@ var osed_bundle = (() => {
         };
       case "fmt_offset":
         return { marker: args[0], count: args[1], firstArg: args[2] };
+      case "fmt_inspect":
+        return { family: args[0], formatArgOffset: args[1], max: args[2] };
       case "encode":
         return {
           shellcode: args[0],
@@ -20048,6 +20455,12 @@ var osed_bundle = (() => {
         return { address: args[0] };
       case "leak_classify":
         return { value: args[0] };
+      case "leak_scan":
+        return { address: args[0], length: args[1] };
+      case "leak_analyze":
+        return { text: args[0] };
+      case "leak_base":
+        return { pointer: args[0], rva: args[1] };
       default:
         return { value: args[0] };
     }

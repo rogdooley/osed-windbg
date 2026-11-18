@@ -134,6 +134,16 @@ The `fmt` namespace supports the format-string specifier modules: build `%n` wri
 | --- | --- | --- | --- |
 | `fmt.build` | `dx @$osed().fmt.build(addr, value, argIndex, width?, exclude?)` | `dx @$osed().fmt.build(0x00402118, 0x625011AF, 6)` | Builds a `%n` write-what-where payload (address block + format string + Python). Positional form writes one dword; use the object form from JS for multiple writes: `fmt.build({ writes: [{addr,value},...], argIndex: 6, width: "word" })`. |
 | `fmt.offset` | `dx @$osed().fmt.offset(marker?, count?, firstArg?)` | `dx @$osed().fmt.offset(0x41414141, 40)` | At a breakpoint on the format call, reports which `%N$` index reaches your buffer and classifies leakable stack/module pointers. `firstArg` (default 8) is the byte offset from ESP to the first vararg. x86/cdecl. |
+| `fmt.inspect` | `dx @$osed().fmt.inspect(family?, formatArgOffset?, max?)` | `dx @$osed().fmt.inspect("printf")` | Read-only inspection at a paused x86 cdecl `printf`, `fprintf`, `sprintf`, or `snprintf` call. Reads the format argument, reports conversions, and flags `%n`; it does not establish reachability, control, or output observability. |
+
+## Leak Analysis Namespace
+
+| Command | Syntax | Notes |
+| --- | --- | --- |
+| `leak.classify` | `dx @$osed().leak.classify(value)` | Classifies a debugger-observed pointer. |
+| `leak.scan` | `dx @$osed().leak.scan(address, length?)` | Read-only, pointer-aligned scan of an explicit range (maximum `0x10000` bytes). Candidates are debugger-observed, not demonstrated disclosures. |
+| `leak.analyze` | `dx @$osed().leak.analyze(text)` | Extracts hexadecimal pointer-shaped values from supplied output and classifies them as `leak_derived`. It does not prove the text reaches an attacker. |
+| `leak.base` | `dx @$osed().leak.base(pointer, rva)` | Derives a base and validates it against the current loaded-module mapping. An arithmetic result without a match is not validated. |
 
 `width` is `"byte"` (`%hhn`), `"word"` (`%hn`, default), or `"dword"` (`%n`). The builder lays the target addresses in a front block, sorts writes by ascending value so `%c` padding stays non-negative, and accounts for the address-block bytes already printed — the off-by-block error students hit by hand.
 
@@ -228,6 +238,8 @@ Typical live-discovery loop:
 dx @$osed().rop.scan_live("libspp.dll", "00 0A 0D 23 25 26 2B 3D", false, 40, 6, 50000)
 dx @$osed().rop.corpus.lookup(0x10154112)
 dx @$osed().rop.query("capability", "STACK_POINTER_CAPTURE", false, true)
+dx @$osed().rop.query("terminator", "JUMP", false, true)
+dx @$osed().rop.query("terminator", "CALL", false, true)
 ```
 
 | Helper | Syntax | Example | Notes |

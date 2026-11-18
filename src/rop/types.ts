@@ -40,6 +40,7 @@ export type CapabilityKind =
   | "REGISTER_OR"
   | "REGISTER_AND"
   | "REGISTER_NOT"
+  | "REGISTER_LEA"
   | "STACK_ADJUST"
   | "STACK_COPY"
   | "STACK_READ"

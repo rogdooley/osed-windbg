@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { classifyPointer } from "../src/core/leak_evidence";
+import { classifyPointer, deriveModuleBase, extractHexPointers } from "../src/core/leak_evidence";
 import type { MemoryRegionEvidence } from "../src/analysis/memory";
 import type { ModuleMitigation } from "../src/commands/modules";
 
@@ -29,5 +29,22 @@ describe("pointer classification", () => {
     expect(classifyPointer(BigInt(0x3000), 4, finder, reserved).kind).toBe("reserved");
     expect(classifyPointer(BigInt(0x3000), 4, finder, free).kind).toBe("unmapped");
     expect(classifyPointer(BigInt(0x3000), 4, finder, unknown).kind).toBe("unknown");
+  });
+
+  test("extracts bounded-width hexadecimal candidates from supplied output", () => {
+    expect(extractHexPointers("error at 76A31240, retry 0x00401823", 4)).toEqual([BigInt(0x76a31240), BigInt(0x00401823)]);
+    expect(extractHexPointers("pointer 00007FFDF00D1234", 8)).toEqual([BigInt("0x00007ffdf00d1234")]);
+  });
+
+  test("does not present pointer-minus-RVA arithmetic as a validated base without a current mapping", () => {
+    expect(deriveModuleBase(BigInt(0x1020), BigInt(0x20), 4, finder)).toMatchObject({
+      base: BigInt(0x1000), alignmentPlausible: true, moduleMatched: true, provenance: "leak_derived",
+    });
+    expect(deriveModuleBase(BigInt(0x2020), BigInt(0x20), 4, finder)).toMatchObject({
+      base: BigInt(0x2000), alignmentPlausible: true, moduleMatched: false,
+    });
+    const invalid = deriveModuleBase(BigInt(0x20), BigInt(0x30), 4, finder);
+    expect(invalid.base).toBeUndefined();
+    expect(invalid.moduleMatched).toBe(false);
   });
 });
