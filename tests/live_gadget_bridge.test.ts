@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { sequencesFromLiveHits } from "../src/semantics/live-provider";
 import { buildCapabilityIndexFromSequences } from "../src/rop";
+import { tryDecodeInsn } from "../src/core/backward_scanner";
 
 // Exercises the full live -> semantic index -> effect query path with synthetic
 // hits, so the bridge is verified without a debugger host.
@@ -41,5 +42,20 @@ describe("live gadget -> semantic index bridge", () => {
   test("executableOnly query passes because live provenance is proven executable", () => {
     // Would be 0 if live provenance were UNKNOWN; EXACT executability keeps it.
     expect(index.query({ writes: ["eax"], capability: "LOAD_REGISTER", executableOnly: true }).length).toBe(1);
+  });
+
+  test("byte MOV RET hits distinguish an exact byte write from an exact byte read", () => {
+    const store = tryDecodeInsn(Uint8Array.from([0x88, 0x01, 0xc3]), 0);
+    const load = tryDecodeInsn(Uint8Array.from([0x8a, 0x01, 0xc3]), 0);
+    const byteIndex = buildCapabilityIndexFromSequences(sequencesFromLiveHits([
+      { mnemonic: `${store?.mnemonic} ; ret`, address: BigInt(0x00401100), module: "libspp.dll" },
+      { mnemonic: `${load?.mnemonic} ; ret`, address: BigInt(0x00401110), module: "libspp.dll" },
+    ]));
+    const writers = byteIndex.query({ capability: "MEMORY_WRITE", memoryWrite: true });
+    const readers = byteIndex.query({ capability: "MEMORY_READ", memoryRead: true });
+    expect(writers.map((gadget) => gadget.locations[0].virtualAddress)).toEqual([0x00401100]);
+    expect(writers[0].semanticSummary.summary.memoryWrites.values.exact.has("byte [ecx]")).toBe(true);
+    expect(readers.map((gadget) => gadget.locations[0].virtualAddress)).toEqual([0x00401110]);
+    expect(readers[0].semanticSummary.summary.memoryReads.values.exact.has("byte [ecx]")).toBe(true);
   });
 });

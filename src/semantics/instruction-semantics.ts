@@ -40,6 +40,10 @@ interface Rule {
 }
 
 const REGISTERS: Register[] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+const BYTE_REGISTER_PARENTS: Record<string, Register> = {
+  al: "eax", cl: "ecx", dl: "edx", bl: "ebx",
+  ah: "eax", ch: "ecx", dh: "edx", bh: "ebx",
+};
 
 function makeSet<T>(exact: T[] = [], conservative: T[] = [], unknown = false): SemanticSet<T> {
   return {
@@ -366,6 +370,40 @@ const RULES: Rule[] = [
         writes: [left.register],
         registerEffects: { [left.register]: constantExpr(value) },
         evidence: [`MOV ${left.register}, ${right.text}`],
+      };
+    },
+  },
+  {
+    name: "mov-byte-mem-reg",
+    match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const left = parseOperand(instruction.operands[0]);
+      const right = instruction.operands[1].trim().toLowerCase();
+      const source = BYTE_REGISTER_PARENTS[right];
+      if (left.kind !== "memory" || !/^byte(?: ptr)?\s+\[/.test(left.text) || !source) return {};
+      const addressRegisters = memoryRegisters(left.text);
+      return {
+        reads: [source, ...addressRegisters],
+        writes: addressRegisters[0] === "esp" ? ["esp"] : [],
+        memoryWrites: [left.text],
+        evidence: [`MOV ${left.text}, ${right}`],
+      };
+    },
+  },
+  {
+    name: "mov-byte-reg-mem",
+    match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+    evaluate: (instruction) => {
+      const destination = instruction.operands[0].trim().toLowerCase();
+      const parent = BYTE_REGISTER_PARENTS[destination];
+      const right = parseOperand(instruction.operands[1]);
+      if (!parent || right.kind !== "memory" || !/^byte(?: ptr)?\s+\[/.test(right.text)) return {};
+      return {
+        reads: [parent, ...memoryRegisters(right.text)],
+        writes: [parent],
+        memoryReads: [right.text],
+        registerEffects: { [parent]: unknownExpr() },
+        evidence: [`MOV ${destination}, ${right.text}`],
       };
     },
   },

@@ -7185,6 +7185,16 @@ var osed_bundle = (() => {
 
   // src/semantics/instruction-semantics.ts
   var REGISTERS = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var BYTE_REGISTER_PARENTS = {
+    al: "eax",
+    cl: "ecx",
+    dl: "edx",
+    bl: "ebx",
+    ah: "eax",
+    ch: "ecx",
+    dh: "edx",
+    bh: "ebx"
+  };
   function makeSet(exact = [], conservative = [], unknown = false) {
     return {
       exact: new Set(exact),
@@ -7449,6 +7459,40 @@ var osed_bundle = (() => {
           writes: [left.register],
           registerEffects: { [left.register]: constantExpr(value) },
           evidence: [`MOV ${left.register}, ${right.text}`]
+        };
+      }
+    },
+    {
+      name: "mov-byte-mem-reg",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const left = parseOperand(instruction.operands[0]);
+        const right = instruction.operands[1].trim().toLowerCase();
+        const source = BYTE_REGISTER_PARENTS[right];
+        if (left.kind !== "memory" || !/^byte(?: ptr)?\s+\[/.test(left.text) || !source) return {};
+        const addressRegisters = memoryRegisters(left.text);
+        return {
+          reads: [source, ...addressRegisters],
+          writes: addressRegisters[0] === "esp" ? ["esp"] : [],
+          memoryWrites: [left.text],
+          evidence: [`MOV ${left.text}, ${right}`]
+        };
+      }
+    },
+    {
+      name: "mov-byte-reg-mem",
+      match: (instruction) => instruction.mnemonic === "mov" && instruction.operands.length === 2,
+      evaluate: (instruction) => {
+        const destination = instruction.operands[0].trim().toLowerCase();
+        const parent2 = BYTE_REGISTER_PARENTS[destination];
+        const right = parseOperand(instruction.operands[1]);
+        if (!parent2 || right.kind !== "memory" || !/^byte(?: ptr)?\s+\[/.test(right.text)) return {};
+        return {
+          reads: [parent2, ...memoryRegisters(right.text)],
+          writes: [parent2],
+          memoryReads: [right.text],
+          registerEffects: { [parent2]: unknownExpr() },
+          evidence: [`MOV ${destination}, ${right.text}`]
         };
       }
     },
@@ -11125,10 +11169,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-17T23:50:04.166Z" : globalThis[key2];
+        value = true ? "2026-11-21T22:13:38.222Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "4326f460bd3a" : globalThis[key2];
+        value = true ? "429a2dfe0d3a" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -13675,12 +13719,27 @@ var osed_bundle = (() => {
         const formatArgOffset = (_a = options.formatArgOffset) != null ? _a : FORMAT_ARGUMENT_OFFSETS[family];
         const pointerBytes = tryReadMemory(sp + BigInt(formatArgOffset), 4);
         if (!pointerBytes) {
-          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
+          return {
+            command: "fmt_inspect",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)} (ESP=${formatAddress(sp, pointerSize)}). Break at the ${family} entry/call site, or supply the observed format-argument offset explicitly.`]
+          };
         }
         const formatAddress2 = BigInt(pointerBytes[0] | pointerBytes[1] << 8 | pointerBytes[2] << 16 | pointerBytes[3] << 24) & BigInt(4294967295);
         const string = readAsciiString(formatAddress2, options.max);
         if (!string) {
-          return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read format string at ${formatAddress(formatAddress2, pointerSize)}.`] };
+          const likelyPattern = formatAddress2 === BigInt(2425393296) ? " The value is a NOP-pattern dword, which strongly suggests this is not a live format-call frame." : "";
+          return {
+            command: "fmt_inspect",
+            args: options,
+            success: false,
+            findings: [],
+            warnings: [],
+            errors: [`Could not read ${family} format string at ${formatAddress(formatAddress2, pointerSize)} from [ESP+0x${formatArgOffset.toString(16)}] (ESP=${formatAddress(sp, pointerSize)}).${likelyPattern} Break at ${family} entry or immediately before its call instruction; at a different call site, pass the correct formatArgOffset.`]
+          };
         }
         const specifiers = analyzeFormatString(string.text);
         const writes2 = specifiers.filter((specifier) => specifier.write);
@@ -15330,6 +15389,7 @@ var osed_bundle = (() => {
 
   // src/core/backward_scanner.ts
   var REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+  var BYTE_REG_NAMES = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"];
   var ALU_REG_OPCODES = [
     { opcode: 1, name: "add", form: "rm" },
     { opcode: 3, name: "add", form: "reg" },
@@ -15349,8 +15409,10 @@ var osed_bundle = (() => {
     { opcode: 59, name: "cmp", form: "reg" },
     { opcode: 133, name: "test", form: "rm" },
     { opcode: 135, name: "xchg", form: "rm" },
-    { opcode: 137, name: "mov", form: "rm" },
-    { opcode: 139, name: "mov", form: "reg" }
+    { opcode: 136, name: "mov", form: "rm", width: 8 },
+    { opcode: 137, name: "mov", form: "rm", width: 32 },
+    { opcode: 138, name: "mov", form: "reg", width: 8 },
+    { opcode: 139, name: "mov", form: "reg", width: 32 }
   ];
   var ALU_EAX_IMM32 = [
     { opcode: 5, name: "add" },
@@ -15405,7 +15467,7 @@ var osed_bundle = (() => {
     if (value === 0) return "";
     return value < 0 ? `-0x${(-value).toString(16)}` : `+0x${value.toString(16)}`;
   }
-  function decodeModRM(bytes, offset) {
+  function decodeModRM(bytes, offset, width = 32) {
     if (offset >= bytes.length) return void 0;
     const modrm = bytes[offset];
     const mod = modrm >> 6;
@@ -15461,7 +15523,7 @@ var osed_bundle = (() => {
       if (!expression) expression = formatHex(displacement);
       else expression += formatDisplacement(displacement);
     }
-    return { reg, memory: `dword [${expression}]`, length: cursor - offset };
+    return { reg, memory: `${width === 8 ? "byte" : "dword"} [${expression}]`, length: cursor - offset };
   }
   function tryDecodeInsn(bytes, offset) {
     if (offset >= bytes.length) return void 0;
@@ -15495,17 +15557,18 @@ var osed_bundle = (() => {
     const b1 = bytes[offset + 1];
     for (const entry of ALU_REG_OPCODES) {
       if (b0 === entry.opcode) {
-        const decoded = decodeModRM(bytes, offset + 1);
+        const decoded = decodeModRM(bytes, offset + 1, entry.width);
         if (!decoded) return void 0;
+        const registers = entry.width === 8 ? BYTE_REG_NAMES : REG_NAMES;
         if (decoded.rm !== void 0) {
-          const dst2 = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
-          const src2 = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+          const dst2 = entry.form === "rm" ? registers[decoded.rm] : registers[decoded.reg];
+          const src2 = entry.form === "rm" ? registers[decoded.reg] : registers[decoded.rm];
           return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst2}, ${src2}` };
         }
         if (entry.name !== "xchg" && entry.name !== "mov") return void 0;
         if (!decoded.memory) return void 0;
-        const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
-        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
+        const dst = entry.form === "rm" ? decoded.memory : registers[decoded.reg];
+        const src = entry.form === "rm" ? registers[decoded.reg] : decoded.memory;
         return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
       }
     }

@@ -16,13 +16,14 @@ export interface DecodedGadget {
 }
 
 const REG_NAMES = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
+const BYTE_REG_NAMES = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"];
 
 interface DecodedInsn {
   length: number;
   mnemonic: string;
 }
 
-const ALU_REG_OPCODES: Array<{ opcode: number; name: string; form: "rm" | "reg" }> = [
+const ALU_REG_OPCODES: Array<{ opcode: number; name: string; form: "rm" | "reg"; width?: 8 | 32 }> = [
   { opcode: 0x01, name: "add", form: "rm" },
   { opcode: 0x03, name: "add", form: "reg" },
   { opcode: 0x09, name: "or",  form: "rm" },
@@ -41,8 +42,10 @@ const ALU_REG_OPCODES: Array<{ opcode: number; name: string; form: "rm" | "reg" 
   { opcode: 0x3b, name: "cmp", form: "reg" },
   { opcode: 0x85, name: "test", form: "rm" },
   { opcode: 0x87, name: "xchg", form: "rm" },
-  { opcode: 0x89, name: "mov", form: "rm" },
-  { opcode: 0x8b, name: "mov", form: "reg" },
+  { opcode: 0x88, name: "mov", form: "rm", width: 8 },
+  { opcode: 0x89, name: "mov", form: "rm", width: 32 },
+  { opcode: 0x8a, name: "mov", form: "reg", width: 8 },
+  { opcode: 0x8b, name: "mov", form: "reg", width: 32 },
 ];
 
 const ALU_EAX_IMM32: Array<{ opcode: number; name: string }> = [
@@ -95,7 +98,7 @@ function formatDisplacement(value: number): string {
 // Decode the complete x86 ModRM addressing family once.  Consumers choose
 // whether a decoded memory operand has semantics they can model; decoding a
 // byte sequence must not depend on a particular gadget pattern.
-function decodeModRM(bytes: Uint8Array, offset: number): DecodedModRM | undefined {
+function decodeModRM(bytes: Uint8Array, offset: number, width: 8 | 32 = 32): DecodedModRM | undefined {
   if (offset >= bytes.length) return undefined;
   const modrm = bytes[offset];
   const mod = modrm >> 6;
@@ -155,7 +158,7 @@ function decodeModRM(bytes: Uint8Array, offset: number): DecodedModRM | undefine
     if (!expression) expression = formatHex(displacement);
     else expression += formatDisplacement(displacement);
   }
-  return { reg, memory: `dword [${expression}]`, length: cursor - offset };
+  return { reg, memory: `${width === 8 ? "byte" : "dword"} [${expression}]`, length: cursor - offset };
 }
 
 export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | undefined {
@@ -194,11 +197,12 @@ export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | 
 
   for (const entry of ALU_REG_OPCODES) {
     if (b0 === entry.opcode) {
-      const decoded = decodeModRM(bytes, offset + 1);
+      const decoded = decodeModRM(bytes, offset + 1, entry.width);
       if (!decoded) return undefined;
+      const registers = entry.width === 8 ? BYTE_REG_NAMES : REG_NAMES;
       if (decoded.rm !== undefined) {
-        const dst = entry.form === "rm" ? REG_NAMES[decoded.rm] : REG_NAMES[decoded.reg];
-        const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : REG_NAMES[decoded.rm];
+        const dst = entry.form === "rm" ? registers[decoded.rm] : registers[decoded.reg];
+        const src = entry.form === "rm" ? registers[decoded.reg] : registers[decoded.rm];
         return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
       }
       // Memory operands are only decoded for the data-movement instructions
@@ -206,8 +210,8 @@ export function tryDecodeInsn(bytes: Uint8Array, offset: number): DecodedInsn | 
       // register-only boundary rather than inventing incomplete addressing.
       if (entry.name !== "xchg" && entry.name !== "mov") return undefined;
       if (!decoded.memory) return undefined;
-      const dst = entry.form === "rm" ? decoded.memory : REG_NAMES[decoded.reg];
-      const src = entry.form === "rm" ? REG_NAMES[decoded.reg] : decoded.memory;
+      const dst = entry.form === "rm" ? decoded.memory : registers[decoded.reg];
+      const src = entry.form === "rm" ? registers[decoded.reg] : decoded.memory;
       return { length: 1 + decoded.length, mnemonic: `${entry.name} ${dst}, ${src}` };
     }
   }

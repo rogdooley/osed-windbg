@@ -300,12 +300,19 @@ function createFmtInspectCommand(): Command {
       const formatArgOffset = (options.formatArgOffset as number | undefined) ?? FORMAT_ARGUMENT_OFFSETS[family];
       const pointerBytes = tryReadMemory(sp + BigInt(formatArgOffset), 4);
       if (!pointerBytes) {
-        return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)}.`] };
+        return {
+          command: "fmt_inspect", args: options, success: false, findings: [], warnings: [],
+          errors: [`Could not read ${family} format argument at ESP+0x${formatArgOffset.toString(16)} (ESP=${out.formatAddress(sp, pointerSize)}). Break at the ${family} entry/call site, or supply the observed format-argument offset explicitly.`],
+        };
       }
       const formatAddress = BigInt(pointerBytes[0] | (pointerBytes[1] << 8) | (pointerBytes[2] << 16) | (pointerBytes[3] << 24)) & BigInt(0xffffffff);
       const string = readAsciiString(formatAddress, options.max as number);
       if (!string) {
-        return { command: "fmt_inspect", args: options, success: false, findings: [], warnings: [], errors: [`Could not read format string at ${out.formatAddress(formatAddress, pointerSize)}.`] };
+        const likelyPattern = formatAddress === BigInt(0x90909090) ? " The value is a NOP-pattern dword, which strongly suggests this is not a live format-call frame." : "";
+        return {
+          command: "fmt_inspect", args: options, success: false, findings: [], warnings: [],
+          errors: [`Could not read ${family} format string at ${out.formatAddress(formatAddress, pointerSize)} from [ESP+0x${formatArgOffset.toString(16)}] (ESP=${out.formatAddress(sp, pointerSize)}).${likelyPattern} Break at ${family} entry or immediately before its call instruction; at a different call site, pass the correct formatArgOffset.`],
+        };
       }
       const specifiers = analyzeFormatString(string.text);
       const writes = specifiers.filter((specifier) => specifier.write);

@@ -124,6 +124,25 @@ describe("backward scanner instruction decoder", () => {
   });
 
   describe("effective-address decoding", () => {
+    it("decodes byte MOV stores and loads with the correct direction and width", () => {
+      expect(decode([0x88, 0x01, 0xc3])).toBe("mov byte [ecx], al");
+      expect(decode([0x8a, 0x01, 0xc3])).toBe("mov al, byte [ecx]");
+      expect(decodeLen([0x88, 0x01, 0xc3])).toBe(2);
+    });
+
+    it("decodes byte MOV register operands including high-byte registers", () => {
+      expect(decode([0x88, 0xc1])).toBe("mov cl, al");
+      expect(decode([0x8a, 0xe3])).toBe("mov ah, bl");
+    });
+
+    it("decodes byte MOV with SIB, displacements, and absolute addressing", () => {
+      expect(decode([0x88, 0x44, 0x24, 0x08])).toBe("mov byte [esp+0x8], al");
+      expect(decodeLen([0x88, 0x44, 0x24, 0x08])).toBe(4);
+      expect(decode([0x8a, 0x44, 0x8b, 0xf0])).toBe("mov al, byte [ebx+ecx*4-0x10]");
+      expect(decode([0x88, 0x05, 0x78, 0x56, 0x34, 0x12])).toBe("mov byte [0x12345678], al");
+      expect(decode([0x88, 0x44, 0x24])).toBeUndefined();
+    });
+
     it("decodes LEA through the ESP SIB form with disp8", () => {
       // lea eax, [esp+0x24]: 8D 44 24 24. ESP addressing always has a SIB byte.
       expect(decode([0x8d, 0x44, 0x24, 0x24])).toBe("lea eax, dword [esp+0x24]");
