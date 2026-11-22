@@ -12,12 +12,12 @@ function result(command: string, args: Record<string, unknown>, findings: unknow
 function renderTestCoverage(expected: number[], exclude: number[], compared: BadcharComparison): ReturnType<typeof summarizeBadcharTest> {
   const coverage = summarizeBadcharTest(exclude, expected, compared);
   out.info(`Candidate space: ${coverage.candidateCount} bytes (0x00-0xFF)`);
-  out.info(`Excluded by caller: ${coverage.excluded.length}; tested: ${coverage.testedCount}; survived: ${coverage.survivedCount}; corrupted: ${coverage.corrupted.length}; not tested: ${coverage.notTested.length}.`);
+  out.info(`Excluded from this test: ${coverage.excluded.length}; tested in this run: ${coverage.testedCount}; survived: ${coverage.survivedCount}; corrupted: ${coverage.corrupted.length}; untested in this run: ${coverage.untestedInThisTest.length}.`);
   for (const byte of coverage.excluded) {
-    out.print(`${out.formatHexByte(byte)}: EXCLUDED — not tested; caller-provided exclusion.`);
+    out.print(`${out.formatHexByte(byte)}: EXCLUDED FROM THIS TEST — caller-provided exclusion; historical status is not inferred.`);
   }
-  if (coverage.notTested.length > 0) {
-    out.warn(`Test stopped after ${coverage.testedCount} of ${expected.length} sent bytes; ${coverage.notTested.length} sent byte(s) were not tested (${out.formatHexByte(coverage.notTested[0])}-${out.formatHexByte(coverage.notTested[coverage.notTested.length - 1])}).`);
+  if (coverage.untestedInThisTest.length > 0) {
+    out.warn(`This run stopped after ${coverage.testedCount} of ${expected.length} sent bytes; ${coverage.untestedInThisTest.length} sent byte(s) were not evaluated in this run (${out.formatHexByte(coverage.untestedInThisTest[0])}-${out.formatHexByte(coverage.untestedInThisTest[coverage.untestedInThisTest.length - 1])}).`);
   }
   return coverage;
 }

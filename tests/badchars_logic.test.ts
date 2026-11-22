@@ -73,6 +73,6 @@ describe("badchars logic", () => {
       survivedCount: 4,
       corrupted: [],
     });
-    expect(summarizeBadcharTest([0x00, 0xff], expected, compared).notTested).not.toContain(0xff);
+    expect(summarizeBadcharTest([0x00, 0xff], expected, compared).untestedInThisTest).not.toContain(0xff);
   });
 });

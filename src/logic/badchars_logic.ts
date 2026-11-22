@@ -17,7 +17,7 @@ export type BadcharTestCoverage = {
   testedCount: number;
   survivedCount: number;
   corrupted: number[];
-  notTested: number[];
+  untestedInThisTest: number[];
 };
 
 export type ByteArrayFormat = "python" | "c" | "hex";
@@ -156,6 +156,6 @@ export function summarizeBadcharTest(
     testedCount: compared.expectedConsumed,
     survivedCount: compared.survivorCount,
     corrupted: [...new Set(compared.badChars)].sort((a, b) => a - b),
-    notTested: expected.slice(compared.expectedConsumed),
+    untestedInThisTest: expected.slice(compared.expectedConsumed),
   };
 }

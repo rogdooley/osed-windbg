@@ -693,7 +693,7 @@ var osed_bundle = (() => {
       testedCount: compared.expectedConsumed,
       survivedCount: compared.survivorCount,
       corrupted: [...new Set(compared.badChars)].sort((a, b) => a - b),
-      notTested: expected.slice(compared.expectedConsumed)
+      untestedInThisTest: expected.slice(compared.expectedConsumed)
     };
   }
 
@@ -2194,12 +2194,12 @@ var osed_bundle = (() => {
   function renderTestCoverage(expected, exclude, compared) {
     const coverage = summarizeBadcharTest(exclude, expected, compared);
     info(`Candidate space: ${coverage.candidateCount} bytes (0x00-0xFF)`);
-    info(`Excluded by caller: ${coverage.excluded.length}; tested: ${coverage.testedCount}; survived: ${coverage.survivedCount}; corrupted: ${coverage.corrupted.length}; not tested: ${coverage.notTested.length}.`);
+    info(`Excluded from this test: ${coverage.excluded.length}; tested in this run: ${coverage.testedCount}; survived: ${coverage.survivedCount}; corrupted: ${coverage.corrupted.length}; untested in this run: ${coverage.untestedInThisTest.length}.`);
     for (const byte of coverage.excluded) {
-      print(`${formatHexByte(byte)}: EXCLUDED \u2014 not tested; caller-provided exclusion.`);
+      print(`${formatHexByte(byte)}: EXCLUDED FROM THIS TEST \u2014 caller-provided exclusion; historical status is not inferred.`);
     }
-    if (coverage.notTested.length > 0) {
-      warn(`Test stopped after ${coverage.testedCount} of ${expected.length} sent bytes; ${coverage.notTested.length} sent byte(s) were not tested (${formatHexByte(coverage.notTested[0])}-${formatHexByte(coverage.notTested[coverage.notTested.length - 1])}).`);
+    if (coverage.untestedInThisTest.length > 0) {
+      warn(`This run stopped after ${coverage.testedCount} of ${expected.length} sent bytes; ${coverage.untestedInThisTest.length} sent byte(s) were not evaluated in this run (${formatHexByte(coverage.untestedInThisTest[0])}-${formatHexByte(coverage.untestedInThisTest[coverage.untestedInThisTest.length - 1])}).`);
     }
     return coverage;
   }
@@ -11230,10 +11230,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T22:46:51.265Z" : globalThis[key2];
+        value = true ? "2026-11-22T23:09:42.300Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "8f26338fdf95" : globalThis[key2];
+        value = true ? "386f9ee300a5" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
