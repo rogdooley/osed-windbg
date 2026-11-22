@@ -40,20 +40,20 @@ Version 1 shall not:
 
 The namespace additions are:
 
-- `rop.prove({mode:"guided", chain?, postcondition?})`
-- `rop.prove({mode:"observe", chain?, postcondition?})`
+- `rop.prove("guided")`
+- `rop.prove("observe")`
 - `rop.prove()`
-- `rop.prove({action:"status", sessionId?})`
-- `rop.prove({action:"cancel"})`
-- `rop.prove({action:"cancel", orphans:true})`
-- `rop.prove({action:"history", sessionId?})`
-- `rop.prove({action:"export", sessionId?, path, format:"json"|"markdown"})`
+- `rop.prove("status")`
+- `rop.prove("cancel")`
+- `rop.prove("cancel", true)`
+- `rop.prove("history")`
+- `rop.prove("export", false, path)`
 
-Start options are `{mode?:"guided"|"observe", chain?:string|ChainStep[], api?:string, postcondition?:{kind:"dep"}}`. Passing an options object without `action` starts a session and defaults `mode` to `guided`; passing no argument advances an existing session. `api` inherits the last generated chain's `resolvedApi` when available and is otherwise required for an API-specific postcondition. Action objects are disjoint from start options. Export defaults to JSON when `format` is omitted.
+Pass `"guided"` or `"observe"` to start a session; omitting the argument advances an existing session. The proof input comes from the last successful `rop.generate()` result. `api` inherits that result's `resolvedApi` when available and is otherwise required for an API-specific postcondition. `rop.prove("export", false, path)` exports JSON.
 
 Starting a session uses the supplied chain or, when omitted, the last successful `rop.generate()` chain. A manual chain may be supplied as `ChainStep[]` or as the existing DWORD string form. A string is eligible for proof only when each executed gadget address resolves unambiguously through the loaded corpus or live disassembly processed by the existing semantics pipeline. Unresolved placeholders are preserved as evidence and prevent a complete verification when they affect flow, ESP, or required assertions.
 
-A bare `rop.prove()` means only "examine the current stop and advance the active session." It requires an active `ARMED`, `CHECKPOINT_REACHED`, or `POSTCONDITION_ARMED` session. With no such session it returns a no-op error that directs the user to `rop.prove({mode:"guided"})` or `rop.prove({mode:"observe"})`. It never creates a session implicitly.
+A bare `rop.prove()` means only "examine the current stop and advance the active session." It requires an active `ARMED`, `CHECKPOINT_REACHED`, or `POSTCONDITION_ARMED` session. With no such session it returns a no-op error that directs the user to `rop.prove("guided")` or `rop.prove("observe")`. It never creates a session implicitly.
 
 Starting while another session is active is also a no-op error; the caller must finish or cancel the active session. At start, if current EIP already equals checkpoint zero, that entry is observed immediately and guided mode arms checkpoint one. Otherwise guided mode arms checkpoint zero. Observe mode records no unexpected stop during creation; its first bare call applies the matching rule in section 7.
 
@@ -153,7 +153,7 @@ A mismatch is `FAILED`. An unreadable slot, partial read, unresolved dispatch re
 
 Guided mode owns at most one one-shot breakpoint. Creation snapshots the breakpoint list, uses a session-unique marker, creates the breakpoint, snapshots again, and records the unique new ID/address/marker tuple. Deletion first re-lists breakpoints and removes only an exact tuple match. A missing one-shot after a matching stop is expected. An ID reused for another address or marker must never be removed.
 
-Markers use an extension-owned, versioned format containing a proof prefix, session ID, random nonce, and checkpoint ID; none of these fields come from user text. At every session start, the adapter scans `listBreakpoints()` for recognized proof markers not referenced by the active store. If any exist, start makes no state change and reports their IDs and addresses with the recovery command `rop.prove({action:"cancel", orphans:true})`. It never deletes them implicitly.
+Markers use an extension-owned, versioned format containing a proof prefix, session ID, random nonce, and checkpoint ID; none of these fields come from user text. At every session start, the adapter scans `listBreakpoints()` for recognized proof markers not referenced by the active store. If any exist, start makes no state change and reports their IDs and addresses with the recovery command `rop.prove("cancel", true)`. It never deletes them implicitly.
 
 Orphan reclamation works after extension reload when the original `ProofSessionStore` no longer exists. It builds candidates only from successfully parsed proof markers, immediately re-lists each candidate, and issues `bc <id>` only when ID, address, complete marker, enabled state, and one-shot state still match. It returns per-breakpoint `deleted`, `identity-mismatch`, `not-found`, or `unsupported-marker-version` results. With an active session, `cancel` first follows normal active ownership cleanup, then `orphans:true` scans for remaining marker-owned breakpoints. No prefix-only or ID-only match authorizes deletion.
 

@@ -7,6 +7,7 @@ import { LandingEvidence, landing } from "../analysis/landing";
 import { readSehRecords, resolveTeb32Address } from "../analysis/seh";
 import { findModuleByAddress, listModulesWithMitigations, ModuleMitigation } from "./modules";
 import { adviseExploitStrategy, type Evidence, type ExploitEvidence, type StrategyRecommendation } from "../core/exploit_strategy_advisor";
+import { repeatedByteRunAtStart } from "../logic/controlled_region";
 
 export type RegisterSnapshot = {
   ip?: bigint;
@@ -424,6 +425,7 @@ export function createTriageCommand(): Command {
       const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : undefined;
       const shellcode = landingCandidateAddresses(landingEvidence);
       const badcharStats = quickBadcharScan(stackBytes, badchars);
+      const controlledRun = stackBytes ? repeatedByteRunAtStart(stackBytes) : undefined;
 
       const modules = selectTriageModules(
         listModulesWithMitigations(moduleFilter).map((module) => ({
@@ -484,6 +486,20 @@ export function createTriageCommand(): Command {
         }
       } else {
         out.print("Shellcode candidates: none");
+      }
+
+      if (controlledRun && regs.sp !== undefined) {
+        const start = regs.sp + BigInt(controlledRun.start);
+        const end = regs.sp + BigInt(controlledRun.end - 1);
+        const mismatch = controlledRun.end < stackBytes!.length ? stackBytes![controlledRun.end] : undefined;
+        out.section("CONTROLLED STACK");
+        out.print(`${regs.spName ?? "SP"}: ${out.formatAddress(regs.sp, pointerSize)}`);
+        out.print(`Pattern: ${out.formatHexByte(controlledRun.byte)}`);
+        out.print(`Contiguous bytes: ${controlledRun.end - controlledRun.start}`);
+        out.print(`Usable DWORDs: ${Math.floor((controlledRun.end - controlledRun.start) / 4)}`);
+        out.print(`End: ${out.formatAddress(end, pointerSize)}`);
+        out.print(`First mismatch: ${mismatch === undefined ? "scan limit reached" : `${out.formatAddress(start + BigInt(controlledRun.end), pointerSize)} (${out.formatHexByte(mismatch)})`}`);
+        out.print("Assessment: Large contiguous repeated-byte region at SP; suitable candidate for stack-resident ROP data, not proof of provenance.");
       }
 
       out.section("GADGETS");
@@ -560,6 +576,13 @@ export function createTriageCommand(): Command {
             badPointer: badSp === "yes",
             shellcodeCandidates: shellcode,
             landing: landingEvidence,
+            controlledRun: controlledRun && regs.sp !== undefined ? {
+              start: regs.sp + BigInt(controlledRun.start),
+              end: regs.sp + BigInt(controlledRun.end - 1),
+              length: controlledRun.end - controlledRun.start,
+              byte: controlledRun.byte,
+              firstMismatch: controlledRun.end < stackBytes!.length ? regs.sp + BigInt(controlledRun.end) : undefined,
+            } : undefined,
             stackExecutable: stackProt ? stackProt.executable : undefined,
           },
           gadgets,

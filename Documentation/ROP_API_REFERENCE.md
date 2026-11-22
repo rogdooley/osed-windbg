@@ -5,11 +5,11 @@
 `rop.prove()` consumes the same chain representation as `rop.generate()` and predicts one meaningful transition at a time. Guided mode installs one extension-owned one-shot breakpoint; observe mode installs none. Neither mode executes `g`, `p`, or `t`.
 
 ```text
-dx @$osed().rop.prove({mode:"guided"})
+dx @$osed().rop.prove("guided")
 g
 dx @$osed().rop.prove()
-dx @$osed().rop.prove({action:"status"})
-dx @$osed().rop.prove({action:"cancel"})
+dx @$osed().rop.prove("status")
+dx @$osed().rop.prove("cancel")
 ```
 
 Bare `rop.prove()` advances only an active session. A matching EIP is checked before ESP, register, stack, and memory assertions. The first exact mismatch halts. Unknown semantics remain `UNVERIFIED`; they are never counted as matches.
@@ -284,8 +284,8 @@ ROP. The challenge is that `LoadLibraryA` returns `HMODULE` in `EAX`, and
 
 Both approaches need a "capture EAX" primitive between the two calls. Look for:
 ```js
-dx @$osed().rop.query({reads: ["eax"], capability: "STORE_MEMORY"})
-dx @$osed().rop.query({capability: "STACK_COPY"})   // push eax ; ret
+dx @$osed().rop.query("capability", "STORE_MEMORY", false, true)
+dx @$osed().rop.query("capability", "STACK_COPY")   // push eax ; ret
 ```
 
 ## Register-setup safety (read before building a frame)
@@ -316,7 +316,7 @@ Order the gadgets so that if a gadget does have a stray write, it lands on a
 register you set *later* (or don't need). Find candidates with:
 
 ```js
-dx @$osed().rop.query({capability: "LOAD_REGISTER", writes: ["ecx","ebx"]})
+dx @$osed().rop.query("capability", "LOAD_REGISTER", false, true)
 ```
 
 and read the full `Writes` column of each row to confirm it touches nothing

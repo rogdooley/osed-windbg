@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { compareBadchars, expectedBytes } from "../src/logic/badchars_logic";
+import { compareBadchars, expectedBytes, summarizeBadcharTest } from "../src/logic/badchars_logic";
 
 describe("badchars logic", () => {
   test("builds expected bytes while excluding values", () => {
@@ -61,5 +61,18 @@ describe("badchars logic", () => {
     const result = compareBadchars(observed, expected);
     expect(result.survivorCount).toBe(3);
     expect(result.expectedConsumed).toBe(3);
+  });
+
+  test("keeps caller exclusions separate from tested and untested bytes", () => {
+    const expected = expectedBytes([0x00, 0xff]);
+    const compared = compareBadchars(Uint8Array.from(expected.slice(0, 4)), expected);
+    expect(summarizeBadcharTest([0x00, 0xff], expected, compared)).toMatchObject({
+      candidateCount: 256,
+      excluded: [0x00, 0xff],
+      testedCount: 4,
+      survivedCount: 4,
+      corrupted: [],
+    });
+    expect(summarizeBadcharTest([0x00, 0xff], expected, compared).notTested).not.toContain(0xff);
   });
 });

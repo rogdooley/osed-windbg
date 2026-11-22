@@ -121,13 +121,14 @@ dx @$osed().add_esp("essfunc")                               ; add esp, N ; ret
 dx @$osed().pivots("essfunc")                                ; stack pivots
 dx @$osed().find_bytes("vulnserver", "FF E4")                ; module PE-section byte search
 dx @$osed().find_stack_bytes("43 43 43 43")                  ; current-thread stack byte search
+dx @$osed().find_stack_bytes("43", 20, 4096, "runs")        ; contiguous 0x43 regions and boundaries
 dx @$osed().find_mem_bytes(0x14800000, 0x16000, "43 43 43 43") ; explicit live-memory range search
 dx @$osed().rop_template("VirtualProtect", "essfunc")        ; PUSHAD skeleton
 ```
 
 `find_bytes(module, ...)` searches PE sections in the named loaded module. By default it searches executable sections only, which makes it useful for gadget hunting and opcode checks in module-backed memory.
 
-`find_stack_bytes(bytes, ...)` searches the current thread stack starting at `ESP`/`RSP`. It does not search the heap or arbitrary process memory.
+`find_stack_bytes(bytes, ...)` searches the current thread stack starting at `ESP`/`RSP`. With a single byte and `"runs"` mode, it reports maximal contiguous regions, their DWORD capacity, and the first mismatch without reading beyond the stack window or scan limit. It does not search the heap or arbitrary process memory.
 
 `find_mem_bytes(address, length, bytes, ...)` searches an explicit readable memory range that you provide. Use it for stack, heap, mapped regions, or module-backed memory when you already know the address window you want to inspect.
 
@@ -245,12 +246,10 @@ The exploit state captures crash geometry — control mechanism, stack layout, r
 
 ```
 dx @$osed().exploit.state()              ; view current state
-dx @$osed().exploit.state({mechanism: "saved-ret", controlledBytesAfterEsp: 512})
-dx @$osed().exploit.state({badchars: "00 0A 0D", apiResolution: "iat"})
 dx @$osed().exploit.clear()              ; reset
 ```
 
-You can set or override any field without rerunning triage. This is useful when the debugger has continued past the crash point, or when you want to model a different scenario.
+Run `triage()` again to capture a new crash state after the debugger has continued or when modeling a different scenario.
 
 ### Shellcode helpers
 

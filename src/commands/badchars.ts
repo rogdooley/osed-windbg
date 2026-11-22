@@ -2,11 +2,24 @@ import { Command, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { getPointerSize, readMemory, tryReadMemory } from "../core/memory";
 import { normalizeAddress, normalizeByteArray } from "../core/validation";
-import { compareBadchars, expectedBytes, formatByteArray, locateExpectedArray } from "../logic/badchars_logic";
+import { compareBadchars, expectedBytes, formatByteArray, locateExpectedArray, summarizeBadcharTest, type BadcharComparison } from "../logic/badchars_logic";
 import { readRegisters } from "./triage";
 
 function result(command: string, args: Record<string, unknown>, findings: unknown[], warnings: string[] = []): CommandResult {
   return { command, args, success: true, findings, warnings, errors: [] };
+}
+
+function renderTestCoverage(expected: number[], exclude: number[], compared: BadcharComparison): ReturnType<typeof summarizeBadcharTest> {
+  const coverage = summarizeBadcharTest(exclude, expected, compared);
+  out.info(`Candidate space: ${coverage.candidateCount} bytes (0x00-0xFF)`);
+  out.info(`Excluded by caller: ${coverage.excluded.length}; tested: ${coverage.testedCount}; survived: ${coverage.survivedCount}; corrupted: ${coverage.corrupted.length}; not tested: ${coverage.notTested.length}.`);
+  for (const byte of coverage.excluded) {
+    out.print(`${out.formatHexByte(byte)}: EXCLUDED — not tested; caller-provided exclusion.`);
+  }
+  if (coverage.notTested.length > 0) {
+    out.warn(`Test stopped after ${coverage.testedCount} of ${expected.length} sent bytes; ${coverage.notTested.length} sent byte(s) were not tested (${out.formatHexByte(coverage.notTested[0])}-${out.formatHexByte(coverage.notTested[coverage.notTested.length - 1])}).`);
+  }
+  return coverage;
 }
 
 function readLargestWindow(start: bigint, maxLength: number): Uint8Array | undefined {
@@ -63,15 +76,7 @@ export function createBadcharsCommand(): Command {
         out.info("No bad characters detected in the tested range.");
       }
 
-      out.info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
-
-      if (compared.expectedConsumed < expected.length) {
-        const lastTested = expected[compared.expectedConsumed - 1];
-        const firstUntested = expected[compared.expectedConsumed];
-        out.warn(
-          `Array truncated after ${out.formatHexByte(lastTested)}; bytes ${out.formatHexByte(firstUntested)}-0xFF not tested.`,
-        );
-      }
+      const coverage = renderTestCoverage(expected, normalizedExclude.values, compared);
 
       const allExclude = [...new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
       out.info(
@@ -94,6 +99,7 @@ export function createBadcharsCommand(): Command {
             mismatches: compared.mismatches,
             exclude: normalizedExclude.values,
             allExclude,
+            coverage,
           },
         ],
         warnings,
@@ -211,15 +217,7 @@ export function createBadcharFindCommand(): Command {
         out.info("No bad characters detected in the tested range.");
       }
 
-      out.info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
-
-      if (compared.expectedConsumed < expected.length) {
-        const lastTested = expected[compared.expectedConsumed - 1];
-        const firstUntested = expected[compared.expectedConsumed];
-        out.warn(
-          `Array truncated after ${out.formatHexByte(lastTested)}; bytes ${out.formatHexByte(firstUntested)}-0xFF not tested.`,
-        );
-      }
+      const coverage = renderTestCoverage(expected, normalizedExclude.values, compared);
 
       const allExclude = [...new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
       out.info(
@@ -242,6 +240,7 @@ export function createBadcharFindCommand(): Command {
             mismatches: compared.mismatches,
             allExclude,
             exclude: normalizedExclude.values,
+            coverage,
           },
         ],
         warnings,

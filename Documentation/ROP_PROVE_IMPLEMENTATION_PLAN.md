@@ -375,7 +375,7 @@
 
 - [ ] **Step 2: Document manual gate A**
 
-  Build with `cmake -A Win32`, load the extension, create/load the corpus, start proof through `dx @$osed().rop.prove({mode:"guided"})`, issue each `g` manually, and capture evidence that the IAT dispatch target came from the slot contents.
+  Build with `cmake -A Win32`, load the extension, create/load the corpus, start proof through `dx @$osed().rop.prove("guided")`, issue each `g` manually, and capture evidence that the IAT dispatch target came from the slot contents.
 
 - [ ] **Step 3: Document manual gate B**
 

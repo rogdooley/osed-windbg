@@ -198,7 +198,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     description: "Filters the loaded semantic ROP corpus.",
     usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
     examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("capability", "MEMORY_WRITE", false, true)'],
-    details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities.",
+    details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass true as the fourth positional argument to include module, reads/writes, memory effects, terminator, and all capabilities.",
   },
   {
     name: "rop.capabilities",
@@ -366,7 +366,7 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
       "dx @$osed().rop.pivots(undefined, 0x100)",
       'dx @$osed().rop.pivots("eax", 0, true)',
     ],
-    details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata.",
+    details: "The default table is compact: Address, Sequence, Type, Stack, Score. Pass true as the third argument for source register, clobbers, and module metadata.",
   },
   {
     name: "rop.chain",

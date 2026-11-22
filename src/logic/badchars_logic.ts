@@ -11,6 +11,15 @@ export type BadcharComparison = {
   expectedConsumed: number;
 };
 
+export type BadcharTestCoverage = {
+  candidateCount: number;
+  excluded: number[];
+  testedCount: number;
+  survivedCount: number;
+  corrupted: number[];
+  notTested: number[];
+};
+
 export type ByteArrayFormat = "python" | "c" | "hex";
 
 export type ArrayLocation = {
@@ -131,5 +140,22 @@ export function compareBadchars(observed: Uint8Array, expected: number[]): Badch
     mismatches,
     survivorCount,
     expectedConsumed: e,
+  };
+}
+
+/** Separates caller exclusions from observed test results and untested bytes. */
+export function summarizeBadcharTest(
+  exclude: number[],
+  expected: number[],
+  compared: BadcharComparison,
+): BadcharTestCoverage {
+  const excluded = [...new Set(exclude.map((value) => value & 0xff))].sort((a, b) => a - b);
+  return {
+    candidateCount: 256,
+    excluded,
+    testedCount: compared.expectedConsumed,
+    survivedCount: compared.survivorCount,
+    corrupted: [...new Set(compared.badChars)].sort((a, b) => a - b),
+    notTested: expected.slice(compared.expectedConsumed),
   };
 }

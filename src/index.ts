@@ -3460,6 +3460,7 @@ export function normalizeInvocation(commandName: string, args: unknown[]): Recor
         bytes: parseHexByteList(args[0]),
         maxResults: args[1],
         stackBytes: args[2],
+        mode: args[3],
       };
     case "find_mem_bytes":
       return {

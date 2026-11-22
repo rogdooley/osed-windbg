@@ -685,6 +685,17 @@ var osed_bundle = (() => {
       expectedConsumed: e
     };
   }
+  function summarizeBadcharTest(exclude, expected, compared) {
+    const excluded = [...new Set(exclude.map((value) => value & 255))].sort((a, b) => a - b);
+    return {
+      candidateCount: 256,
+      excluded,
+      testedCount: compared.expectedConsumed,
+      survivedCount: compared.survivorCount,
+      corrupted: [...new Set(compared.badChars)].sort((a, b) => a - b),
+      notTested: expected.slice(compared.expectedConsumed)
+    };
+  }
 
   // src/core/scan_engine.ts
   var IMAGE_SCN_MEM_EXECUTE = 536870912;
@@ -1672,6 +1683,28 @@ var osed_bundle = (() => {
     return recommendations;
   }
 
+  // src/logic/controlled_region.ts
+  function findByteRuns(buffer, byte, maxRuns) {
+    const runs = [];
+    for (let start = 0; start < buffer.length; ) {
+      if (buffer[start] !== byte) {
+        start += 1;
+        continue;
+      }
+      let end = start + 1;
+      while (end < buffer.length && buffer[end] === byte) end += 1;
+      runs.push({ start, end, byte });
+      if (runs.length >= maxRuns) break;
+      start = end;
+    }
+    return runs;
+  }
+  function repeatedByteRunAtStart(buffer, minimumLength = 16) {
+    if (buffer.length === 0) return void 0;
+    const [run] = findByteRuns(buffer, buffer[0], 1);
+    return run && run.start === 0 && run.end >= minimumLength ? run : void 0;
+  }
+
   // src/commands/triage.ts
   function safeGet2(value, key2) {
     if (!value || typeof value !== "object") {
@@ -1978,7 +2011,7 @@ var osed_bundle = (() => {
         stackBytes: { type: "number", min: 128, max: 4096, default: 1024 }
       },
       execute(options) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i;
         const pointerSize = getPointerSize();
         const regs = readRegisters(pointerSize);
         const patternLength = options.patternLength;
@@ -1991,6 +2024,7 @@ var osed_bundle = (() => {
         const stackBytes = landingEvidence.bytes.length > 0 ? Uint8Array.from(landingEvidence.bytes) : void 0;
         const shellcode = landingCandidateAddresses(landingEvidence);
         const badcharStats = quickBadcharScan(stackBytes, badchars);
+        const controlledRun = stackBytes ? repeatedByteRunAtStart(stackBytes) : void 0;
         const modules = selectTriageModules(
           listModulesWithMitigations(moduleFilter).map((module) => ({
             module: module.name,
@@ -2044,6 +2078,19 @@ var osed_bundle = (() => {
         } else {
           print("Shellcode candidates: none");
         }
+        if (controlledRun && regs.sp !== void 0) {
+          const start = regs.sp + BigInt(controlledRun.start);
+          const end = regs.sp + BigInt(controlledRun.end - 1);
+          const mismatch = controlledRun.end < stackBytes.length ? stackBytes[controlledRun.end] : void 0;
+          section("CONTROLLED STACK");
+          print(`${(_d = regs.spName) != null ? _d : "SP"}: ${formatAddress(regs.sp, pointerSize)}`);
+          print(`Pattern: ${formatHexByte(controlledRun.byte)}`);
+          print(`Contiguous bytes: ${controlledRun.end - controlledRun.start}`);
+          print(`Usable DWORDs: ${Math.floor((controlledRun.end - controlledRun.start) / 4)}`);
+          print(`End: ${formatAddress(end, pointerSize)}`);
+          print(`First mismatch: ${mismatch === void 0 ? "scan limit reached" : `${formatAddress(start + BigInt(controlledRun.end), pointerSize)} (${formatHexByte(mismatch)})`}`);
+          print("Assessment: Large contiguous repeated-byte region at SP; suitable candidate for stack-resident ROP data, not proof of provenance.");
+        }
         section("GADGETS");
         print(pointerSize === 8 ? "JMP RSP:" : "JMP ESP:");
         for (const line of gadgets.jmp) print(`  ${line}`);
@@ -2057,7 +2104,7 @@ var osed_bundle = (() => {
         for (const line of gadgets.pivots) print(`  ${line}`);
         section("CONTEXT");
         print(`Exception code: ${regs.exceptionCode !== void 0 ? formatAddress(regs.exceptionCode, 4) : "n/a"}`);
-        print(`${(_d = regs.ipName) != null ? _d : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
+        print(`${(_e = regs.ipName) != null ? _e : "IP"}: ${regs.ip !== void 0 ? formatAddress(regs.ip, pointerSize) : "n/a"}`);
         section("MODULE SCORE");
         table(
           [
@@ -2090,12 +2137,12 @@ var osed_bundle = (() => {
         );
         print("No bad characters confirmed by this scan; compare transmitted and received bytes.");
         const warnings = [];
-        warnings.push(...(_f = (_e = landingEvidence.memory) == null ? void 0 : _e.warnings) != null ? _f : []);
+        warnings.push(...(_g = (_f = landingEvidence.memory) == null ? void 0 : _f.warnings) != null ? _g : []);
         if (landingEvidence.address === void 0) warnings.push(landingEvidence.recommendation);
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_inaccessible")) warnings.push("Stack read failed: landing bytes are inaccessible.");
         else if (landingEvidence.observations.some((item) => item.kind === "bytes_truncated")) warnings.push("Stack read was truncated before the requested length.");
         if (seh.warning) warnings.push(seh.warning);
-        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_g = stackProt == null ? void 0 : stackProt.executable) != null ? _g : null, (_h = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _h : null, modules, patternOffset);
+        const strategy = renderStrategyAssessment(pointerSize, eipControlled === "yes", landingEvidence, (_h = stackProt == null ? void 0 : stackProt.executable) != null ? _h : null, (_i = stackProt == null ? void 0 : stackProt.depEnforced) != null ? _i : null, modules, patternOffset);
         const findings = [
           {
             control: {
@@ -2112,6 +2159,13 @@ var osed_bundle = (() => {
               badPointer: badSp === "yes",
               shellcodeCandidates: shellcode,
               landing: landingEvidence,
+              controlledRun: controlledRun && regs.sp !== void 0 ? {
+                start: regs.sp + BigInt(controlledRun.start),
+                end: regs.sp + BigInt(controlledRun.end - 1),
+                length: controlledRun.end - controlledRun.start,
+                byte: controlledRun.byte,
+                firstMismatch: controlledRun.end < stackBytes.length ? regs.sp + BigInt(controlledRun.end) : void 0
+              } : void 0,
               stackExecutable: stackProt ? stackProt.executable : void 0
             },
             gadgets,
@@ -2136,6 +2190,18 @@ var osed_bundle = (() => {
   // src/commands/badchars.ts
   function result(command2, args, findings, warnings = []) {
     return { command: command2, args, success: true, findings, warnings, errors: [] };
+  }
+  function renderTestCoverage(expected, exclude, compared) {
+    const coverage = summarizeBadcharTest(exclude, expected, compared);
+    info(`Candidate space: ${coverage.candidateCount} bytes (0x00-0xFF)`);
+    info(`Excluded by caller: ${coverage.excluded.length}; tested: ${coverage.testedCount}; survived: ${coverage.survivedCount}; corrupted: ${coverage.corrupted.length}; not tested: ${coverage.notTested.length}.`);
+    for (const byte of coverage.excluded) {
+      print(`${formatHexByte(byte)}: EXCLUDED \u2014 not tested; caller-provided exclusion.`);
+    }
+    if (coverage.notTested.length > 0) {
+      warn(`Test stopped after ${coverage.testedCount} of ${expected.length} sent bytes; ${coverage.notTested.length} sent byte(s) were not tested (${formatHexByte(coverage.notTested[0])}-${formatHexByte(coverage.notTested[coverage.notTested.length - 1])}).`);
+    }
+    return coverage;
   }
   function readLargestWindow(start, maxLength) {
     let low = 1;
@@ -2186,14 +2252,7 @@ var osed_bundle = (() => {
         } else {
           info("No bad characters detected in the tested range.");
         }
-        info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
-        if (compared.expectedConsumed < expected.length) {
-          const lastTested = expected[compared.expectedConsumed - 1];
-          const firstUntested = expected[compared.expectedConsumed];
-          warn(
-            `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
-          );
-        }
+        const coverage = renderTestCoverage(expected, normalizedExclude.values, compared);
         const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
         info(
           `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`
@@ -2212,7 +2271,8 @@ var osed_bundle = (() => {
               expectedConsumed: compared.expectedConsumed,
               mismatches: compared.mismatches,
               exclude: normalizedExclude.values,
-              allExclude
+              allExclude,
+              coverage
             }
           ],
           warnings
@@ -2320,14 +2380,7 @@ var osed_bundle = (() => {
         } else {
           info("No bad characters detected in the tested range.");
         }
-        info(`Survivors: ${compared.survivorCount} of ${compared.expectedConsumed} tested bytes`);
-        if (compared.expectedConsumed < expected.length) {
-          const lastTested = expected[compared.expectedConsumed - 1];
-          const firstUntested = expected[compared.expectedConsumed];
-          warn(
-            `Array truncated after ${formatHexByte(lastTested)}; bytes ${formatHexByte(firstUntested)}-0xFF not tested.`
-          );
-        }
+        const coverage = renderTestCoverage(expected, normalizedExclude.values, compared);
         const allExclude = [.../* @__PURE__ */ new Set([...normalizedExclude.values, ...compared.badChars])].sort((a, b) => a - b);
         info(
           `Copy-ready exclude list: ${allExclude.map((v) => v.toString(16).toUpperCase().padStart(2, "0")).join(" ") || "(none)"}`
@@ -2347,7 +2400,8 @@ var osed_bundle = (() => {
               expectedConsumed: compared.expectedConsumed,
               mismatches: compared.mismatches,
               allExclude,
-              exclude: normalizedExclude.values
+              exclude: normalizedExclude.values,
+              coverage
             }
           ],
           warnings
@@ -10785,7 +10839,7 @@ var osed_bundle = (() => {
       description: "Filters the loaded semantic ROP corpus.",
       usage: "dx @$osed().rop.query(field, value, executableOnly?, verbose?)",
       examples: ['dx @$osed().rop.query("capability", "LOAD_REGISTER")', 'dx @$osed().rop.query("capability", "MEMORY_WRITE", false, true)'],
-      details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass verbose:true in object form (or true as the fourth positional argument) to include module, reads/writes, memory effects, terminator, and all capabilities."
+      details: "The default table is compact: Address, Sequence, Capability, Stack, Score. Pass true as the fourth positional argument to include module, reads/writes, memory effects, terminator, and all capabilities."
     },
     {
       name: "rop.capabilities",
@@ -10953,7 +11007,7 @@ var osed_bundle = (() => {
         "dx @$osed().rop.pivots(undefined, 0x100)",
         'dx @$osed().rop.pivots("eax", 0, true)'
       ],
-      details: "The default table is compact: Address, Sequence, Type, Stack, Score. Use verbose:true for source register, clobbers, and module metadata."
+      details: "The default table is compact: Address, Sequence, Type, Stack, Score. Pass true as the third argument for source register, clobbers, and module metadata."
     },
     {
       name: "rop.chain",
@@ -11176,10 +11230,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-22T20:38:54.639Z" : globalThis[key2];
+        value = true ? "2026-11-22T22:46:51.265Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "644e812ff9a7" : globalThis[key2];
+        value = true ? "8f26338fdf95" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -16514,18 +16568,20 @@ var osed_bundle = (() => {
     return {
       name: "find_stack_bytes",
       description: "Find byte sequence hits in the current thread stack only.",
-      usage: "dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)",
+      usage: "dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?, mode?)",
       examples: [
         'dx @$osed().find_stack_bytes("43 43 43 43")',
-        'dx @$osed().find_stack_bytes("43 43 43 43", 20, 4096)'
+        'dx @$osed().find_stack_bytes("43 43 43 43", 20, 4096)',
+        'dx @$osed().find_stack_bytes("43", 20, 4096, "runs")'
       ],
       schema: {
         bytes: { type: "array", elementType: "number", required: true },
         maxResults: { type: "number", min: 1, max: 200, default: 50 },
-        stackBytes: { type: "number", min: 16, max: 1048576 }
+        stackBytes: { type: "number", min: 16, max: 1048576 },
+        mode: { type: "string", enum: ["runs"] }
       },
       execute(options) {
-        var _a;
+        var _a, _b;
         const bytes = options.bytes;
         if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
           throw new Error("bytes must contain 0x00..0xFF integers.");
@@ -16554,9 +16610,54 @@ var osed_bundle = (() => {
         }
         const buffer = readMemory(regs.sp, searchBytes);
         const pattern = Uint8Array.from(bytes);
+        const runsMode = options.mode === "runs";
+        if (runsMode && pattern.length !== 1) {
+          throw new Error('runs mode requires exactly one byte, for example find_stack_bytes("43", 2000, 4096, "runs").');
+        }
+        if (runsMode) {
+          const runs = findByteRuns(buffer, pattern[0], options.maxResults);
+          section("Stack Byte Runs");
+          info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a = regs.spName) != null ? _a : "sp").toUpperCase()})`);
+          info(`Searched ${searchBytes} byte(s) in the current thread stack.`);
+          table(
+            [
+              { key: "start", header: "Start", width: 18 },
+              { key: "end", header: "End", width: 18 },
+              { key: "length", header: "Length", width: 9 },
+              { key: "byte", header: "Byte", width: 6 },
+              { key: "offset", header: "SP Offset", width: 12 }
+            ],
+            runs.map((run) => ({
+              start: formatAddress(regs.sp + BigInt(run.start), pointerSize),
+              end: formatAddress(regs.sp + BigInt(run.end - 1), pointerSize),
+              length: `${run.end - run.start}`,
+              byte: formatHexByte(run.byte),
+              offset: `+0x${run.start.toString(16).toUpperCase()}`
+            }))
+          );
+          const first = runs[0];
+          if (first) {
+            const next = first.end < buffer.length ? buffer[first.end] : void 0;
+            print(`First mismatch: ${next === void 0 ? "scan limit reached" : `${formatAddress(regs.sp + BigInt(first.end), pointerSize)} (${formatHexByte(next)})`}`);
+            print(`DWORD aligned: ${(regs.sp + BigInt(first.start)) % BigInt(4) === BigInt(0) ? "yes" : "no"}`);
+            print(`Usable DWORDs: ${Math.floor((first.end - first.start) / 4)}`);
+          } else {
+            info("No byte runs found in the searched stack window.");
+          }
+          info("Scope: current thread stack only; runs stop at StackBase or the configured scan limit.");
+          return {
+            command: "find_stack_bytes",
+            args: options,
+            success: true,
+            findings: runs.map((run) => __spreadProps(__spreadValues({}, run), { address: regs.sp + BigInt(run.start), length: run.end - run.start })),
+            warnings,
+            errors: [],
+            stats: { searchedBytes: searchBytes, results: runs.length }
+          };
+        }
         const offsets = findPattern(buffer, pattern, options.maxResults);
         section("Find Stack Bytes");
-        info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_a = regs.spName) != null ? _a : "sp").toUpperCase()})`);
+        info(`Start: ${formatAddress(regs.sp, pointerSize)} (${((_b = regs.spName) != null ? _b : "sp").toUpperCase()})`);
         if (bounds.base !== void 0) {
           info(`StackBase: ${formatAddress(bounds.base, pointerSize)}`);
         }
@@ -20480,7 +20581,8 @@ var osed_bundle = (() => {
         return {
           bytes: parseHexByteList(args[0]),
           maxResults: args[1],
-          stackBytes: args[2]
+          stackBytes: args[2],
+          mode: args[3]
         };
       case "find_mem_bytes":
         return {

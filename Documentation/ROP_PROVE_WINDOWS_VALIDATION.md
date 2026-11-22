@@ -26,12 +26,12 @@ Record the executable SHA-256, module base, gadget addresses, IAT slot, and `!vp
 ## Gate A: guided gadget and IAT proof
 
 1. Generate or supply a chain containing the exported dereference and dispatch sequence.
-2. Start through `dx @$osed().rop.prove({mode:"guided"})`.
+2. Start through `dx @$osed().rop.prove("guided")`.
 3. Confirm exactly one proof-marked one-shot breakpoint appears in `bl`.
 4. Issue `g` yourself. After each stop run bare `dx @$osed().rop.prove()`.
 5. At the dereference boundary, record EAX as the slot address, `dd eax L1` as the little-endian API target, and the next proof breakpoint. It must be at the slot contents, not the slot address or adjacent `jmp eax` gadget.
 6. Confirm each checkpoint lists the EIP and absolute ESP assertions it evaluated. Introduce a controlled wrong stack transition once and confirm the first divergence halts without arming another checkpoint.
-7. Cancel with `dx @$osed().rop.prove({action:"cancel"})`; verify unrelated breakpoints remain.
+7. Cancel with `dx @$osed().rop.prove("cancel")`; verify unrelated breakpoints remain.
 
 Gate A passes only when real stop states match, the dynamic target came from `[EAX]`, and no extension command resumed execution.
 

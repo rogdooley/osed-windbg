@@ -65,8 +65,9 @@ dx @$osed().rop.corpus.validate()
 
 ## Step 2: Query for a gadget
 
-`rop.query` takes either a single `(field, value)` pair or an object with
-several constraints ANDed together.
+`rop.query` takes one `(field, value)` pair per call. Use the returned table to
+inspect the remaining constraints; WinDbg `dx` does not accept object literals
+as function arguments.
 
 ### Single field
 
@@ -77,35 +78,29 @@ dx @$osed().rop.query("writes", "eax")
 Returns every gadget that writes EAX — `pop eax`, `mov eax, ...`, `add eax, ...`,
 `xor eax, eax`, and so on. Useful to survey the inventory, too broad to pick from.
 
-### Object form (multiple constraints)
+### Capability query
 
 ```js
-dx @$osed().rop.query({capability: "LOAD_REGISTER", writes: ["eax"]})
+dx @$osed().rop.query("capability", "LOAD_REGISTER")
 ```
 
-`LOAD_REGISTER` is the pop-into-register capability, so this narrows to
-pop-style loads that land in EAX.
+`LOAD_REGISTER` is the pop-into-register capability. Inspect the `Writes`
+column to select a candidate that loads EAX.
 
 ## Finding a *clean* `pop eax ; ret`
 
 The important refinement after learning that `pop eax ; pop ebx ; ret` and
-`pop eax ; mov ecx, edx ; ret` both "write eax." To demand a gadget that
-touches nothing else, constrain what it must preserve:
+`pop eax ; mov ecx, edx ; ret` both "write eax." Query the capability, then
+use the detailed output to reject collateral writes:
 
 ```js
-dx @$osed().rop.query({
-  capability: "LOAD_REGISTER",
-  writes: ["eax"],
-  preservesThroughout: ["ebx","ecx","edx","esi","edi","ebp"],
-  memoryWrites: false
-})
+dx @$osed().rop.query("capability", "LOAD_REGISTER", false, true)
 ```
 
-- **`preservesThroughout`** keeps only gadgets that leave those registers as
-  identity (unchanged from start to end). A `pop eax ; pop ebx ; ret` is
-  rejected because it does not preserve EBX; a gadget with an incidental
-  `mov ecx, ...` is rejected because it does not preserve ECX.
-- **`memoryWrites: false`** drops gadgets with `mov [reg], ...` side effects.
+- Reject candidates whose `Writes` column includes registers besides EAX. A
+  `pop eax ; pop ebx ; ret` changes EBX; a gadget with an incidental
+  `mov ecx, ...` changes ECX.
+- Reject candidates reporting a memory write.
 
 The result set is effectively "clean `pop eax ; ret`."
 
@@ -146,30 +141,30 @@ construction remains RET-chain-only.
 
 ## Recipe book
 
-**A clean register load into EDX**
+**Register loads**
 ```js
-dx @$osed().rop.query({capability: "LOAD_REGISTER", writes: ["edx"], preservesThroughout: ["eax","ebx","ecx","esi","edi","ebp"]})
+dx @$osed().rop.query("capability", "LOAD_REGISTER", false, true)
 ```
 
 **An `add eax, ebx` (or any arithmetic that combines two registers)**
 ```js
-dx @$osed().rop.query({capability: "REGISTER_ADD", writes: ["eax"], reads: ["ebx"]})
+dx @$osed().rop.query("capability", "REGISTER_ADD", false, true)
 ```
 
 **Zero a register (`xor eax, eax ; ret`)**
 ```js
-dx @$osed().rop.query({capability: "ZERO_REGISTER", writes: ["eax"]})
+dx @$osed().rop.query("capability", "ZERO_REGISTER")
 ```
 
 **A stack pivot that lands from a register you control**
 ```js
-dx @$osed().rop.query({capability: "STACK_PIVOT", reads: ["eax"]})
+dx @$osed().rop.query("capability", "STACK_PIVOT", false, true)
 ```
 (or use the ranked, classified view: `rop.pivots("eax")`.)
 
 **A gadget that writes memory (for building a decoder or writing an arg)**
 ```js
-dx @$osed().rop.query({capability: "MEMORY_WRITE", writes: ["edi"]})
+dx @$osed().rop.query("capability", "MEMORY_WRITE", false, true)
 ```
 
 **Avoid `ret N` when you need a plain `ret`**

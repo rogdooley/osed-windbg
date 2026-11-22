@@ -13,8 +13,8 @@ prototypes, constant values, and the PUSHAD register maps.
 Static generation and `rop.verify()` remain hypotheses. Compare predictions with the stopped x86 target after generation:
 
 ```text
-dx @$osed().rop.generate({api:"VirtualProtect", ...})
-dx @$osed().rop.prove({mode:"guided", postcondition:true})
+dx @$osed().rop.generate("VirtualProtect")
+dx @$osed().rop.prove("guided")
 ```
 
 The extension arms one checkpoint and stops. You issue `g` manually, then call bare `rop.prove()` to examine the stop. An unexpected breakpoint or exception is recorded without consuming the expected checkpoint. Observe mode follows the same next-checkpoint rule without installing breakpoints.

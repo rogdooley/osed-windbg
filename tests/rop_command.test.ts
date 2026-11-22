@@ -485,6 +485,26 @@ describe("rop_suggest command", () => {
     ]);
   });
 
+  test("find_stack_bytes runs mode reports a bounded contiguous byte region", () => {
+    const stackPointer = BigInt("0x12ff00");
+    const stackBase = BigInt("0x130000");
+    const stackLimit = BigInt("0x12f000");
+    const stack = new Uint8Array(0x100);
+    stack.fill(0x43, 0, 0x5c);
+    stack[0x5c] = 0xf8;
+    installStackHost(stackBase, stackLimit, stackPointer, stack);
+
+    const result = createFindStackBytesCommand().execute({
+      bytes: [0x43], maxResults: 10, stackBytes: 0x100, mode: "runs",
+    });
+
+    expect(result.findings).toEqual([expect.objectContaining({
+      address: stackPointer,
+      length: 0x5c,
+      byte: 0x43,
+    })]);
+  });
+
   test("find_stack_bytes executes through the public adapter", () => {
     const logs: string[] = [];
     const stackPointer = BigInt("0x12ff00");

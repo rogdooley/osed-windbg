@@ -2,6 +2,7 @@ import { resolveTeb32Address } from "../analysis/seh";
 import { getPointerSize, readMemory, readPointer } from "../core/memory";
 import * as out from "../core/output";
 import { Command, CommandResult } from "../core/registry";
+import { findByteRuns } from "../logic/controlled_region";
 import { readRegisters } from "./triage";
 
 type StackBounds = {
@@ -55,15 +56,17 @@ export function createFindStackBytesCommand(): Command {
   return {
     name: "find_stack_bytes",
     description: "Find byte sequence hits in the current thread stack only.",
-    usage: "dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?)",
+    usage: "dx @$osed().find_stack_bytes(bytes, maxResults?, stackBytes?, mode?)",
     examples: [
       'dx @$osed().find_stack_bytes("43 43 43 43")',
       'dx @$osed().find_stack_bytes("43 43 43 43", 20, 4096)',
+      'dx @$osed().find_stack_bytes("43", 20, 4096, "runs")',
     ],
     schema: {
       bytes: { type: "array", elementType: "number", required: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       stackBytes: { type: "number", min: 16, max: 1048576 },
+      mode: { type: "string", enum: ["runs"] },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const bytes = options.bytes as number[];
@@ -97,6 +100,51 @@ export function createFindStackBytesCommand(): Command {
 
       const buffer = readMemory(regs.sp, searchBytes);
       const pattern = Uint8Array.from(bytes);
+      const runsMode = options.mode === "runs";
+      if (runsMode && pattern.length !== 1) {
+        throw new Error('runs mode requires exactly one byte, for example find_stack_bytes("43", 2000, 4096, "runs").');
+      }
+      if (runsMode) {
+        const runs = findByteRuns(buffer, pattern[0], options.maxResults as number);
+        out.section("Stack Byte Runs");
+        out.info(`Start: ${out.formatAddress(regs.sp, pointerSize)} (${(regs.spName ?? "sp").toUpperCase()})`);
+        out.info(`Searched ${searchBytes} byte(s) in the current thread stack.`);
+        out.table(
+          [
+            { key: "start", header: "Start", width: 18 },
+            { key: "end", header: "End", width: 18 },
+            { key: "length", header: "Length", width: 9 },
+            { key: "byte", header: "Byte", width: 6 },
+            { key: "offset", header: "SP Offset", width: 12 },
+          ],
+          runs.map((run) => ({
+            start: out.formatAddress(regs.sp! + BigInt(run.start), pointerSize),
+            end: out.formatAddress(regs.sp! + BigInt(run.end - 1), pointerSize),
+            length: `${run.end - run.start}`,
+            byte: out.formatHexByte(run.byte),
+            offset: `+0x${run.start.toString(16).toUpperCase()}`,
+          })),
+        );
+        const first = runs[0];
+        if (first) {
+          const next = first.end < buffer.length ? buffer[first.end] : undefined;
+          out.print(`First mismatch: ${next === undefined ? "scan limit reached" : `${out.formatAddress(regs.sp + BigInt(first.end), pointerSize)} (${out.formatHexByte(next)})`}`);
+          out.print(`DWORD aligned: ${(regs.sp + BigInt(first.start)) % BigInt(4) === BigInt(0) ? "yes" : "no"}`);
+          out.print(`Usable DWORDs: ${Math.floor((first.end - first.start) / 4)}`);
+        } else {
+          out.info("No byte runs found in the searched stack window.");
+        }
+        out.info("Scope: current thread stack only; runs stop at StackBase or the configured scan limit.");
+        return {
+          command: "find_stack_bytes",
+          args: options,
+          success: true,
+          findings: runs.map((run) => ({ ...run, address: regs.sp! + BigInt(run.start), length: run.end - run.start })),
+          warnings,
+          errors: [],
+          stats: { searchedBytes: searchBytes, results: runs.length },
+        };
+      }
       const offsets = findPattern(buffer, pattern, options.maxResults as number);
 
       out.section("Find Stack Bytes");
