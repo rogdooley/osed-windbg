@@ -32,6 +32,20 @@ describe("badchars logic", () => {
     expect(result.survivorCount).toBe(14);
   });
 
+  test("detects bytes rewritten to lower-valued replacements", () => {
+    const expected = [0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81];
+    const observed = Uint8Array.from([0x79, 0x7a, 0x7b, 0x2f, 0x7d, 0x7e, 0x7f, 0x3f, 0x81]);
+    const result = compareBadchars(observed, expected);
+
+    expect(result.badChars).toEqual([0x7c, 0x80]);
+    expect(result.mismatches).toEqual([
+      { offset: 3, expected: 0x7c, observed: 0x2f },
+      { offset: 7, expected: 0x80, observed: 0x3f },
+    ]);
+    expect(result.survivorCount).toBe(7);
+    expect(result.expectedConsumed).toBe(9);
+  });
+
   test("reports no bad chars when all bytes survive", () => {
     const expected = [0x01, 0x02, 0x03, 0x04];
     const observed = Uint8Array.from([0x01, 0x02, 0x03, 0x04]);

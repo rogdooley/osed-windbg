@@ -98,9 +98,23 @@ export function compareBadchars(observed: Uint8Array, expected: number[]): Badch
   const mismatches: BadcharMismatch[] = [];
   let e = 0;
   let o = 0;
+  let survivorCount = 0;
 
   while (e < expected.length && o < observed.length) {
     if (observed[o] === expected[e]) {
+      e += 1;
+      o += 1;
+      survivorCount += 1;
+    } else if (
+      e + 1 < expected.length
+      && o + 1 < observed.length
+      && observed[o + 1] === expected[e + 1]
+    ) {
+      // The sequence resumes at the next position, so this byte was rewritten
+      // rather than omitted.  This catches transformations such as 0x7C ->
+      // 0x2F, where the replacement sorts before the expected byte.
+      badChars.push(expected[e]);
+      mismatches.push({ offset: e, expected: expected[e], observed: observed[o] });
       e += 1;
       o += 1;
     } else if (expected[e] < observed[o]) {
@@ -115,7 +129,7 @@ export function compareBadchars(observed: Uint8Array, expected: number[]): Badch
   return {
     badChars,
     mismatches,
-    survivorCount: o,
+    survivorCount,
     expectedConsumed: e,
   };
 }

@@ -659,8 +659,15 @@ var osed_bundle = (() => {
     const mismatches = [];
     let e = 0;
     let o = 0;
+    let survivorCount = 0;
     while (e < expected.length && o < observed.length) {
       if (observed[o] === expected[e]) {
+        e += 1;
+        o += 1;
+        survivorCount += 1;
+      } else if (e + 1 < expected.length && o + 1 < observed.length && observed[o + 1] === expected[e + 1]) {
+        badChars.push(expected[e]);
+        mismatches.push({ offset: e, expected: expected[e], observed: observed[o] });
         e += 1;
         o += 1;
       } else if (expected[e] < observed[o]) {
@@ -674,7 +681,7 @@ var osed_bundle = (() => {
     return {
       badChars,
       mismatches,
-      survivorCount: o,
+      survivorCount,
       expectedConsumed: e
     };
   }
@@ -11169,10 +11176,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-21T22:13:38.222Z" : globalThis[key2];
+        value = true ? "2026-11-22T20:38:54.639Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "429a2dfe0d3a" : globalThis[key2];
+        value = true ? "644e812ff9a7" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
