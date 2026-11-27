@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, retImmBytes, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, solveAllRecipes, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
@@ -537,10 +537,12 @@ function bindApi(): OsedApi {
     const pointerSize = getPointerSize();
     return gadgets.map((gadget) => {
       const location = gadget.locations[0];
+      const retN = retImmBytes(gadget);
       const compact = {
         Address: location?.virtualAddress !== undefined ? formatAddress(BigInt(location.virtualAddress), pointerSize) : "n/a",
         Sequence: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
         Capability: primaryCapability(gadget),
+        RetN: retN < 0 ? "?" : retN === 0 ? "0" : `${retN}`,
         Stack: gadgetStackDisplay(gadget),
         Score: gadget.score.toString(),
       };
@@ -3099,6 +3101,144 @@ function bindApi(): OsedApi {
     return toDxResult("Chain Verifier", rows);
   };
 
+  // ── rop.corpus.rescan ──────────────────────────────────────────────────
+  const executeCorpusRescan = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.corpus.rescan");
+    if (corpusModules.length === 0) {
+      const rows = [{ Error: "No modules to rescan. Run rop.scan_live first to build a corpus." }];
+      renderRows("Corpus Rescan", rows);
+      setResult({ command: "rop.corpus.rescan", args: {}, success: false, findings: [], warnings: [], errors: ["No modules to rescan."] });
+      return toDxResult("Corpus Rescan", rows);
+    }
+    const requestedModules = typeof args[0] === "string"
+      ? args[0].split(/[\s,]+/).filter(Boolean)
+      : Array.isArray(args[0]) ? (args[0] as string[]).map(String).filter(Boolean) : undefined;
+    const modulesToScan = requestedModules ?? corpusModules.map((m) => m.name);
+    out.section("Corpus Rescan");
+    out.info(`Rescanning ${modulesToScan.length} module(s): ${modulesToScan.join(", ")}`);
+    return scanLiveCorpus(
+      modulesToScan,
+      { badchars: corpusBadchars.length > 0 ? [...corpusBadchars] : undefined },
+      false,
+    );
+  };
+
+  // ── rop.equiv ─────────────────────────────────────────────────────────
+  const executeRopEquiv = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.equiv");
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("Value Recipes", rows);
+      setResult({ command: "rop.equiv", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("Value Recipes", rows);
+    }
+    const equivStale = staleCorpusGuard("Value Recipes", "rop.equiv");
+    if (equivStale) return equivStale;
+
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { register: args[0], value: args[1], badchars: args[2], preserve: args[3] };
+    const register = typeof options.register === "string" ? options.register.trim().toLowerCase() : "eax";
+    const value = options.value !== undefined ? Number(options.value) >>> 0 : 0;
+    const badchars = parseBadcharsOption(options.badchars);
+    const preserve = Array.isArray(options.preserve)
+      ? options.preserve.filter((v): v is string => typeof v === "string")
+      : typeof options.preserve === "string" ? options.preserve.split(/[\s,]+/).filter(Boolean) : [];
+
+    const recipes = solveAllRecipes(
+      currentRopCorpus,
+      register,
+      value,
+      badchars,
+      preserve,
+      buildStableAddressPredicate(),
+    );
+
+    out.section(`Value Recipes: ${register.toUpperCase()} = ${hex32(value)}`);
+    if (recipes.length === 0) {
+      out.warn("No viable recipe found for this value/register/badchar combination.");
+    }
+    const rows: Array<Record<string, string>> = recipes.map((recipe, i) => {
+      const gadgetAddrs = recipe.steps
+        .filter((s) => s.kind === "gadget" && s.address !== undefined)
+        .map((s) => hex32(s.address!))
+        .join(" → ");
+      return {
+        "#": `${i + 1}`,
+        Recipe: recipe.recipe,
+        Stack: `${recipe.stackBytes}`,
+        Scratch: recipe.scratchRegister ?? "-",
+        Clobbers: recipe.clobbers.join(", "),
+        Gadgets: gadgetAddrs,
+      };
+    });
+    if (rows.length === 0) rows.push({ "#": "", Recipe: "none", Stack: "", Scratch: "", Clobbers: "", Gadgets: "" });
+
+    for (const recipe of recipes) {
+      out.info(`── ${recipe.recipe} (${recipe.stackBytes} bytes) ──`);
+      for (const step of recipe.steps) {
+        const word = step.kind === "gadget"
+          ? hex32(step.address!)
+          : step.placeholder ?? hex32(step.value!);
+        out.print(`  ${word}  # ${step.comment}`);
+      }
+    }
+
+    renderRows("Value Recipes", rows);
+    setResult({
+      command: "rop.equiv",
+      args: { register, value: hex32(value), badchars, preserve },
+      success: recipes.length > 0,
+      findings: recipes,
+      warnings: [],
+      errors: [],
+    });
+    return toDxResult("Value Recipes", rows);
+  };
+
+  // ── rop.build ─────────────────────────────────────────────────────────
+  const executeRopBuild = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.build");
+    if (!currentRopCorpus) {
+      const rows = [{ Error: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Build", rows);
+      setResult({ command: "rop.build", args: {}, success: false, findings: [], warnings: [], errors: [NO_ROP_CORPUS_MESSAGE] });
+      return toDxResult("ROP Build", rows);
+    }
+    const buildStale = staleCorpusGuard("ROP Build", "rop.build");
+    if (buildStale) return buildStale;
+
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { api: args[0], module: args[1], badchars: args[2], path: args[3] };
+    const badchars = parseBadcharsOption(options.badchars);
+    const outputPath = typeof options.path === "string" ? options.path.trim() : undefined;
+    const entrySkew = Number(options.entrySkew ?? 0);
+
+    // Delegate to rop.generate which already implements the full pipeline.
+    const genResult = executeRopGenerate({
+      ...options,
+      badchars,
+      entrySkew,
+    });
+
+    // If a path was given and the generate succeeded, write the Python output to file.
+    if (outputPath && lastResult?.success && lastResult.findings.length > 0) {
+      const findings = lastResult.findings[0] as Record<string, unknown>;
+      const python = findings.python as string[] | undefined;
+      if (python && python.length > 0) {
+        try {
+          writeProofText(outputPath, python.join("\n") + "\n");
+          out.info(`Python exploit written to: ${outputPath}`);
+        } catch (err) {
+          out.warn(`Failed to write file: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    return genResult;
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -3120,6 +3260,7 @@ function bindApi(): OsedApi {
       import: executeCorpusImport,
       validate: executeCorpusValidate,
       lookup: executeCorpusLookup,
+      rescan: executeCorpusRescan,
     },
     query: executeRopQuery,
     capabilities: executeRopCapabilities,
@@ -3144,6 +3285,8 @@ function bindApi(): OsedApi {
     generate: executeRopGenerate,
     verify: executeRopVerify,
     prove: executeRopProve,
+    equiv: executeRopEquiv,
+    build: executeRopBuild,
   };
   api.leak = {
     classify: (...args: unknown[]) => {

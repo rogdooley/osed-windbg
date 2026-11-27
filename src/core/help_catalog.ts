@@ -306,6 +306,36 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     seeAlso: ["rop.generate", "rop.verify"],
   },
   {
+    name: "rop.build",
+    description: "One-shot chain assembly with optional file output. Wraps rop.generate and writes the Python exploit to a file when a path is given. Requires a loaded corpus.",
+    usage: 'dx @$osed().rop.build(api, module?, badchars?, path?)',
+    examples: [
+      'dx @$osed().rop.build("VirtualAlloc")',
+      'dx @$osed().rop.build({api: "auto", badchars: [0,0xa,0xd], path: "C:\\\\exploit.py"})',
+    ],
+    seeAlso: ["rop.generate", "rop.scan_live", "rop.equiv"],
+  },
+  {
+    name: "rop.equiv",
+    description: "Shows all viable value-construction recipes for loading a value into a register with the current corpus. Sorted by stack cost. Useful for manual chain building or debugging why a value can't be constructed.",
+    usage: 'dx @$osed().rop.equiv(register, value, badchars?, preserve?)',
+    examples: [
+      'dx @$osed().rop.equiv("eax", 0x40, "00 0A 0D")',
+      'dx @$osed().rop.equiv({register: "ecx", value: 0x1000, badchars: [0,0xa,0xd], preserve: ["ebx"]})',
+    ],
+    seeAlso: ["rop.construct", "rop.query", "rop.build"],
+  },
+  {
+    name: "rop.corpus.rescan",
+    description: "Re-runs scan_live on the same modules the corpus was built from. Use after relaunching the target to pick up new module bases. Keeps the same badchar set.",
+    usage: 'dx @$osed().rop.corpus.rescan(modules?)',
+    examples: [
+      'dx @$osed().rop.corpus.rescan()',
+      'dx @$osed().rop.corpus.rescan("essfunc, MSA2Mfilter03")',
+    ],
+    seeAlso: ["rop.scan_live", "rop.corpus.validate", "rop.corpus.export"],
+  },
+  {
     name: "rop.export",
     description: "Exports emitted gadgets (and optionally the synthesized stack layout) as a Python exploit stub. If a file path is given, writes to disk; otherwise prints to console.",
     usage: "dx @$osed().rop.export(planId, path?)",

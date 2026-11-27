@@ -3,7 +3,7 @@ import * as out from "../core/output";
 import { getPointerSize, readMemory, tryReadMemory } from "../core/memory";
 import { scanPattern } from "../core/scan_engine";
 import { knownPatternsForPointerSize, type GadgetPattern, validateInstructionCandidateForPointerSize } from "../logic/instruction_validation";
-import { buildRopIndexFromSequences } from "../rop";
+import { buildRopIndexFromSequences, retImmBytes } from "../rop";
 import { parseInstruction } from "../semantics";
 import { SEMANTIC_SCHEMA_VERSION, type InstructionSequence, type InstructionSequenceSource, type Provenance } from "../semantics/types";
 import { findModuleByAddress, listModulesWithMitigations } from "./modules";
@@ -19,6 +19,8 @@ type RopEngine = "legacy" | "semantic";
 
 type RopSuggestOptions = ScanOptions & {
   engine: RopEngine;
+  badchars: number[];
+  cleanRet: boolean;
 };
 
 type ValidatedPatternHit = {
@@ -49,11 +51,23 @@ function normalizeRopSuggest(options: Record<string, unknown>): RopSuggestOption
   return {
     ...normalizeScan(options),
     engine: (options.engine as RopEngine | undefined) ?? "legacy",
+    badchars: Array.isArray(options.badchars) ? options.badchars as number[] : [],
+    cleanRet: (options.cleanRet as boolean | undefined) ?? false,
   };
 }
 
 function validationPass(flags: ValidationFlags): boolean {
   return flags.decoded && Boolean(flags.mnemonicMatch) && flags.executable;
+}
+
+function addressBadcharFree(address: bigint, badchars: number[]): boolean {
+  if (badchars.length === 0) return true;
+  const bad = new Set(badchars.map((b) => b & 0xff));
+  const n = Number(address & BigInt(0xffffffff)) >>> 0;
+  for (let i = 0; i < 4; i++) {
+    if (bad.has((n >>> (i * 8)) & 0xff)) return false;
+  }
+  return true;
 }
 
 function collectValidatedPatternHits(pattern: GadgetPattern, options: ScanOptions): { hits: ValidatedPatternHit[]; warnings: string[]; stats: Record<string, number> } {
@@ -190,7 +204,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
   }
 
   const index = buildRopIndexFromSequences(allHits.map((hit) => buildSequenceFromHit(hit)));
-  const gadgets = [...index.gadgets].sort((left, right) => {
+  let gadgets = [...index.gadgets].sort((left, right) => {
     if (left.score !== right.score) {
       return right.score - left.score;
     }
@@ -200,14 +214,33 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
     return leftAddress - rightAddress;
   });
 
-  const rows = gadgets.map((gadget, index) => {
+  let badcharFiltered = 0;
+  if (options.badchars.length > 0) {
+    const before = gadgets.length;
+    gadgets = gadgets.filter((gadget) => {
+      const addr = gadget.locations[0]?.virtualAddress;
+      return addr === undefined || addressBadcharFree(BigInt(addr), options.badchars);
+    });
+    badcharFiltered = before - gadgets.length;
+  }
+
+  let cleanRetFiltered = 0;
+  if (options.cleanRet) {
+    const before = gadgets.length;
+    gadgets = gadgets.filter((gadget) => retImmBytes(gadget) === 0);
+    cleanRetFiltered = before - gadgets.length;
+  }
+
+  const rows = gadgets.map((gadget, idx) => {
     const firstLocation = gadget.locations[0];
     const address = BigInt(firstLocation?.virtualAddress ?? 0);
+    const retN = retImmBytes(gadget);
     return {
-      rank: `${index + 1}`,
+      rank: `${idx + 1}`,
       address: out.formatAddress(address, pointerSize),
       mnemonic: gadget.instructions.map((instruction) => instruction.normalizedText || instruction.originalText).join(" ; "),
       category: gadget.categories[0] ?? "UNKNOWN",
+      retN: retN < 0 ? "?" : retN === 0 ? "0" : `${retN}`,
       score: `${gadget.score}`,
       python: `0x${address.toString(16).toUpperCase()}`,
       locations: `${gadget.locations.length}`,
@@ -224,6 +257,7 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
         { key: "address", header: "Address", width: 18 },
         { key: "mnemonic", header: "Mnemonic", width: 28 },
         { key: "category", header: "Category", width: 18 },
+        { key: "retN", header: "RetN", width: 6 },
         { key: "score", header: "Score", width: 6 },
         { key: "locations", header: "Locs", width: 6 },
         { key: "python", header: "Python", width: 14 },
@@ -232,6 +266,8 @@ function runSemanticRopSuggest(options: RopSuggestOptions): CommandResult {
     );
   }
 
+  if (badcharFiltered > 0) out.info(`${badcharFiltered} gadget(s) hidden — address contains badchar byte(s).`);
+  if (cleanRetFiltered > 0) out.info(`${cleanRetFiltered} gadget(s) hidden — cleanRet filter (ret N > 0).`);
   out.info("Semantic backend selected; duplicate gadgets are merged by canonical IR.");
   out.whyItMatters("Semantic gadget suggestions improve ranking, deduplication, and explainability.");
 
@@ -324,10 +360,11 @@ export function createRopCommands(): Command[] {
   const findBytes: Command = {
     name: "find_bytes",
     description: "Find byte sequence hits in PE sections of a loaded module.",
-    usage: 'dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?)',
+    usage: 'dx @$osed().find_bytes(module, bytes, maxResults?, executableOnly?, mode?, badchars?)',
     examples: [
       'dx @$osed().find_bytes("vulnserver", "FF E4")',
       'dx @$osed().find_bytes("essfunc", "58 C3", 25)',
+      'dx @$osed().find_bytes({module: "essfunc", bytes: [0x58, 0xc3], badchars: [0,0xa,0xd]})',
     ],
     schema: {
       module: { type: "string", required: true },
@@ -335,12 +372,14 @@ export function createRopCommands(): Command[] {
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
+      badchars: { type: "array", elementType: "number" },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const bytes = options.bytes as number[];
       if (bytes.length === 0 || bytes.some((value) => !Number.isInteger(value) || value < 0 || value > 0xff)) {
         throw new Error("bytes must contain 0x00..0xFF integers.");
       }
+      const badchars = Array.isArray(options.badchars) ? options.badchars as number[] : [];
 
       const scanOpts = normalizeScan(options);
       const scan = scanPattern(
@@ -353,8 +392,16 @@ export function createRopCommands(): Command[] {
         Uint8Array.from(bytes),
       );
 
+      let hits = scan.hits;
+      let badcharFiltered = 0;
+      if (badchars.length > 0) {
+        const before = hits.length;
+        hits = hits.filter((hit) => addressBadcharFree(hit, badchars));
+        badcharFiltered = before - hits.length;
+      }
+
       const pointerSize = getPointerSize();
-      const rows = scan.hits.map((hit) => ({
+      const rows = hits.map((hit) => ({
         address: out.formatAddress(hit, pointerSize),
         python: `0x${hit.toString(16).toUpperCase()}`,
       }));
@@ -370,7 +417,10 @@ export function createRopCommands(): Command[] {
       for (const warning of scan.warnings) {
         out.warn(`${warning.region}: ${warning.message}`);
       }
-      if (scan.stats.sectionsScanned > 0 && scan.hits.length === 0) {
+      if (badcharFiltered > 0) {
+        out.info(`${badcharFiltered} hit(s) hidden — address contains badchar byte(s).`);
+      }
+      if (scan.stats.sectionsScanned > 0 && hits.length === 0) {
         out.info(
           `Scanned ${scan.stats.sectionsScanned} section(s) in ${scan.stats.chunksRead} readable chunk(s); no byte matches found.`,
         );
@@ -386,7 +436,7 @@ export function createRopCommands(): Command[] {
         command: "find_bytes",
         args: options,
         success: true,
-        findings: scan.hits,
+        findings: hits,
         warnings: scan.warnings.map((warning) => `${warning.region}: ${warning.message}`),
         errors: [],
         stats: scan.stats,
@@ -397,11 +447,11 @@ export function createRopCommands(): Command[] {
   const ropSuggest: Command = {
     name: "rop_suggest",
     description: "Suggest common exploit-friendly gadget patterns.",
-    usage: "dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?)",
+    usage: 'dx @$osed().rop_suggest(module?, maxResults?, executableOnly?, mode?, engine?, badchars?, cleanRet?)',
     examples: [
       'dx @$osed().rop_suggest("essfunc")',
       'dx @$osed().rop_suggest("essfunc", 50, true, "fast", "semantic")',
-      'dx @$osed().rop_suggest("", 50, true, "thorough", "legacy")',
+      'dx @$osed().rop_suggest({module: "essfunc", engine: "semantic", badchars: [0,0xa,0xd], cleanRet: true})',
     ],
     schema: {
       module: { type: "string" },
@@ -409,6 +459,8 @@ export function createRopCommands(): Command[] {
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
       engine: { type: "string", enum: ["legacy", "semantic"], default: "legacy" },
+      badchars: { type: "array", elementType: "number" },
+      cleanRet: { type: "boolean", default: false },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const scanOptions = normalizeRopSuggest(options);
@@ -426,16 +478,18 @@ export function createRopCommands(): Command[] {
   const retnGadgets: Command = {
     name: "retn",
     description: "Scan for retn N gadgets that pop N bytes before returning.",
-    usage: "dx @$osed().retn(module?, maxResults?, executableOnly?, mode?)",
+    usage: "dx @$osed().retn(module?, maxResults?, executableOnly?, mode?, badchars?)",
     examples: [
       'dx @$osed().retn("essfunc")',
       'dx @$osed().retn("essfunc", 100)',
+      'dx @$osed().retn({module: "essfunc", badchars: [0,0xa,0xd]})',
     ],
     schema: {
       module: { type: "string" },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
+      badchars: { type: "array", elementType: "number" },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const pointerSize = getPointerSize();
@@ -443,6 +497,7 @@ export function createRopCommands(): Command[] {
       const executableOnly = (options.executableOnly as boolean | undefined) ?? true;
       const moduleFilter = options.module as string | undefined;
       const chunkSize = (options.mode as string) === "thorough" ? 0x1000 : 0x4000;
+      const badchars = Array.isArray(options.badchars) ? options.badchars as number[] : [];
 
       // Scan for the retn opcode (C2) with a generous internal limit to capture diverse N values.
       const scan = scanPattern(
@@ -457,10 +512,11 @@ export function createRopCommands(): Command[] {
       const groups = new Map<number, Group>();
 
       for (const hit of scan.hits) {
+        if (badchars.length > 0 && !addressBadcharFree(hit, badchars)) continue;
         const bytes = tryReadMemory(hit, 3);
         if (!bytes || bytes.length < 3 || bytes[0] !== 0xc2) continue;
         const n = bytes[1] | (bytes[2] << 8);
-        if (n === 0) continue; // retn 0 is functionally ret — not useful for chain adjustment
+        if (n === 0) continue;
         const existing = groups.get(n);
         if (existing) {
           existing.count += 1;
@@ -514,16 +570,18 @@ export function createRopCommands(): Command[] {
   const addEsp: Command = {
     name: "add_esp",
     description: "Scan for add esp, N ; ret gadgets used to skip stack slots in ROP chains.",
-    usage: "dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?)",
+    usage: "dx @$osed().add_esp(module?, maxResults?, executableOnly?, mode?, badchars?)",
     examples: [
       'dx @$osed().add_esp("essfunc")',
       'dx @$osed().add_esp("essfunc", 100)',
+      'dx @$osed().add_esp({module: "essfunc", badchars: [0,0xa,0xd]})',
     ],
     schema: {
       module: { type: "string" },
       executableOnly: { type: "boolean", default: true },
       maxResults: { type: "number", min: 1, max: 200, default: 50 },
       mode: { type: "string", enum: ["fast", "thorough"], default: "fast" },
+      badchars: { type: "array", elementType: "number" },
     },
     execute(options: Record<string, unknown>): CommandResult {
       const pointerSize = getPointerSize();
@@ -531,6 +589,7 @@ export function createRopCommands(): Command[] {
       const executableOnly = (options.executableOnly as boolean | undefined) ?? true;
       const moduleFilter = options.module as string | undefined;
       const chunkSize = (options.mode as string) === "thorough" ? 0x1000 : 0x4000;
+      const badchars = Array.isArray(options.badchars) ? options.badchars as number[] : [];
 
       const warnings: string[] = [];
 
@@ -542,9 +601,10 @@ export function createRopCommands(): Command[] {
       const scan8 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([0x83, 0xc4]));
       warnings.push(...scan8.warnings.map((w) => `${w.region}: ${w.message}`));
       for (const hit of scan8.hits) {
+        if (badchars.length > 0 && !addressBadcharFree(hit, badchars)) continue;
         const bytes = tryReadMemory(hit, 4);
         if (!bytes || bytes.length < 4 || bytes[0] !== 0x83 || bytes[1] !== 0xc4 || bytes[3] !== 0xc3) continue;
-        const n = bytes[2]; // imm8 (treat as unsigned for display)
+        const n = bytes[2];
         if (n === 0) continue;
         const existing = groups.get(n);
         if (existing) { existing.count += 1; } else { groups.set(n, { first: hit, count: 1, imm32: false }); }
@@ -554,11 +614,11 @@ export function createRopCommands(): Command[] {
       const scan32 = scanPattern({ module: moduleFilter, executableOnly, maxResults: 200, chunkSize }, Uint8Array.from([0x81, 0xc4]));
       warnings.push(...scan32.warnings.map((w) => `${w.region}: ${w.message}`));
       for (const hit of scan32.hits) {
+        if (badchars.length > 0 && !addressBadcharFree(hit, badchars)) continue;
         const bytes = tryReadMemory(hit, 7);
         if (!bytes || bytes.length < 7 || bytes[0] !== 0x81 || bytes[1] !== 0xc4 || bytes[6] !== 0xc3) continue;
         const n = bytes[2] | (bytes[3] << 8) | (bytes[4] << 16) | (bytes[5] << 24);
         if (n <= 0) continue;
-        // Only add if we don't already have it from the imm8 scan (n > 255 means imm32-only)
         if (!groups.has(n)) { groups.set(n, { first: hit, count: 1, imm32: true }); }
         else { groups.get(n)!.count += 1; }
       }

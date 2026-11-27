@@ -505,8 +505,6 @@ export function solveValue(
   const reg = register.trim().toLowerCase();
   const v = value >>> 0;
   const bc = new Set(badchars.map((b) => b & 0xff));
-  // The target register is clobbered by definition; drop it from the preserve
-  // set so it can never exclude its own construction.
   const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
   preserve.delete(reg);
 
@@ -520,6 +518,39 @@ export function solveValue(
       ?? tryTwoOp(index, reg, v, bc, preserve, "sub")
       ?? tryZeroAdd(index, reg, v, bc, preserve)
       ?? tryZeroSubNeg(index, reg, v, bc, preserve);
+  } finally {
+    setStableAddressHint(prevHint);
+  }
+}
+
+export function solveAllRecipes(
+  index: CapabilityIndex,
+  register: string,
+  value: number,
+  badchars: number[],
+  preserveRegisters: string[] = [],
+  preferStable?: (address: bigint) => boolean,
+): ValueRecipe[] {
+  const reg = register.trim().toLowerCase();
+  const v = value >>> 0;
+  const bc = new Set(badchars.map((b) => b & 0xff));
+  const preserve = new Set(preserveRegisters.map((r) => r.trim().toLowerCase()));
+  preserve.delete(reg);
+
+  const prevHint = getStableAddressHint();
+  setStableAddressHint(preferStable ?? prevHint);
+  try {
+    const recipes: ValueRecipe[] = [];
+    const tryPush = (r: ValueRecipe | undefined): void => { if (r) recipes.push(r); };
+    tryPush(tryDirect(index, reg, v, bc, preserve));
+    tryPush(tryNegate(index, reg, v, bc, preserve));
+    tryPush(tryComplement(index, reg, v, bc, preserve));
+    tryPush(tryTwoOp(index, reg, v, bc, preserve, "add"));
+    tryPush(tryTwoOp(index, reg, v, bc, preserve, "sub"));
+    tryPush(tryZeroAdd(index, reg, v, bc, preserve));
+    tryPush(tryZeroSubNeg(index, reg, v, bc, preserve));
+    recipes.sort((a, b) => a.stackBytes - b.stackBytes);
+    return recipes;
   } finally {
     setStableAddressHint(prevHint);
   }
