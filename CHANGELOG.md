@@ -7,6 +7,32 @@ first appeared or materially changed; they are not package release dates.
 
 ## Timeline
 
+### 2026-11-27 - Help redesign, gadget analysis, chain editing, and IAT scanning
+
+- Added `help("workflow")` / `help("guide")` — a step-by-step exploit pipeline guide
+  covering 8 phases from crash analysis through payload assembly with commands and
+  checkpoint summaries at each stage.
+- Updated help overview to surface new commands; added "analysis" and "editing" task
+  groups to the ROP namespace view; added missing listing summaries.
+- Added `rop.gadget_info(address)` — full semantic breakdown of a single corpus gadget:
+  all capabilities, side effects (clobbers, fillers, safety), stack delta, retN, register
+  transforms, memory reads/writes, badchar safety, categories, and all corpus locations.
+- Added `rop.chain_edit(stepIndex, newAddress)` — hot-patches a gadget in the last
+  `rop.generate` chain by step index, looks up the replacement in the corpus, and
+  re-emits the Python chain without re-running the full pipeline.
+- Added `sc.iat_scan(badchars?)` — bulk IAT dump across all loaded modules with a
+  `SlotSafe` column showing whether each slot address is free of specified badchar bytes.
+- Added `rop.build(api, module?, badchars?, path?)` — wraps `rop.generate` and optionally
+  writes the Python exploit to a file path.
+- Added `rop.equiv(register, value, badchars?, preserve?)` — shows all viable
+  value-construction recipes for loading a value into a register, sorted by stack cost.
+- Added `rop.corpus.rescan(modules?)` — re-scans the same modules the corpus was built
+  from to pick up new module bases after target relaunch; keeps the same badchar set.
+- Added RetN column to `rop.query` compact output showing the `ret N` immediate value.
+- Added badchar address filtering to `find_bytes`, `retn`, and `add_esp` scan commands.
+- Exported `gadgetEffects()` and `GadgetEffects` type from the value solver for use by
+  `rop.gadget_info`.
+
 ### 2026-10-19 - Guided ROP proof workflow
 
 - Added `rop.prove()` guided and observation-only modes with incremental semantic checkpoints, one extension-owned one-shot breakpoint, manual execution control, and first-divergence diagnostics.

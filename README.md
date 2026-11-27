@@ -52,6 +52,9 @@ If the banner or `version()` reports `dev` / `unknown`, you are not loading a pr
 ; List all commands
 dx @$osed().help()
 
+; Step-by-step exploit pipeline guide
+dx @$osed().help("workflow")
+
 ; Detail on one command
 dx @$osed().help("rop_suggest")
 
@@ -69,7 +72,7 @@ dx @$osed().rop_suggest("essfunc", 50)
 
 | Command | What it does |
 | --- | --- |
-| `help(command?)` | List commands or print the schema for one. |
+| `help(command?)` | List commands, print details for one, or show the pipeline guide with `help("workflow")`. |
 | `triage(length?, badchars?, module?, stackBytes?)` | Fast crash triage: control detection, SEH chain, stack context, gadget summary. |
 | `memory(address)` | Return normalized memory-region evidence, including tri-state access flags and raw protection metadata. |
 | `can_execute(address)` | Project the normalized executable flag from `memory(address)` as `true`, `false`, or `null`. |
@@ -209,6 +212,38 @@ dx @$osed().rop.export(1)                            ; print to console
 dx @$osed().rop.export(1, "C:\\exploit\\rop.py")      ; write to file
 ```
 
+#### Automated chain generation
+
+`rop.generate` and `rop.build` automate the full pipeline — scan through a working exploit Python script in a single call.
+
+```
+dx @$osed().rop.generate({api: "VirtualAlloc", module: "essfunc", badchars: "00 0A 0D"})
+dx @$osed().rop.build({api: "auto", badchars: [0,0xa,0xd], path: "C:\\exploit.py"})
+```
+
+#### Gadget analysis
+
+Deep-dive a single gadget or explore value-construction recipes:
+
+```
+; Full semantic breakdown: capabilities, side effects, clobbers, retN, transforms
+dx @$osed().rop.gadget_info(0x625011AF)
+
+; All viable recipes to load a value into a register
+dx @$osed().rop.equiv("eax", 0x40, "00 0A 0D")
+
+; Re-scan modules after target relaunch (keeps badchar set)
+dx @$osed().rop.corpus.rescan()
+```
+
+#### Chain editing
+
+Hot-patch a gadget in the last generated chain without re-running the full pipeline:
+
+```
+dx @$osed().rop.chain_edit(0, 0x625011AF)   ; replace step 0 with a new gadget
+```
+
 #### Pivot finder
 
 Finds, classifies, and ranks stack pivot gadgets from the corpus. Pivots are classified as `register` (xchg/mov esp), `esp-adjust` (add/sub esp), or `memory` (indirect).
@@ -296,7 +331,10 @@ dx @$osed().sc.exports("kernel32", "Virtual")
 dx @$osed().sc.hash("WinExec", "ROR13")
 dx @$osed().sc.hashresolve("kernel32", 0x7c0dfcaa, "ROR13")
 dx @$osed().sc.iat_find("VirtualAlloc")
+dx @$osed().sc.iat_scan("00 0A 0D")
 ```
+
+`sc.iat_scan` enumerates the IAT of every loaded module and flags which slot addresses are badchar-safe — useful for finding usable IAT slots for DEP bypass chains.
 
 ---
 
