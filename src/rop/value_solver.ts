@@ -53,7 +53,7 @@ function parseImmediate(operand: string | undefined): number | undefined {
   return undefined;
 }
 
-interface GadgetEffects {
+export interface GadgetEffects {
   /** 32-bit registers written as a side effect (excludes the primary instruction's target). */
   clobbers: string[];
   /** Filler words for every extra stack slot the gadget consumes past its primary op, in stack order. */
@@ -72,7 +72,7 @@ interface GadgetEffects {
  * live registers. Gadgets whose ESP movement cannot be cleanly padded are
  * marked unsafe and excluded from selection.
  */
-function gadgetEffects(gadget: RopGadget): GadgetEffects {
+export function gadgetEffects(gadget: RopGadget): GadgetEffects {
   const insns = gadget.instructions;
   const clobbers = new Set<string>();
   const fillers: ChainStep[] = [];

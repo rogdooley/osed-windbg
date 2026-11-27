@@ -1246,6 +1246,42 @@ class ShellcodeHelper {
     return rows;
   }
 
+  public iat_scan(badchars: number[] = []): Array<Record<string, string>> {
+    const badSet = new Set(badchars.map((b) => b & 0xff));
+    const addressIsSafe = (addr: bigint): boolean => {
+      if (badSet.size === 0) return true;
+      const word = Number(addr & BigInt(0xffffffff)) >>> 0;
+      for (let shift = 0; shift < 32; shift += 8) {
+        if (badSet.has((word >>> shift) & 0xff)) return false;
+      }
+      return true;
+    };
+    const rows: Array<Record<string, string>> = [];
+    for (const module of this.readModules()) {
+      try {
+        const entries = this.iatResolver.enumerateIat(module);
+        for (const entry of entries) {
+          const slotSafe = addressIsSafe(entry.slot);
+          rows.push({
+            Owner: toDmlModule(entry.ownerModule),
+            DLL: toDmlModule(entry.importDll),
+            Symbol: toDmlSymbol(entry.importDll, entry.symbol),
+            Slot: toDmlAddress(entry.slot, "dps"),
+            Target: toDmlAddress(entry.target, "u"),
+            SlotSafe: slotSafe ? "yes" : "NO",
+            Status: entry.status,
+          });
+        }
+      } catch (_error) {
+        // Continue scanning other modules.
+      }
+    }
+    if (rows.length === 0) {
+      return this.errorRows("No IAT entries found across any loaded module.");
+    }
+    return rows;
+  }
+
   public iat_ptr(moduleName: string, symbol: string): Array<Record<string, string>> {
     const lookup = this.findModule(moduleName);
     if (lookup.kind !== "ok") {
@@ -1747,6 +1783,7 @@ export function createShellcodeNamespace(): {
   exportwalk: (module: string, symbol?: string, verbose?: boolean) => DxResult;
   iat: (module?: string, filter?: string) => DxResult;
   iat_find: (symbol: string) => DxResult;
+  iat_scan: (badchars?: string) => DxResult;
   iat_ptr: (module: string, symbol: string) => DxResult;
   /** Internal structured snapshot consumed by rop.api_plan. */
   api_plan: (target: string, badchars?: number[]) => ApiPlanSnapshot;
@@ -1757,6 +1794,10 @@ export function createShellcodeNamespace(): {
     return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
   };
   const wantsHelp = (value: unknown): boolean => value === "help";
+  const parseBadchars = (value: unknown): number[] => {
+    if (!value || typeof value !== "string") return [];
+    return value.split(/[\s,]+/).filter(Boolean).map((tok) => parseInt(tok, 16)).filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xff);
+  };
   const renderAndReturn = (title: string, rows: Array<Record<string, string>>): DxResult => {
     if (rows.length === 0) {
       return toDxResult(title, rows);
@@ -1798,6 +1839,7 @@ export function createShellcodeNamespace(): {
     exportwalk: (module: string, symbol?: string, verbose?: boolean) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
     iat: (module?: string, filter?: string) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
     iat_find: (symbol: string) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
+    iat_scan: (badchars?: string) => wantsHelp(badchars) ? helperHelp("sc.iat_scan") : renderAndReturn("sc.iat_scan", helper.iat_scan(parseBadchars(badchars))),
     iat_ptr: (module: string, symbol: string) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
     api_plan: (target: string, badchars: number[] = []) => helper.apiPlan(target, badchars),
   };

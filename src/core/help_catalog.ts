@@ -590,6 +590,39 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     usage: "dx @$osed().exploit.clear()",
     examples: ["dx @$osed().exploit.clear()"],
   },
+  {
+    name: "rop.gadget_info",
+    description: "Full semantic breakdown of a single gadget by address. Shows instruction sequence, all capabilities, side effects (clobbers, fillers, safety), stack delta, retN, register transforms, memory reads/writes, badchar safety, and all corpus locations.",
+    usage: "dx @$osed().rop.gadget_info(address)",
+    examples: [
+      "dx @$osed().rop.gadget_info(0x10154112)",
+      "dx @$osed().rop.gadget_info(0x625011AF)",
+    ],
+    details: "Deep-dives a single gadget from the active corpus. Unlike corpus.lookup (which gives a quick summary), gadget_info exposes every semantic property the pipeline knows about the gadget, including the full side-effect model from value_solver — the same analysis rop.generate uses when deciding whether a gadget is safe to include in a chain.",
+    seeAlso: ["rop.corpus.lookup", "rop.query", "rop.equiv"],
+  },
+  {
+    name: "rop.chain_edit",
+    description: "Swaps a gadget at a specific step index in the last rop.generate chain and re-emits the Python. Use after rop.generate to hot-patch one gadget without re-running the full pipeline.",
+    usage: "dx @$osed().rop.chain_edit(stepIndex, newGadgetAddress)",
+    examples: [
+      "dx @$osed().rop.chain_edit(0, 0x625011AF)",
+      'dx @$osed().rop.chain_edit({step: 2, address: 0x10154112})',
+    ],
+    details: "Edits the chain in place: replaces the gadget at the given step index with a new address, looks up the new gadget in the corpus for its instruction label, and re-emits the full Python chain. Only gadget steps can be edited — value/filler slots cannot. The step index is zero-based and corresponds to the chain's stack layout order.",
+    seeAlso: ["rop.generate", "rop.build", "rop.gadget_info"],
+  },
+  {
+    name: "sc.iat_scan",
+    description: "Bulk IAT dump across all loaded modules. Shows every IAT entry with its slot address and whether that slot address is badchar-safe. Use to find usable IAT slots for DEP bypass chains.",
+    usage: 'dx @$osed().sc.iat_scan(badchars?)',
+    examples: [
+      "dx @$osed().sc.iat_scan()",
+      'dx @$osed().sc.iat_scan("00 0a 0d")',
+    ],
+    details: "Enumerates the Import Address Table of every loaded module and reports each entry's slot address, target, and badchar safety. Without badchars, all slots show as safe. This is the bulk version of sc.iat (single module) and sc.iat_find (symbol search) — it gives you the full picture across the process.",
+    seeAlso: ["sc.iat", "sc.iat_find", "sc.iat_ptr"],
+  },
 ];
 
 export function findHelpEntry(name: string): HelpEntry | undefined {

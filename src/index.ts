@@ -45,7 +45,7 @@ import { createRopTemplateCommand } from "./commands/rop_template";
 import { createCodeCavesCommand } from "./commands/code_caves";
 import { createFmtCommands } from "./commands/fmtstr";
 import { createShellcodeNamespace } from "./shellcode";
-import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, retImmBytes, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, solveAllRecipes, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
+import { buildBestApiResolution, buildCapabilityIndexFromRpPlusText, buildCapabilityIndexFromSequences, classifyPivotSource, dwordIsByteSafe, emissionRows, exportCorpus, filterCorpusByBadchars, firstKnownAddress, fixRetImmPadding, formatChainPython, formatExportPython, gadgetSequence, hex32, importCorpus, mergeCapabilityIndexes, normalizeExploitStrategy, planExploitStrategy, planRegisterSetup, planVirtualAlloc, planVirtualAllocFrame, planVirtualProtect, planVirtualProtectFrame, planWriteProcessMemory, planWriteProcessMemoryFrame, planRegisterSetupPacking, planWriteFrame, planSlotDispatch, retImmBytes, validateCorpus, type CorpusFingerprint, type ImportedCorpus, type FrameWord, type SlotDispatchPlan, RankedSemanticEmitter, solveValue, solveAllRecipes, gadgetEffects, strategyPlanRows, summarizeCapabilities, synthesize, synthesisRows, type ApiResolutionMode, type CapabilityIndex, type ChainTarget, type ControlMechanism, type EmissionResult, type ExploitState, type ExportableEmission, type ExportableSynthesis, type FlatFramePlan, type RegisterState, type RopQuery, type RopStrategyPlan, type SynthesisResult, type ValueRecipe, type VirtualAllocFrameParams, type VirtualAllocParams, type VirtualProtectFrameParams, type VirtualProtectParams, type WriteProcessMemoryFrameParams, type WriteProcessMemoryParams } from "./rop";
 import { buildExploitFrame } from "./rop/exploit_frame";
 import { verifyChain, parseManualChain, type VerificationReport } from "./rop/chain_verifier";
 import { discoverLiveGadgets, type LiveDiscoveryOptions } from "./analysis/live_gadgets";
@@ -995,6 +995,107 @@ function bindApi(): OsedApi {
     renderRows("ROP Corpus Lookup", rows);
     setResult({ command: "rop.corpus.lookup", args: { address }, success: true, findings: matches, warnings: [], errors: [] });
     return toDxResult("ROP Corpus Lookup", rows);
+  };
+
+  // ── rop.gadget_info ──────────────────────────────────────────────────
+  const executeRopGadgetInfo = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.gadget_info");
+    const address = Number(args[0]);
+    if (!Number.isFinite(address)) {
+      const rows = [{ Status: "ERROR", Detail: "rop.gadget_info requires a numeric gadget address." }];
+      renderRows("ROP Gadget Info", rows);
+      return toDxResult("ROP Gadget Info", rows);
+    }
+    if (!currentRopCorpus) {
+      const rows = [{ Status: "ERROR", Detail: NO_ROP_CORPUS_MESSAGE }];
+      renderRows("ROP Gadget Info", rows);
+      return toDxResult("ROP Gadget Info", rows);
+    }
+    const gadget = currentRopCorpus.gadgets.find((g) => g.locations.some((loc) => loc.virtualAddress === (address >>> 0)));
+    if (!gadget) {
+      const rows = [{ Status: "NOT_FOUND", Address: hex32(BigInt(address)), Detail: "Address is not in the active corpus." }];
+      renderRows("ROP Gadget Info", rows);
+      return toDxResult("ROP Gadget Info", rows);
+    }
+
+    const effects = gadgetEffects(gadget);
+    const retN = retImmBytes(gadget);
+    const summary = gadget.semanticSummary.summary;
+    const badchars = corpusBadchars ?? [];
+    const addrBigInt = BigInt(address >>> 0);
+    const addrSafe = badchars.length > 0 ? dwordIsByteSafe(addrBigInt, badchars) : true;
+
+    const rows: Array<Record<string, string>> = [];
+
+    // Basic info
+    const loc = gadget.locations.find((l) => l.virtualAddress === (address >>> 0));
+    rows.push({
+      Field: "Address",
+      Value: hex32(addrBigInt),
+      Detail: loc?.module ?? "",
+    });
+    rows.push({
+      Field: "Sequence",
+      Value: gadget.instructions.map((i) => i.normalizedText || i.originalText).join(" ; "),
+      Detail: `${gadget.instructions.length} instruction${gadget.instructions.length === 1 ? "" : "s"}`,
+    });
+
+    // Capabilities
+    for (const cap of gadget.capabilities) {
+      const parts: string[] = [cap.kind];
+      if ("register" in cap && typeof cap.register === "string") parts.push(`reg=${cap.register}`);
+      if ("source" in cap && typeof cap.source === "string") parts.push(`src=${cap.source}`);
+      if ("destination" in cap && typeof cap.destination === "string") parts.push(`dst=${cap.destination}`);
+      rows.push({ Field: "Capability", Value: parts[0], Detail: parts.slice(1).join(", ") });
+    }
+
+    // Stack delta
+    rows.push({ Field: "StackDelta", Value: gadgetStackDisplay(gadget), Detail: formatSemanticField(summary.stackDelta) });
+
+    // RetN
+    rows.push({ Field: "RetN", Value: retN < 0 ? "not ret-terminated" : retN === 0 ? "clean (ret)" : `${retN} bytes (ret 0x${retN.toString(16)})`, Detail: "" });
+
+    // Side effects
+    rows.push({ Field: "Clobbers", Value: effects.clobbers.length > 0 ? effects.clobbers.join(", ") : "none", Detail: "" });
+    rows.push({ Field: "Safe", Value: effects.safe ? "yes" : "no", Detail: effects.reason ?? "" });
+    rows.push({ Field: "Fillers", Value: effects.fillers.length > 0 ? `${effects.fillers.length} slot${effects.fillers.length === 1 ? "" : "s"}` : "none", Detail: effects.fillers.map((f) => f.comment).join("; ") });
+
+    // Memory access
+    rows.push({ Field: "MemReads", Value: formatSemanticField(summary.reads), Detail: "" });
+    rows.push({ Field: "MemWrites", Value: formatSemanticField(summary.writes), Detail: "" });
+
+    // Categories
+    if (gadget.categories.length > 0) {
+      rows.push({ Field: "Categories", Value: gadget.categories.join(", "), Detail: "" });
+    }
+
+    // Register transforms from semanticSummary
+    const transforms = summary.registerTransforms;
+    if (transforms) {
+      for (const [reg, expr] of Object.entries(transforms)) {
+        if (expr.kind === "unknown") continue;
+        let desc: string;
+        if (expr.kind === "constant") desc = `0x${(expr.value >>> 0).toString(16)}`;
+        else if (expr.kind === "affine") desc = expr.base === "none" ? `${expr.offset}` : expr.offset ? `${expr.base} + ${expr.offset}` : `${expr.base}`;
+        else if (expr.kind === "memory") desc = `[mem]`;
+        else desc = "?";
+        rows.push({ Field: "Transform", Value: `${reg} ← ${desc}`, Detail: expr.kind });
+      }
+    }
+
+    // Badchar safety
+    rows.push({ Field: "AddrBadcharSafe", Value: addrSafe ? "yes" : "NO — address contains badchar bytes", Detail: badchars.length > 0 ? `badchars: ${badchars.map((b) => `0x${b.toString(16).padStart(2, "0")}`).join(", ")}` : "no badchars set" });
+
+    // All locations
+    if (gadget.locations.length > 1) {
+      for (const l of gadget.locations) {
+        rows.push({ Field: "Location", Value: hex32(BigInt(l.virtualAddress ?? 0)), Detail: l.module ?? "unknown" });
+      }
+    }
+
+    renderRows("ROP Gadget Info", rows);
+    setResult({ command: "rop.gadget_info", args: { address }, success: true, findings: [{ gadget, effects, retN, addrSafe }], warnings: [], errors: [] });
+    return toDxResult("ROP Gadget Info", rows);
   };
 
   const executeRopQuery = (...args: unknown[]): DxResult => {
@@ -3118,7 +3219,7 @@ function bindApi(): OsedApi {
     out.info(`Rescanning ${modulesToScan.length} module(s): ${modulesToScan.join(", ")}`);
     return scanLiveCorpus(
       modulesToScan,
-      { badchars: corpusBadchars.length > 0 ? [...corpusBadchars] : undefined },
+      { badchars: corpusBadchars && corpusBadchars.length > 0 ? [...corpusBadchars] : undefined },
       false,
     );
   };
@@ -3239,6 +3340,80 @@ function bindApi(): OsedApi {
     return genResult;
   };
 
+  // ── rop.chain_edit ────────────────────────────────────────────────────
+  const executeRopChainEdit = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.chain_edit");
+    const options = isPlainObject(args[0])
+      ? args[0]
+      : { step: args[0], address: args[1] };
+    const stepIndex = Number(options.step);
+    const newAddress = Number(options.address);
+    if (!Number.isFinite(stepIndex) || !Number.isFinite(newAddress)) {
+      const rows = [{ Status: "ERROR", Detail: "Usage: rop.chain_edit(stepIndex, newGadgetAddress). Both must be numeric." }];
+      renderRows("ROP Chain Edit", rows);
+      return toDxResult("ROP Chain Edit", rows);
+    }
+
+    if (!lastResult || lastResult.command !== "rop.generate" || !lastResult.success || lastResult.findings.length === 0) {
+      const rows = [{ Status: "ERROR", Detail: "No prior rop.generate result to edit. Run rop.generate first." }];
+      renderRows("ROP Chain Edit", rows);
+      return toDxResult("ROP Chain Edit", rows);
+    }
+    const genFindings = lastResult.findings[0] as Record<string, unknown>;
+    const chainPlan = genFindings.chain as { steps: import("./rop/chain").ChainStep[]; success: boolean } | undefined;
+    if (!chainPlan || !chainPlan.steps || chainPlan.steps.length === 0) {
+      const rows = [{ Status: "ERROR", Detail: "Last rop.generate produced no chain steps." }];
+      renderRows("ROP Chain Edit", rows);
+      return toDxResult("ROP Chain Edit", rows);
+    }
+    if (stepIndex < 0 || stepIndex >= chainPlan.steps.length) {
+      const rows = [{ Status: "ERROR", Detail: `Step index ${stepIndex} out of range (0..${chainPlan.steps.length - 1}).` }];
+      renderRows("ROP Chain Edit", rows);
+      return toDxResult("ROP Chain Edit", rows);
+    }
+    const oldStep = chainPlan.steps[stepIndex];
+    if (oldStep.kind !== "gadget") {
+      const rows = [{ Status: "ERROR", Detail: `Step ${stepIndex} is a value slot ("${oldStep.comment}"), not a gadget. Use a gadget step index.` }];
+      renderRows("ROP Chain Edit", rows);
+      return toDxResult("ROP Chain Edit", rows);
+    }
+
+    const oldAddress = oldStep.address;
+    chainPlan.steps[stepIndex] = { ...oldStep, address: BigInt(newAddress >>> 0) };
+
+    // Look up new gadget in corpus for label
+    let newComment = oldStep.comment;
+    if (currentRopCorpus) {
+      const newGadget = currentRopCorpus.gadgets.find((g) => g.locations.some((loc) => loc.virtualAddress === (newAddress >>> 0)));
+      if (newGadget) {
+        const seq = newGadget.instructions.map((i) => i.normalizedText || i.originalText).join(" ; ");
+        newComment = seq;
+        chainPlan.steps[stepIndex].comment = newComment;
+      }
+    }
+
+    // Re-emit Python
+    const pythonLines = formatChainPython(chainPlan);
+
+    // Update lastResult findings with the edited chain
+    const newFindings = { ...genFindings, chain: chainPlan, python: pythonLines };
+    lastResult.findings[0] = newFindings;
+
+    const rows = [
+      {
+        Status: "EDITED",
+        Step: String(stepIndex),
+        OldAddress: oldAddress !== undefined ? hex32(oldAddress) : "?",
+        NewAddress: hex32(BigInt(newAddress >>> 0)),
+        Comment: newComment,
+        ChainSteps: `${chainPlan.steps.length} total`,
+      },
+    ];
+    renderRows("ROP Chain Edit", rows);
+    setResult({ command: "rop.chain_edit", args: { step: stepIndex, address: newAddress }, success: true, findings: [newFindings], warnings: [], errors: [] });
+    return toDxResult("ROP Chain Edit", rows);
+  };
+
   for (const command of registry.getAll()) {
     api[command.name] = (...args: unknown[]) => {
       return invoke(command.name, args);
@@ -3287,6 +3462,8 @@ function bindApi(): OsedApi {
     prove: executeRopProve,
     equiv: executeRopEquiv,
     build: executeRopBuild,
+    gadget_info: executeRopGadgetInfo,
+    chain_edit: executeRopChainEdit,
   };
   api.leak = {
     classify: (...args: unknown[]) => {

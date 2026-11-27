@@ -11312,6 +11312,39 @@ var osed_bundle = (() => {
       description: "Clears the cached exploit state.",
       usage: "dx @$osed().exploit.clear()",
       examples: ["dx @$osed().exploit.clear()"]
+    },
+    {
+      name: "rop.gadget_info",
+      description: "Full semantic breakdown of a single gadget by address. Shows instruction sequence, all capabilities, side effects (clobbers, fillers, safety), stack delta, retN, register transforms, memory reads/writes, badchar safety, and all corpus locations.",
+      usage: "dx @$osed().rop.gadget_info(address)",
+      examples: [
+        "dx @$osed().rop.gadget_info(0x10154112)",
+        "dx @$osed().rop.gadget_info(0x625011AF)"
+      ],
+      details: "Deep-dives a single gadget from the active corpus. Unlike corpus.lookup (which gives a quick summary), gadget_info exposes every semantic property the pipeline knows about the gadget, including the full side-effect model from value_solver \u2014 the same analysis rop.generate uses when deciding whether a gadget is safe to include in a chain.",
+      seeAlso: ["rop.corpus.lookup", "rop.query", "rop.equiv"]
+    },
+    {
+      name: "rop.chain_edit",
+      description: "Swaps a gadget at a specific step index in the last rop.generate chain and re-emits the Python. Use after rop.generate to hot-patch one gadget without re-running the full pipeline.",
+      usage: "dx @$osed().rop.chain_edit(stepIndex, newGadgetAddress)",
+      examples: [
+        "dx @$osed().rop.chain_edit(0, 0x625011AF)",
+        "dx @$osed().rop.chain_edit({step: 2, address: 0x10154112})"
+      ],
+      details: "Edits the chain in place: replaces the gadget at the given step index with a new address, looks up the new gadget in the corpus for its instruction label, and re-emits the full Python chain. Only gadget steps can be edited \u2014 value/filler slots cannot. The step index is zero-based and corresponds to the chain's stack layout order.",
+      seeAlso: ["rop.generate", "rop.build", "rop.gadget_info"]
+    },
+    {
+      name: "sc.iat_scan",
+      description: "Bulk IAT dump across all loaded modules. Shows every IAT entry with its slot address and whether that slot address is badchar-safe. Use to find usable IAT slots for DEP bypass chains.",
+      usage: "dx @$osed().sc.iat_scan(badchars?)",
+      examples: [
+        "dx @$osed().sc.iat_scan()",
+        'dx @$osed().sc.iat_scan("00 0a 0d")'
+      ],
+      details: "Enumerates the Import Address Table of every loaded module and reports each entry's slot address, target, and badchar safety. Without badchars, all slots show as safe. This is the bulk version of sc.iat (single module) and sc.iat_find (symbol search) \u2014 it gives you the full picture across the process.",
+      seeAlso: ["sc.iat", "sc.iat_find", "sc.iat_ptr"]
     }
   ];
   function findHelpEntry(name) {
@@ -11342,10 +11375,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-27T04:36:03.588Z" : globalThis[key2];
+        value = true ? "2026-11-27T04:46:48.216Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "c27326b1ed56" : globalThis[key2];
+        value = true ? "7c826c46e489" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -15110,6 +15143,40 @@ var osed_bundle = (() => {
       }
       return rows;
     }
+    iat_scan(badchars = []) {
+      const badSet = new Set(badchars.map((b) => b & 255));
+      const addressIsSafe = (addr) => {
+        if (badSet.size === 0) return true;
+        const word = Number(addr & BigInt(4294967295)) >>> 0;
+        for (let shift = 0; shift < 32; shift += 8) {
+          if (badSet.has(word >>> shift & 255)) return false;
+        }
+        return true;
+      };
+      const rows = [];
+      for (const module of this.readModules()) {
+        try {
+          const entries = this.iatResolver.enumerateIat(module);
+          for (const entry of entries) {
+            const slotSafe = addressIsSafe(entry.slot);
+            rows.push({
+              Owner: toDmlModule(entry.ownerModule),
+              DLL: toDmlModule(entry.importDll),
+              Symbol: toDmlSymbol(entry.importDll, entry.symbol),
+              Slot: toDmlAddress(entry.slot, "dps"),
+              Target: toDmlAddress(entry.target, "u"),
+              SlotSafe: slotSafe ? "yes" : "NO",
+              Status: entry.status
+            });
+          }
+        } catch (_error) {
+        }
+      }
+      if (rows.length === 0) {
+        return this.errorRows("No IAT entries found across any loaded module.");
+      }
+      return rows;
+    }
     iat_ptr(moduleName, symbol) {
       var _a;
       const lookup = this.findModule(moduleName);
@@ -15518,6 +15585,10 @@ var osed_bundle = (() => {
       return renderAndReturn(`Help: ${name}`, entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }]);
     };
     const wantsHelp = (value) => value === "help";
+    const parseBadchars = (value) => {
+      if (!value || typeof value !== "string") return [];
+      return value.split(/[\s,]+/).filter(Boolean).map((tok) => parseInt(tok, 16)).filter((n) => Number.isFinite(n) && n >= 0 && n <= 255);
+    };
     const renderAndReturn = (title, rows) => {
       if (rows.length === 0) {
         return toDxResult(title, rows);
@@ -15555,6 +15626,7 @@ var osed_bundle = (() => {
       exportwalk: (module, symbol, verbose) => wantsHelp(module) ? helperHelp("sc.exportwalk") : renderAndReturn("sc.exportwalk", helper.exportwalk(module, symbol, verbose)),
       iat: (module, filter) => wantsHelp(module) ? helperHelp("sc.iat") : renderAndReturn("sc.iat", helper.iat(module, filter)),
       iat_find: (symbol) => wantsHelp(symbol) ? helperHelp("sc.iat_find") : renderAndReturn("sc.iat_find", helper.iat_find(symbol)),
+      iat_scan: (badchars) => wantsHelp(badchars) ? helperHelp("sc.iat_scan") : renderAndReturn("sc.iat_scan", helper.iat_scan(parseBadchars(badchars))),
       iat_ptr: (module, symbol) => wantsHelp(module) ? helperHelp("sc.iat_ptr") : renderAndReturn("sc.iat_ptr", helper.iat_ptr(module, symbol)),
       api_plan: (target, badchars = []) => helper.apiPlan(target, badchars)
     };
@@ -18463,6 +18535,83 @@ var osed_bundle = (() => {
       setResult({ command: "rop.corpus.lookup", args: { address }, success: true, findings: matches, warnings: [], errors: [] });
       return toDxResult("ROP Corpus Lookup", rows);
     };
+    const executeRopGadgetInfo = (...args) => {
+      var _a, _b, _c, _d;
+      if (args.length === 1 && args[0] === "help") return helperHelp("rop.gadget_info");
+      const address = Number(args[0]);
+      if (!Number.isFinite(address)) {
+        const rows2 = [{ Status: "ERROR", Detail: "rop.gadget_info requires a numeric gadget address." }];
+        renderRows("ROP Gadget Info", rows2);
+        return toDxResult("ROP Gadget Info", rows2);
+      }
+      if (!currentRopCorpus) {
+        const rows2 = [{ Status: "ERROR", Detail: NO_ROP_CORPUS_MESSAGE }];
+        renderRows("ROP Gadget Info", rows2);
+        return toDxResult("ROP Gadget Info", rows2);
+      }
+      const gadget = currentRopCorpus.gadgets.find((g) => g.locations.some((loc2) => loc2.virtualAddress === address >>> 0));
+      if (!gadget) {
+        const rows2 = [{ Status: "NOT_FOUND", Address: hex32(BigInt(address)), Detail: "Address is not in the active corpus." }];
+        renderRows("ROP Gadget Info", rows2);
+        return toDxResult("ROP Gadget Info", rows2);
+      }
+      const effects = gadgetEffects(gadget);
+      const retN = retImmBytes(gadget);
+      const summary = gadget.semanticSummary.summary;
+      const badchars = corpusBadchars != null ? corpusBadchars : [];
+      const addrBigInt = BigInt(address >>> 0);
+      const addrSafe = badchars.length > 0 ? dwordIsByteSafe(addrBigInt, badchars) : true;
+      const rows = [];
+      const loc = gadget.locations.find((l) => l.virtualAddress === address >>> 0);
+      rows.push({
+        Field: "Address",
+        Value: hex32(addrBigInt),
+        Detail: (_a = loc == null ? void 0 : loc.module) != null ? _a : ""
+      });
+      rows.push({
+        Field: "Sequence",
+        Value: gadget.instructions.map((i) => i.normalizedText || i.originalText).join(" ; "),
+        Detail: `${gadget.instructions.length} instruction${gadget.instructions.length === 1 ? "" : "s"}`
+      });
+      for (const cap of gadget.capabilities) {
+        const parts = [cap.kind];
+        if ("register" in cap && typeof cap.register === "string") parts.push(`reg=${cap.register}`);
+        if ("source" in cap && typeof cap.source === "string") parts.push(`src=${cap.source}`);
+        if ("destination" in cap && typeof cap.destination === "string") parts.push(`dst=${cap.destination}`);
+        rows.push({ Field: "Capability", Value: parts[0], Detail: parts.slice(1).join(", ") });
+      }
+      rows.push({ Field: "StackDelta", Value: gadgetStackDisplay(gadget), Detail: formatSemanticField(summary.stackDelta) });
+      rows.push({ Field: "RetN", Value: retN < 0 ? "not ret-terminated" : retN === 0 ? "clean (ret)" : `${retN} bytes (ret 0x${retN.toString(16)})`, Detail: "" });
+      rows.push({ Field: "Clobbers", Value: effects.clobbers.length > 0 ? effects.clobbers.join(", ") : "none", Detail: "" });
+      rows.push({ Field: "Safe", Value: effects.safe ? "yes" : "no", Detail: (_b = effects.reason) != null ? _b : "" });
+      rows.push({ Field: "Fillers", Value: effects.fillers.length > 0 ? `${effects.fillers.length} slot${effects.fillers.length === 1 ? "" : "s"}` : "none", Detail: effects.fillers.map((f) => f.comment).join("; ") });
+      rows.push({ Field: "MemReads", Value: formatSemanticField(summary.reads), Detail: "" });
+      rows.push({ Field: "MemWrites", Value: formatSemanticField(summary.writes), Detail: "" });
+      if (gadget.categories.length > 0) {
+        rows.push({ Field: "Categories", Value: gadget.categories.join(", "), Detail: "" });
+      }
+      const transforms = summary.registerTransforms;
+      if (transforms) {
+        for (const [reg, expr] of Object.entries(transforms)) {
+          if (expr.kind === "unknown") continue;
+          let desc;
+          if (expr.kind === "constant") desc = `0x${(expr.value >>> 0).toString(16)}`;
+          else if (expr.kind === "affine") desc = expr.base === "none" ? `${expr.offset}` : expr.offset ? `${expr.base} + ${expr.offset}` : `${expr.base}`;
+          else if (expr.kind === "memory") desc = `[mem]`;
+          else desc = "?";
+          rows.push({ Field: "Transform", Value: `${reg} \u2190 ${desc}`, Detail: expr.kind });
+        }
+      }
+      rows.push({ Field: "AddrBadcharSafe", Value: addrSafe ? "yes" : "NO \u2014 address contains badchar bytes", Detail: badchars.length > 0 ? `badchars: ${badchars.map((b) => `0x${b.toString(16).padStart(2, "0")}`).join(", ")}` : "no badchars set" });
+      if (gadget.locations.length > 1) {
+        for (const l of gadget.locations) {
+          rows.push({ Field: "Location", Value: hex32(BigInt((_c = l.virtualAddress) != null ? _c : 0)), Detail: (_d = l.module) != null ? _d : "unknown" });
+        }
+      }
+      renderRows("ROP Gadget Info", rows);
+      setResult({ command: "rop.gadget_info", args: { address }, success: true, findings: [{ gadget, effects, retN, addrSafe }], warnings: [], errors: [] });
+      return toDxResult("ROP Gadget Info", rows);
+    };
     const executeRopQuery = (...args) => {
       var _b;
       if (args.length === 1 && args[0] === "help") {
@@ -20380,7 +20529,7 @@ var osed_bundle = (() => {
       info(`Rescanning ${modulesToScan.length} module(s): ${modulesToScan.join(", ")}`);
       return scanLiveCorpus(
         modulesToScan,
-        { badchars: corpusBadchars.length > 0 ? [...corpusBadchars] : void 0 },
+        { badchars: corpusBadchars && corpusBadchars.length > 0 ? [...corpusBadchars] : void 0 },
         false
       );
     };
@@ -20476,6 +20625,67 @@ var osed_bundle = (() => {
       }
       return genResult;
     };
+    const executeRopChainEdit = (...args) => {
+      if (args.length === 1 && args[0] === "help") return helperHelp("rop.chain_edit");
+      const options = isPlainObject(args[0]) ? args[0] : { step: args[0], address: args[1] };
+      const stepIndex = Number(options.step);
+      const newAddress = Number(options.address);
+      if (!Number.isFinite(stepIndex) || !Number.isFinite(newAddress)) {
+        const rows2 = [{ Status: "ERROR", Detail: "Usage: rop.chain_edit(stepIndex, newGadgetAddress). Both must be numeric." }];
+        renderRows("ROP Chain Edit", rows2);
+        return toDxResult("ROP Chain Edit", rows2);
+      }
+      if (!lastResult || lastResult.command !== "rop.generate" || !lastResult.success || lastResult.findings.length === 0) {
+        const rows2 = [{ Status: "ERROR", Detail: "No prior rop.generate result to edit. Run rop.generate first." }];
+        renderRows("ROP Chain Edit", rows2);
+        return toDxResult("ROP Chain Edit", rows2);
+      }
+      const genFindings = lastResult.findings[0];
+      const chainPlan = genFindings.chain;
+      if (!chainPlan || !chainPlan.steps || chainPlan.steps.length === 0) {
+        const rows2 = [{ Status: "ERROR", Detail: "Last rop.generate produced no chain steps." }];
+        renderRows("ROP Chain Edit", rows2);
+        return toDxResult("ROP Chain Edit", rows2);
+      }
+      if (stepIndex < 0 || stepIndex >= chainPlan.steps.length) {
+        const rows2 = [{ Status: "ERROR", Detail: `Step index ${stepIndex} out of range (0..${chainPlan.steps.length - 1}).` }];
+        renderRows("ROP Chain Edit", rows2);
+        return toDxResult("ROP Chain Edit", rows2);
+      }
+      const oldStep = chainPlan.steps[stepIndex];
+      if (oldStep.kind !== "gadget") {
+        const rows2 = [{ Status: "ERROR", Detail: `Step ${stepIndex} is a value slot ("${oldStep.comment}"), not a gadget. Use a gadget step index.` }];
+        renderRows("ROP Chain Edit", rows2);
+        return toDxResult("ROP Chain Edit", rows2);
+      }
+      const oldAddress = oldStep.address;
+      chainPlan.steps[stepIndex] = __spreadProps(__spreadValues({}, oldStep), { address: BigInt(newAddress >>> 0) });
+      let newComment = oldStep.comment;
+      if (currentRopCorpus) {
+        const newGadget = currentRopCorpus.gadgets.find((g) => g.locations.some((loc) => loc.virtualAddress === newAddress >>> 0));
+        if (newGadget) {
+          const seq = newGadget.instructions.map((i) => i.normalizedText || i.originalText).join(" ; ");
+          newComment = seq;
+          chainPlan.steps[stepIndex].comment = newComment;
+        }
+      }
+      const pythonLines = formatChainPython(chainPlan);
+      const newFindings = __spreadProps(__spreadValues({}, genFindings), { chain: chainPlan, python: pythonLines });
+      lastResult.findings[0] = newFindings;
+      const rows = [
+        {
+          Status: "EDITED",
+          Step: String(stepIndex),
+          OldAddress: oldAddress !== void 0 ? hex32(oldAddress) : "?",
+          NewAddress: hex32(BigInt(newAddress >>> 0)),
+          Comment: newComment,
+          ChainSteps: `${chainPlan.steps.length} total`
+        }
+      ];
+      renderRows("ROP Chain Edit", rows);
+      setResult({ command: "rop.chain_edit", args: { step: stepIndex, address: newAddress }, success: true, findings: [newFindings], warnings: [], errors: [] });
+      return toDxResult("ROP Chain Edit", rows);
+    };
     for (const command2 of registry.getAll()) {
       api[command2.name] = (...args) => {
         return invoke(command2.name, args);
@@ -20522,7 +20732,9 @@ var osed_bundle = (() => {
       verify: executeRopVerify,
       prove: executeRopProve,
       equiv: executeRopEquiv,
-      build: executeRopBuild
+      build: executeRopBuild,
+      gadget_info: executeRopGadgetInfo,
+      chain_edit: executeRopChainEdit
     };
     api.leak = {
       classify: (...args) => {
