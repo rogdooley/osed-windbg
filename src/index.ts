@@ -568,6 +568,36 @@ function bindApi(): OsedApi {
     return summarizeCapabilities(currentRopCorpus);
   };
 
+  const emitNextSteps = (command: string, success: boolean): void => {
+    if (!success) return;
+    const hints: Record<string, string[]> = {
+      "rop.scan_live": [
+        "Next: rop.query({capability: \"LOAD_REGISTER\"})  — search the corpus",
+        "      rop.capabilities()  — summarize available primitives",
+        "      rop.generate({api: \"auto\"})  — auto-build a chain",
+      ],
+      "rop.generate": [
+        "Next: rop.memory_plan()  — visualize the chain stack layout",
+        "      rop.verify()  — check chain structure and side effects",
+        "      rop.build({path: \"exploit.py\"})  — save as Python",
+      ],
+      "rop.verify": [
+        "Next: rop.prove()  — trace chain execution in WinDbg",
+        "      rop.chain_edit(step, addr)  — fix a failing gadget",
+        "      rop.memory_plan()  — inspect the stack layout",
+      ],
+      "rop.build": [
+        "Next: rop.verify()  — check chain structure and side effects",
+        "      rop.prove()  — trace execution in WinDbg",
+      ],
+    };
+    const lines = hints[command];
+    if (lines) {
+      out.print("");
+      for (const line of lines) out.info(line);
+    }
+  };
+
   const helperHelp = (name: string): DxResult => {
     const entry = findHelpEntry(name);
     const rows = entry ? helpRows(entry) : [{ Error: `Unknown helper '${name}'.` }];
@@ -586,6 +616,14 @@ function bindApi(): OsedApi {
   // Refuse to emit gadgets when a scanned module has rebased since scan time —
   // its addresses now point at the wrong memory. Returns an error DxResult to
   // return early, or undefined when the corpus is still valid.
+  const warnIfCorpusStale = (): void => {
+    const stale = corpusStaleModules();
+    if (stale.length > 0) {
+      const names = stale.map((s) => s.name).join(", ");
+      out.warn(`Corpus may be stale — ${names} rebased since scan. Run rop.corpus.rescan() to update.`);
+    }
+  };
+
   const staleCorpusGuard = (title: string, command: string): DxResult | undefined => {
     const stale = corpusStaleModules();
     if (stale.length === 0) return undefined;
@@ -741,6 +779,7 @@ function bindApi(): OsedApi {
       warnings,
       errors: [],
     });
+    emitNextSteps("rop.scan_live", true);
     const uniqueModuleNames = corpusModules.map((m) => m.name).join(", ");
     return toDxResult("Live ROP Corpus", [
       ...modules.map((mod, i) => {
@@ -979,6 +1018,7 @@ function bindApi(): OsedApi {
       renderRows("ROP Corpus Lookup", rows);
       return toDxResult("ROP Corpus Lookup", rows);
     }
+    warnIfCorpusStale();
     const matches = currentRopCorpus.gadgets.filter((gadget) => gadget.locations.some((location) => location.virtualAddress === (address >>> 0)));
     if (matches.length === 0) {
       const rows = [{ Status: "NOT_FOUND", Address: hex32(BigInt(address)), Detail: "Address is not in the active corpus; lookup does not scan memory." }];
@@ -1000,9 +1040,55 @@ function bindApi(): OsedApi {
   // ── rop.gadget_info ──────────────────────────────────────────────────
   const executeRopGadgetInfo = (...args: unknown[]): DxResult => {
     if (args.length === 1 && args[0] === "help") return helperHelp("rop.gadget_info");
+
+    // Support {step: N} to inspect a chain step
+    const opts = isPlainObject(args[0]) ? args[0] : {};
+    if ("step" in opts && opts.step !== undefined) {
+      const stepIndex = Number(opts.step);
+      const chainSource = lastResult?.command === "rop.generate" || lastResult?.command === "rop.chain_edit"
+        ? (lastResult.findings[0] as Record<string, unknown> | undefined)?.chain as { steps: import("./rop/chain").ChainStep[] } | undefined
+        : undefined;
+      if (!chainSource?.steps || chainSource.steps.length === 0) {
+        const rows = [{ Status: "ERROR", Detail: "No chain available. Run rop.generate first." }];
+        renderRows("ROP Gadget Info", rows);
+        return toDxResult("ROP Gadget Info", rows);
+      }
+      if (stepIndex < 0 || stepIndex >= chainSource.steps.length) {
+        const rows = [{ Status: "ERROR", Detail: `Step ${stepIndex} out of range (0..${chainSource.steps.length - 1}).` }];
+        renderRows("ROP Gadget Info", rows);
+        return toDxResult("ROP Gadget Info", rows);
+      }
+      const step = chainSource.steps[stepIndex];
+      if (step.kind === "gadget" && step.address !== undefined) {
+        return executeRopGadgetInfo(Number(step.address));
+      }
+      // Value/filler/placeholder step
+      const badchars = corpusBadchars ?? [];
+      const hexVal = step.value !== undefined ? hex32(BigInt(step.value >>> 0)) : step.placeholder ?? "????????";
+      const comment = (step.comment ?? "").toLowerCase();
+      let role = "value";
+      if (comment.includes("junk") || comment.includes("side effect")) role = "filler";
+      else if (comment.includes("padding") || comment.includes("ret ")) role = "retN pad";
+      else if (step.placeholder) role = "placeholder";
+      let safe = "—";
+      if (badchars.length > 0 && step.value !== undefined && !step.placeholder) {
+        safe = dwordIsByteSafe(BigInt(step.value >>> 0), badchars) ? "ok" : "BAD";
+      }
+      const rows = [
+        { Field: "Step", Value: String(stepIndex), Detail: `of ${chainSource.steps.length}` },
+        { Field: "Kind", Value: step.kind, Detail: role },
+        { Field: "Hex", Value: hexVal, Detail: "" },
+        { Field: "Comment", Value: step.comment, Detail: "" },
+        { Field: "BadcharSafe", Value: safe, Detail: badchars.length > 0 ? `${badchars.length} badchars active` : "no badchars set" },
+      ];
+      renderRows("ROP Step Info", rows);
+      setResult({ command: "rop.gadget_info", args: { step: stepIndex }, success: true, findings: [{ step, role }], warnings: [], errors: [] });
+      return toDxResult("ROP Step Info", rows);
+    }
+
     const address = Number(args[0]);
     if (!Number.isFinite(address)) {
-      const rows = [{ Status: "ERROR", Detail: "rop.gadget_info requires a numeric gadget address." }];
+      const rows = [{ Status: "ERROR", Detail: "rop.gadget_info requires a numeric address or {step: N}." }];
       renderRows("ROP Gadget Info", rows);
       return toDxResult("ROP Gadget Info", rows);
     }
@@ -1011,6 +1097,7 @@ function bindApi(): OsedApi {
       renderRows("ROP Gadget Info", rows);
       return toDxResult("ROP Gadget Info", rows);
     }
+    warnIfCorpusStale();
     const gadget = currentRopCorpus.gadgets.find((g) => g.locations.some((loc) => loc.virtualAddress === (address >>> 0)));
     if (!gadget) {
       const rows = [{ Status: "NOT_FOUND", Address: hex32(BigInt(address)), Detail: "Address is not in the active corpus." }];
@@ -1201,6 +1288,7 @@ function bindApi(): OsedApi {
     if (args.length === 1 && args[0] === "help") {
       return helperHelp("rop.capabilities");
     }
+    if (currentRopCorpus) warnIfCorpusStale();
     const rows = capabilityRows();
     renderRows("ROP Capabilities", rows);
     setResult({
@@ -2975,6 +3063,7 @@ function bindApi(): OsedApi {
     if (chainPlan?.success && chainPlan.steps.length > 0) {
       lastGeneratedProofInput = { chain: chainPlan.steps, corpus: currentRopCorpus, api: strategyName };
     }
+    emitNextSteps("rop.generate", chainPlan?.success ?? false);
     return toDxResult("Exploit Builder", rows);
   };
 
@@ -3199,6 +3288,7 @@ function bindApi(): OsedApi {
       warnings: report.static.badcharHits.map(h => `Badchar 0x${h.byte.toString(16).padStart(2, "0")} in ${h.dwordHex} at step ${h.stepIndex}`),
       errors: [],
     });
+    emitNextSteps("rop.verify", report.static.valid);
     return toDxResult("Chain Verifier", rows);
   };
 
@@ -3337,6 +3427,7 @@ function bindApi(): OsedApi {
       }
     }
 
+    emitNextSteps("rop.build", lastResult?.success ?? false);
     return genResult;
   };
 
@@ -3354,8 +3445,8 @@ function bindApi(): OsedApi {
       return toDxResult("ROP Chain Edit", rows);
     }
 
-    if (!lastResult || lastResult.command !== "rop.generate" || !lastResult.success || lastResult.findings.length === 0) {
-      const rows = [{ Status: "ERROR", Detail: "No prior rop.generate result to edit. Run rop.generate first." }];
+    if (!lastResult || !(lastResult.command === "rop.generate" || lastResult.command === "rop.chain_edit") || !lastResult.success || lastResult.findings.length === 0) {
+      const rows = [{ Status: "ERROR", Detail: "No prior rop.generate or rop.chain_edit result to edit. Run rop.generate first." }];
       renderRows("ROP Chain Edit", rows);
       return toDxResult("ROP Chain Edit", rows);
     }
@@ -3379,18 +3470,32 @@ function bindApi(): OsedApi {
     }
 
     const oldAddress = oldStep.address;
+    const oldComment = oldStep.comment;
     chainPlan.steps[stepIndex] = { ...oldStep, address: BigInt(newAddress >>> 0) };
 
-    // Look up new gadget in corpus for label
+    // Look up new gadget in corpus for label and side effects
     let newComment = oldStep.comment;
+    const editWarnings: string[] = [];
+    let newGadgetEffectsInfo: { clobbers: string[]; safe: boolean; reason?: string } | undefined;
     if (currentRopCorpus) {
       const newGadget = currentRopCorpus.gadgets.find((g) => g.locations.some((loc) => loc.virtualAddress === (newAddress >>> 0)));
       if (newGadget) {
         const seq = newGadget.instructions.map((i) => i.normalizedText || i.originalText).join(" ; ");
         newComment = seq;
         chainPlan.steps[stepIndex].comment = newComment;
+        const effects = gadgetEffects(newGadget);
+        newGadgetEffectsInfo = effects;
+        if (!effects.safe) editWarnings.push(`New gadget is unsafe: ${effects.reason}`);
+        if (effects.clobbers.length > 0) editWarnings.push(`New gadget clobbers: ${effects.clobbers.join(", ")}`);
+      } else {
+        editWarnings.push("New address not found in corpus — cannot verify side effects.");
       }
     }
+
+    // Badchar check
+    const badchars = corpusBadchars ?? [];
+    const newAddrSafe = badchars.length > 0 ? dwordIsByteSafe(BigInt(newAddress >>> 0), badchars) : true;
+    if (!newAddrSafe) editWarnings.push("New gadget address contains badchar bytes!");
 
     // Re-emit Python
     const pythonLines = formatChainPython(chainPlan);
@@ -3399,19 +3504,99 @@ function bindApi(): OsedApi {
     const newFindings = { ...genFindings, chain: chainPlan, python: pythonLines };
     lastResult.findings[0] = newFindings;
 
-    const rows = [
+    const rows: Array<Record<string, string>> = [
       {
         Status: "EDITED",
         Step: String(stepIndex),
         OldAddress: oldAddress !== undefined ? hex32(oldAddress) : "?",
         NewAddress: hex32(BigInt(newAddress >>> 0)),
-        Comment: newComment,
+        OldSequence: oldComment,
+        NewSequence: newComment,
+        AddrSafe: newAddrSafe ? "ok" : "BAD",
         ChainSteps: `${chainPlan.steps.length} total`,
       },
     ];
     renderRows("ROP Chain Edit", rows);
-    setResult({ command: "rop.chain_edit", args: { step: stepIndex, address: newAddress }, success: true, findings: [newFindings], warnings: [], errors: [] });
+    for (const w of editWarnings) out.warn(w);
+    setResult({ command: "rop.chain_edit", args: { step: stepIndex, address: newAddress }, success: true, findings: [newFindings], warnings: editWarnings, errors: [] });
     return toDxResult("ROP Chain Edit", rows);
+  };
+
+  // ── rop.memory_plan ────────────────────────────────────────────────
+  const executeRopMemoryPlan = (...args: unknown[]): DxResult => {
+    if (args.length === 1 && args[0] === "help") return helperHelp("rop.memory_plan");
+    const options = isPlainObject(args[0]) ? args[0] : { base: args[0] };
+    const baseOffset = Number(options.base ?? 0);
+
+    // Accept chain from last generate, chain_edit, or verify result
+    let steps: import("./rop/chain").ChainStep[] | undefined;
+    let sourceLabel = "none";
+    if (lastResult?.command === "rop.generate" || lastResult?.command === "rop.chain_edit") {
+      const findings = lastResult.findings[0] as Record<string, unknown> | undefined;
+      const chain = findings?.chain as { steps: import("./rop/chain").ChainStep[]; success?: boolean } | undefined;
+      if (chain?.steps && chain.steps.length > 0) {
+        steps = chain.steps;
+        sourceLabel = lastResult.command;
+      }
+    }
+    if (!steps) {
+      const rows = [{ Status: "ERROR", Detail: "No chain available. Run rop.generate or rop.build first." }];
+      renderRows("ROP Memory Plan", rows);
+      return toDxResult("ROP Memory Plan", rows);
+    }
+
+    const badchars = corpusBadchars ?? [];
+    const rows: Array<Record<string, string>> = [];
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const offset = baseOffset + i * 4;
+      const offsetHex = `+0x${offset.toString(16).padStart(4, "0").toUpperCase()}`;
+
+      let hexValue: string;
+      let role: string;
+      if (step.kind === "gadget") {
+        hexValue = step.address !== undefined ? hex32(step.address) : "????????";
+        role = "gadget";
+      } else if (step.placeholder) {
+        hexValue = step.placeholder;
+        role = "placeholder";
+      } else {
+        hexValue = step.value !== undefined ? hex32(BigInt(step.value >>> 0)) : "????????";
+        const comment = (step.comment ?? "").toLowerCase();
+        if (comment.includes("junk") || comment.includes("side effect")) role = "filler";
+        else if (comment.includes("padding") || comment.includes("ret ")) role = "retN pad";
+        else role = "value";
+      }
+
+      let safe = "—";
+      if (badchars.length > 0 && step.kind === "gadget" && step.address !== undefined) {
+        safe = dwordIsByteSafe(step.address, badchars) ? "ok" : "BAD";
+      } else if (badchars.length > 0 && step.kind === "value" && step.value !== undefined && !step.placeholder) {
+        safe = dwordIsByteSafe(BigInt(step.value >>> 0), badchars) ? "ok" : "BAD";
+      }
+
+      rows.push({
+        "#": String(i),
+        Offset: offsetHex,
+        Hex: hexValue,
+        Role: role,
+        Badchar: safe,
+        Comment: step.comment,
+      });
+    }
+
+    const totalBytes = steps.length * 4;
+    out.section("ROP Memory Plan");
+    out.info(`Source: ${sourceLabel} | ${steps.length} DWORDs | ${totalBytes} bytes (0x${totalBytes.toString(16).toUpperCase()})`);
+    if (baseOffset !== 0) out.info(`Base offset: +0x${baseOffset.toString(16).toUpperCase()}`);
+    const keys = ["#", "Offset", "Hex", "Role", "Badchar", "Comment"];
+    out.table(keys.map((k) => ({ key: k, header: k })), rows);
+    const badCount = rows.filter((r) => r.Badchar === "BAD").length;
+    if (badCount > 0) out.warn(`${badCount} DWORD(s) contain badchar bytes.`);
+
+    setResult({ command: "rop.memory_plan", args: { base: baseOffset }, success: true, findings: rows, warnings: badCount > 0 ? [`${badCount} DWORD(s) contain badchar bytes.`] : [], errors: [] });
+    return toDxResult("ROP Memory Plan", rows);
   };
 
   for (const command of registry.getAll()) {
@@ -3464,6 +3649,7 @@ function bindApi(): OsedApi {
     build: executeRopBuild,
     gadget_info: executeRopGadgetInfo,
     chain_edit: executeRopChainEdit,
+    memory_plan: executeRopMemoryPlan,
   };
   api.leak = {
     classify: (...args: unknown[]) => {

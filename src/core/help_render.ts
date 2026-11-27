@@ -235,6 +235,7 @@ export function renderWorkflow(): string[] {
     "6. CHAIN GENERATION",
     "   rop.generate({api, ...})   Auto-build an API-call chain",
     "   rop.chain_edit(step, addr) Hot-patch a gadget in the chain",
+    "   rop.memory_plan()          Visualize the chain stack layout",
     "   rop.build({api, path})     Generate + save Python exploit",
     "",
     "   Alternative (manual):",

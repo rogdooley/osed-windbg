@@ -118,6 +118,7 @@ const LISTING_SUMMARIES: Record<string, string> = {
   "rop.gadget_info": "Full semantic breakdown of a single gadget",
   "rop.chain_edit": "Hot-patch a gadget in the last generated chain",
   "rop.corpus.rescan": "Re-scan modules to pick up new bases",
+  "rop.memory_plan": "Visualize the chain stack layout",
   "sc.iat_scan": "Bulk IAT dump with badchar safety per slot",
   math: "Format an integer as hex, signed, unsigned, LE",
   leak_classify: "Classify a pointer without dereferencing",
@@ -156,7 +157,7 @@ const OVERVIEW_WORKFLOW: Array<[string, string[]]> = [
   ["crash", ["triage", "findmsp", "stackmap", "landing"]],
   ["target", ["modules", "memory", "code_caves"]],
   ["payload", ["pattern_create", "pattern_offset", "badchars"]],
-  ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.gadget_info", "rop.equiv", "rop.plan", "rop.generate", "rop.build", "rop.chain_edit", "rop.verify", "rop.prove"]],
+  ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.gadget_info", "rop.equiv", "rop.plan", "rop.generate", "rop.build", "rop.chain_edit", "rop.memory_plan", "rop.verify", "rop.prove"]],
   ["pe-api", ["sc.iat", "sc.iat_scan", "sc.iat_find", "sc.resolve"]],
   ["shellcode", ["encode", "egghunter"]],
   ["seh", ["seh", "seh_ppr"]],
@@ -186,7 +187,7 @@ function namespaceTask(name: string, entry: HelpDocument): string {
     if (entry.name.startsWith("rop.corpus.")) return "persistence";
     if (["rop.export", "rop.build"].includes(entry.name)) return "export";
     if (["rop.gadget_info", "rop.equiv"].includes(entry.name)) return "analysis";
-    if (entry.name === "rop.chain_edit") return "editing";
+    if (["rop.chain_edit", "rop.memory_plan"].includes(entry.name)) return "editing";
     if (["retn", "add_esp"].includes(entry.name)) return "control flow";
     return "construction";
   }

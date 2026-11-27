@@ -30,6 +30,20 @@ first appeared or materially changed; they are not package release dates.
   from to pick up new module bases after target relaunch; keeps the same badchar set.
 - Added RetN column to `rop.query` compact output showing the `ret N` immediate value.
 - Added badchar address filtering to `find_bytes`, `retn`, and `add_esp` scan commands.
+- Added `rop.memory_plan(baseOffset?)` — visualizes the full stack layout of the last
+  generated chain: byte offsets, hex values, roles (gadget/value/filler/retN pad/placeholder),
+  badchar safety, and semantic comments. The optional base offset shifts displayed offsets
+  to match the exploit buffer layout.
+- Enhanced `rop.gadget_info` with `{step: N}` mode to inspect chain steps by index — for
+  gadget steps, shows the full semantic breakdown; for value/filler/placeholder steps,
+  shows the slot kind, hex value, role, and badchar safety.
+- Enhanced `rop.chain_edit` to accept results from both `rop.generate` and previous
+  `rop.chain_edit` calls for iterative editing. Now shows a before/after diff, checks
+  badchar safety of the new address, and warns about side effects via `gadgetEffects`.
+- Added contextual next-step hints after `rop.scan_live`, `rop.generate`, `rop.verify`,
+  and `rop.build` to guide the pipeline workflow.
+- Added proactive corpus staleness warnings to read-only commands (`corpus.lookup`,
+  `gadget_info`, `capabilities`) when module bases have shifted since the last scan.
 - Exported `gadgetEffects()` and `GadgetEffects` type from the value solver for use by
   `rop.gadget_info`.
 

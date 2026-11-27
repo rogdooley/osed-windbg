@@ -592,25 +592,26 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
   },
   {
     name: "rop.gadget_info",
-    description: "Full semantic breakdown of a single gadget by address. Shows instruction sequence, all capabilities, side effects (clobbers, fillers, safety), stack delta, retN, register transforms, memory reads/writes, badchar safety, and all corpus locations.",
-    usage: "dx @$osed().rop.gadget_info(address)",
+    description: "Full semantic breakdown of a single gadget by address, or inspect a chain step by index. Shows instruction sequence, all capabilities, side effects (clobbers, fillers, safety), stack delta, retN, register transforms, memory reads/writes, badchar safety, and all corpus locations. For value/filler steps, shows the slot kind, hex value, role, and badchar safety.",
+    usage: "dx @$osed().rop.gadget_info(address | {step: N})",
     examples: [
       "dx @$osed().rop.gadget_info(0x10154112)",
       "dx @$osed().rop.gadget_info(0x625011AF)",
+      "dx @$osed().rop.gadget_info({step: 3})",
     ],
-    details: "Deep-dives a single gadget from the active corpus. Unlike corpus.lookup (which gives a quick summary), gadget_info exposes every semantic property the pipeline knows about the gadget, including the full side-effect model from value_solver — the same analysis rop.generate uses when deciding whether a gadget is safe to include in a chain.",
-    seeAlso: ["rop.corpus.lookup", "rop.query", "rop.equiv"],
+    details: "Deep-dives a single gadget from the active corpus. Unlike corpus.lookup (which gives a quick summary), gadget_info exposes every semantic property the pipeline knows about the gadget, including the full side-effect model from value_solver — the same analysis rop.generate uses when deciding whether a gadget is safe to include in a chain. With {step: N}, inspects the Nth step in the last generated chain: for gadget steps it recurses into the full breakdown; for value/filler/placeholder steps it reports the slot kind, hex value, comment, and badchar safety.",
+    seeAlso: ["rop.corpus.lookup", "rop.query", "rop.equiv", "rop.memory_plan"],
   },
   {
     name: "rop.chain_edit",
-    description: "Swaps a gadget at a specific step index in the last rop.generate chain and re-emits the Python. Use after rop.generate to hot-patch one gadget without re-running the full pipeline.",
+    description: "Swaps a gadget at a specific step index in the last generated or edited chain and re-emits the Python. Supports iterative editing — run chain_edit repeatedly to refine a chain without re-running the full pipeline. Shows a before/after diff, checks badchar safety, and warns about side effects.",
     usage: "dx @$osed().rop.chain_edit(stepIndex, newGadgetAddress)",
     examples: [
       "dx @$osed().rop.chain_edit(0, 0x625011AF)",
       'dx @$osed().rop.chain_edit({step: 2, address: 0x10154112})',
     ],
-    details: "Edits the chain in place: replaces the gadget at the given step index with a new address, looks up the new gadget in the corpus for its instruction label, and re-emits the full Python chain. Only gadget steps can be edited — value/filler slots cannot. The step index is zero-based and corresponds to the chain's stack layout order.",
-    seeAlso: ["rop.generate", "rop.build", "rop.gadget_info"],
+    details: "Edits the chain in place: replaces the gadget at the given step index with a new address, looks up the new gadget in the corpus for its instruction label, and re-emits the full Python chain. Accepts the result of both rop.generate and previous rop.chain_edit calls, so you can edit iteratively. Shows an OldSequence/NewSequence diff of the replaced step, checks whether the new address is badchar-safe, and warns about clobbers via gadgetEffects. Only gadget steps can be edited — value/filler slots cannot. The step index is zero-based.",
+    seeAlso: ["rop.generate", "rop.build", "rop.gadget_info", "rop.memory_plan"],
   },
   {
     name: "sc.iat_scan",
@@ -622,6 +623,17 @@ export const NAMESPACE_HELP_ENTRIES: HelpEntry[] = [
     ],
     details: "Enumerates the Import Address Table of every loaded module and reports each entry's slot address, target, and badchar safety. Without badchars, all slots show as safe. This is the bulk version of sc.iat (single module) and sc.iat_find (symbol search) — it gives you the full picture across the process.",
     seeAlso: ["sc.iat", "sc.iat_find", "sc.iat_ptr"],
+  },
+  {
+    name: "rop.memory_plan",
+    description: "Visualizes the full stack layout of the last generated chain. Shows each DWORD with its byte offset, hex value, role (gadget/value/filler/retN pad/placeholder), badchar safety, and semantic comment. Use to debug chains that crash or verify the layout before proving.",
+    usage: "dx @$osed().rop.memory_plan(baseOffset?)",
+    examples: [
+      "dx @$osed().rop.memory_plan()",
+      "dx @$osed().rop.memory_plan(0x218)",
+    ],
+    details: "Reads the chain from the last rop.generate or rop.chain_edit result. The optional base offset shifts all displayed offsets — set it to your EIP-to-chain distance so offsets match your exploit buffer layout. Badchar status is checked against the active corpus badchar set.",
+    seeAlso: ["rop.generate", "rop.verify", "rop.chain_edit", "rop.gadget_info"],
   },
 ];
 

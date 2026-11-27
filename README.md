@@ -228,6 +228,7 @@ Deep-dive a single gadget or explore value-construction recipes:
 ```
 ; Full semantic breakdown: capabilities, side effects, clobbers, retN, transforms
 dx @$osed().rop.gadget_info(0x625011AF)
+dx @$osed().rop.gadget_info({step: 3})    ; inspect chain step 3 (gadget or value slot)
 
 ; All viable recipes to load a value into a register
 dx @$osed().rop.equiv("eax", 0x40, "00 0A 0D")
@@ -236,13 +237,19 @@ dx @$osed().rop.equiv("eax", 0x40, "00 0A 0D")
 dx @$osed().rop.corpus.rescan()
 ```
 
-#### Chain editing
+#### Chain editing and stack layout
 
-Hot-patch a gadget in the last generated chain without re-running the full pipeline:
+Hot-patch a gadget in the last generated chain without re-running the full pipeline, then visualize the stack layout:
 
 ```
 dx @$osed().rop.chain_edit(0, 0x625011AF)   ; replace step 0 with a new gadget
+dx @$osed().rop.memory_plan()               ; visualize the full chain stack layout
+dx @$osed().rop.memory_plan(0x218)          ; with base offset matching your buffer
 ```
+
+`rop.chain_edit` supports iterative editing — run it repeatedly to refine a chain. Each edit shows a before/after diff, checks badchar safety, and warns about side effects.
+
+`rop.memory_plan` shows each DWORD with its byte offset, hex value, role (gadget/value/filler/retN pad/placeholder), badchar safety, and semantic comment.
 
 #### Pivot finder
 
