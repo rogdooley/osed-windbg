@@ -1,7 +1,7 @@
 import { Command, CommandRegistry, CommandResult } from "../core/registry";
 import * as out from "../core/output";
 import { findHelpEntry, helpRows, NAMESPACE_HELP_ENTRIES, HelpEntry } from "../core/help_catalog";
-import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch } from "../core/help_render";
+import { HelpDocument, renderAll, renderCandidates, renderCompactDetail, renderFullDetail, renderNamespace, renderOverview, renderSearch, renderWorkflow } from "../core/help_render";
 
 const categoryForName = (name: string): string => {
   if (name.startsWith("rop") || name === "retn" || name === "add_esp" || name === "pivots") return "rop";
@@ -113,6 +113,12 @@ const LISTING_SUMMARIES: Record<string, string> = {
   exploit: "Emit exploit-development command workflows",
   "exploit.state": "View or update cached exploit state",
   "exploit.clear": "Clear the cached exploit state",
+  "rop.build": "Generate and optionally save exploit Python",
+  "rop.equiv": "Show all value-construction recipes for a register",
+  "rop.gadget_info": "Full semantic breakdown of a single gadget",
+  "rop.chain_edit": "Hot-patch a gadget in the last generated chain",
+  "rop.corpus.rescan": "Re-scan modules to pick up new bases",
+  "sc.iat_scan": "Bulk IAT dump with badchar safety per slot",
   math: "Format an integer as hex, signed, unsigned, LE",
   leak_classify: "Classify a pointer without dereferencing",
   leak_scan: "Scan bounded memory for pointer candidates",
@@ -150,8 +156,8 @@ const OVERVIEW_WORKFLOW: Array<[string, string[]]> = [
   ["crash", ["triage", "findmsp", "stackmap", "landing"]],
   ["target", ["modules", "memory", "code_caves"]],
   ["payload", ["pattern_create", "pattern_offset", "badchars"]],
-  ["rop", ["rop.scan_live", "rop.api_plan", "rop.api_build", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
-  ["pe-api", ["sc.iat", "sc.resolve"]],
+  ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.gadget_info", "rop.equiv", "rop.plan", "rop.generate", "rop.build", "rop.chain_edit", "rop.verify", "rop.prove"]],
+  ["pe-api", ["sc.iat", "sc.iat_scan", "sc.iat_find", "sc.resolve"]],
   ["shellcode", ["encode", "egghunter"]],
   ["seh", ["seh", "seh_ppr"]],
   ["strings", ["str.find"]],
@@ -178,7 +184,9 @@ function namespaceTask(name: string, entry: HelpDocument): string {
     if (["rop.plan", "rop.emit", "rop.synthesize"].includes(entry.name)) return "planning";
     if (["rop.verify", "rop.prove"].includes(entry.name)) return "validation";
     if (entry.name.startsWith("rop.corpus.")) return "persistence";
-    if (entry.name === "rop.export") return "export";
+    if (["rop.export", "rop.build"].includes(entry.name)) return "export";
+    if (["rop.gadget_info", "rop.equiv"].includes(entry.name)) return "analysis";
+    if (entry.name === "rop.chain_edit") return "editing";
     if (["retn", "add_esp"].includes(entry.name)) return "control flow";
     return "construction";
   }
@@ -238,7 +246,7 @@ export function createHelpCommand(registry: CommandRegistry): Command {
     name: "help",
     description: "List commands or show detailed command help.",
     usage: "dx @$osed().help(command?, mode?)",
-    examples: ["dx @$osed().help()", "dx @$osed().help(\"all\")", "dx @$osed().help(\"sc.iat\", \"full\")"],
+    examples: ["dx @$osed().help()", "dx @$osed().help(\"workflow\")", "dx @$osed().help(\"all\")", "dx @$osed().help(\"sc.iat\", \"full\")"],
     schema: { command: { type: "string" }, mode: { type: "string" } },
     execute(options: Record<string, unknown>): CommandResult {
       const commandName = options.command as string | undefined;
@@ -252,6 +260,10 @@ export function createHelpCommand(registry: CommandRegistry): Command {
         const groups = groupedDocuments(registry);
         print(renderAll(groups));
         return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [] };
+      }
+      if (commandName.toLowerCase() === "workflow" || commandName.toLowerCase() === "guide") {
+        print(renderWorkflow());
+        return { command: "help", args: options, success: true, findings: [{ workflow: true }], warnings: [], errors: [] };
       }
       if (mode && mode.toLowerCase() !== "full") return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown help mode '${mode}'. Use 'full'.`] };
       const all = documents(registry);

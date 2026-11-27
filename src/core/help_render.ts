@@ -5,7 +5,7 @@ export const HELP_WIDTH = 68;
 const INDEX_NAME_WIDTH = 24;
 const DETAIL_NAME_WIDTH = 23;
 const ROOT_CATEGORY_ORDER = ["crash", "target", "payload", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
-const ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
+const ROP_TASK_ORDER = ["discovery", "analysis", "planning", "construction", "editing", "control flow", "validation", "persistence", "export"];
 
 const CATEGORY_LABELS: Record<string, string> = {
   "pe-api": "PE / API",
@@ -107,6 +107,7 @@ export function renderOverview(groups: Map<string, HelpDocument[]>): string[] {
     "",
     "QUICK START",
     `  ${"triage()".padEnd(INDEX_NAME_WIDTH - 2)}Analyze current crash and exploitability`,
+    `  ${"help(\"workflow\")".padEnd(INDEX_NAME_WIDTH - 2)}Step-by-step exploit pipeline guide`,
     `  ${"help(\"rop\")".padEnd(INDEX_NAME_WIDTH - 2)}ROP discovery, planning, and construction`,
     `  ${"help(\"all\")".padEnd(INDEX_NAME_WIDTH - 2)}Complete command reference`,
     `  ${"help(\"?pivot\")".padEnd(INDEX_NAME_WIDTH - 2)}Search commands by keyword`,
@@ -180,6 +181,88 @@ export function renderCompactDetail(entry: HelpDocument): string[] {
   if (entry.prerequisites?.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
   if (entry.seeAlso?.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
   lines.push("", `MORE → help(\"${entry.name}\", \"full\")`);
+  return lines;
+}
+
+export function renderWorkflow(): string[] {
+  const lines: string[] = [
+    "",
+    "╭─ OSED EXPLOIT DEVELOPMENT WORKFLOW ─────────────────────────╮",
+    "│ Step-by-step pipeline from crash to working exploit.        │",
+    "╰─────────────────────────────────────────────────────────────╯",
+    "",
+    "1. CRASH ANALYSIS",
+    "   triage()             Classify crash, check mitigations",
+    "   findmsp()            Find cyclic offsets in registers",
+    "   stackmap()           Map controlled stack regions",
+    "   landing()            Analyze execution landing protections",
+    "",
+    "   → You now know: EIP offset, controlled registers, DEP/ASLR",
+    "",
+    "2. TARGET RECONNAISSANCE",
+    "   modules()            List modules and mitigations",
+    "   sc.iat_scan(bc?)     Bulk IAT dump, badchar-safe slots",
+    "   sc.iat_find(sym)     Find specific API across all modules",
+    "   memory(addr)         Check region protections",
+    "   code_caves(mod)      Find staging regions",
+    "",
+    "   → You now know: which modules are ASLR-free, usable IAT",
+    "",
+    "3. BAD CHARACTER IDENTIFICATION",
+    "   badchar_array()      Generate test array",
+    "   badchars(addr)       Compare sent vs. received bytes",
+    "   badchar_find(addr)   Locate array in memory",
+    "",
+    "   → You now have: a confirmed badchar set",
+    "",
+    "4. ROP CORPUS BUILDING",
+    "   rop.scan_live(mods, {badchars})   Discover gadgets",
+    "   rop.corpus.validate()             Verify byte integrity",
+    "   rop.corpus.export(path)           Save for reuse",
+    "   rop.corpus.rescan()               Re-scan after relaunch",
+    "",
+    "   → You now have: a semantic gadget corpus",
+    "",
+    "5. GADGET ANALYSIS",
+    "   rop.query({...})     Search by capability / register",
+    "   rop.capabilities()   Summarize available primitives",
+    "   rop.gadget_info(addr) Deep-dive a single gadget",
+    "   rop.equiv(reg, val)  All recipes to load a value",
+    "   rop.pivots()         Find stack pivot candidates",
+    "",
+    "   → You understand: what your corpus can and cannot do",
+    "",
+    "6. CHAIN GENERATION",
+    "   rop.generate({api, ...})   Auto-build an API-call chain",
+    "   rop.chain_edit(step, addr) Hot-patch a gadget in the chain",
+    "   rop.build({api, path})     Generate + save Python exploit",
+    "",
+    "   Alternative (manual):",
+    "   rop.plan()           Compare strategies",
+    "   rop.emit(planId)     Select gadgets for a strategy",
+    "   rop.synthesize()     Build the concrete stack layout",
+    "   rop.construct(...)   Build register-load recipes",
+    "   rop.setup(...)       Stage registers for a call frame",
+    "",
+    "   → You now have: a ROP chain (auto or manual)",
+    "",
+    "7. VERIFICATION",
+    "   rop.verify()         Check chain structure and side effects",
+    "   rop.prove()          Trace execution in WinDbg",
+    "",
+    "   → Chain is validated against live memory",
+    "",
+    "8. PAYLOAD ASSEMBLY",
+    "   rop.build({..., path})  Save exploit Python to file",
+    "   rop.export(planId, path) Export a manual chain",
+    "   encode(sc, {badchars})   Encode shellcode",
+    "   egghunter(tag)           Generate egghunter stub",
+    "",
+    ruler(),
+    "  help(\"rop\")           Full ROP command reference",
+    "  help(\"<command>\")     Detailed help for any command",
+    "  help(\"?term\")         Search by keyword",
+  ];
   return lines;
 }
 

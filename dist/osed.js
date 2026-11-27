@@ -11375,10 +11375,10 @@ var osed_bundle = (() => {
         value = true ? "1.0.4" : globalThis[key2];
         break;
       case "__OSED_BUILD_TIME__":
-        value = true ? "2026-11-27T04:46:48.216Z" : globalThis[key2];
+        value = true ? "2026-11-27T12:53:22.536Z" : globalThis[key2];
         break;
       case "__OSED_GIT_COMMIT__":
-        value = true ? "7c826c46e489" : globalThis[key2];
+        value = true ? "72ee7f872ebf" : globalThis[key2];
         break;
     }
     return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -11402,7 +11402,7 @@ var osed_bundle = (() => {
   var INDEX_NAME_WIDTH = 24;
   var DETAIL_NAME_WIDTH = 23;
   var ROOT_CATEGORY_ORDER = ["crash", "target", "payload", "rop", "seh", "shellcode", "pe-api", "strings", "format", "tools"];
-  var ROP_TASK_ORDER = ["discovery", "planning", "construction", "control flow", "validation", "persistence", "export"];
+  var ROP_TASK_ORDER = ["discovery", "analysis", "planning", "construction", "editing", "control flow", "validation", "persistence", "export"];
   var CATEGORY_LABELS = {
     "pe-api": "PE / API"
   };
@@ -11490,6 +11490,7 @@ var osed_bundle = (() => {
       "",
       "QUICK START",
       `  ${"triage()".padEnd(INDEX_NAME_WIDTH - 2)}Analyze current crash and exploitability`,
+      `  ${'help("workflow")'.padEnd(INDEX_NAME_WIDTH - 2)}Step-by-step exploit pipeline guide`,
       `  ${'help("rop")'.padEnd(INDEX_NAME_WIDTH - 2)}ROP discovery, planning, and construction`,
       `  ${'help("all")'.padEnd(INDEX_NAME_WIDTH - 2)}Complete command reference`,
       `  ${'help("?pivot")'.padEnd(INDEX_NAME_WIDTH - 2)}Search commands by keyword`
@@ -11560,6 +11561,87 @@ var osed_bundle = (() => {
     if ((_b = entry.prerequisites) == null ? void 0 : _b.length) lines.push("", "REQUIRES", ...entry.prerequisites.flatMap((value) => wrapText(value, HELP_WIDTH, "  ")));
     if ((_c = entry.seeAlso) == null ? void 0 : _c.length) lines.push("", "NEXT", ...wrapText(entry.seeAlso.join(", "), HELP_WIDTH, "  "));
     lines.push("", `MORE \u2192 help("${entry.name}", "full")`);
+    return lines;
+  }
+  function renderWorkflow() {
+    const lines = [
+      "",
+      "\u256D\u2500 OSED EXPLOIT DEVELOPMENT WORKFLOW \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256E",
+      "\u2502 Step-by-step pipeline from crash to working exploit.        \u2502",
+      "\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256F",
+      "",
+      "1. CRASH ANALYSIS",
+      "   triage()             Classify crash, check mitigations",
+      "   findmsp()            Find cyclic offsets in registers",
+      "   stackmap()           Map controlled stack regions",
+      "   landing()            Analyze execution landing protections",
+      "",
+      "   \u2192 You now know: EIP offset, controlled registers, DEP/ASLR",
+      "",
+      "2. TARGET RECONNAISSANCE",
+      "   modules()            List modules and mitigations",
+      "   sc.iat_scan(bc?)     Bulk IAT dump, badchar-safe slots",
+      "   sc.iat_find(sym)     Find specific API across all modules",
+      "   memory(addr)         Check region protections",
+      "   code_caves(mod)      Find staging regions",
+      "",
+      "   \u2192 You now know: which modules are ASLR-free, usable IAT",
+      "",
+      "3. BAD CHARACTER IDENTIFICATION",
+      "   badchar_array()      Generate test array",
+      "   badchars(addr)       Compare sent vs. received bytes",
+      "   badchar_find(addr)   Locate array in memory",
+      "",
+      "   \u2192 You now have: a confirmed badchar set",
+      "",
+      "4. ROP CORPUS BUILDING",
+      "   rop.scan_live(mods, {badchars})   Discover gadgets",
+      "   rop.corpus.validate()             Verify byte integrity",
+      "   rop.corpus.export(path)           Save for reuse",
+      "   rop.corpus.rescan()               Re-scan after relaunch",
+      "",
+      "   \u2192 You now have: a semantic gadget corpus",
+      "",
+      "5. GADGET ANALYSIS",
+      "   rop.query({...})     Search by capability / register",
+      "   rop.capabilities()   Summarize available primitives",
+      "   rop.gadget_info(addr) Deep-dive a single gadget",
+      "   rop.equiv(reg, val)  All recipes to load a value",
+      "   rop.pivots()         Find stack pivot candidates",
+      "",
+      "   \u2192 You understand: what your corpus can and cannot do",
+      "",
+      "6. CHAIN GENERATION",
+      "   rop.generate({api, ...})   Auto-build an API-call chain",
+      "   rop.chain_edit(step, addr) Hot-patch a gadget in the chain",
+      "   rop.build({api, path})     Generate + save Python exploit",
+      "",
+      "   Alternative (manual):",
+      "   rop.plan()           Compare strategies",
+      "   rop.emit(planId)     Select gadgets for a strategy",
+      "   rop.synthesize()     Build the concrete stack layout",
+      "   rop.construct(...)   Build register-load recipes",
+      "   rop.setup(...)       Stage registers for a call frame",
+      "",
+      "   \u2192 You now have: a ROP chain (auto or manual)",
+      "",
+      "7. VERIFICATION",
+      "   rop.verify()         Check chain structure and side effects",
+      "   rop.prove()          Trace execution in WinDbg",
+      "",
+      "   \u2192 Chain is validated against live memory",
+      "",
+      "8. PAYLOAD ASSEMBLY",
+      "   rop.build({..., path})  Save exploit Python to file",
+      "   rop.export(planId, path) Export a manual chain",
+      "   encode(sc, {badchars})   Encode shellcode",
+      "   egghunter(tag)           Generate egghunter stub",
+      "",
+      ruler(),
+      '  help("rop")           Full ROP command reference',
+      '  help("<command>")     Detailed help for any command',
+      '  help("?term")         Search by keyword'
+    ];
     return lines;
   }
   function renderFullDetail(entry) {
@@ -11685,6 +11767,12 @@ var osed_bundle = (() => {
     exploit: "Emit exploit-development command workflows",
     "exploit.state": "View or update cached exploit state",
     "exploit.clear": "Clear the cached exploit state",
+    "rop.build": "Generate and optionally save exploit Python",
+    "rop.equiv": "Show all value-construction recipes for a register",
+    "rop.gadget_info": "Full semantic breakdown of a single gadget",
+    "rop.chain_edit": "Hot-patch a gadget in the last generated chain",
+    "rop.corpus.rescan": "Re-scan modules to pick up new bases",
+    "sc.iat_scan": "Bulk IAT dump with badchar safety per slot",
     math: "Format an integer as hex, signed, unsigned, LE",
     leak_classify: "Classify a pointer without dereferencing",
     leak_scan: "Scan bounded memory for pointer candidates",
@@ -11719,8 +11807,8 @@ var osed_bundle = (() => {
     ["crash", ["triage", "findmsp", "stackmap", "landing"]],
     ["target", ["modules", "memory", "code_caves"]],
     ["payload", ["pattern_create", "pattern_offset", "badchars"]],
-    ["rop", ["rop.scan_live", "rop.api_plan", "rop.api_build", "rop.query", "rop.capabilities", "rop.plan", "rop.generate", "rop.verify", "rop.prove"]],
-    ["pe-api", ["sc.iat", "sc.resolve"]],
+    ["rop", ["rop.scan_live", "rop.query", "rop.capabilities", "rop.gadget_info", "rop.equiv", "rop.plan", "rop.generate", "rop.build", "rop.chain_edit", "rop.verify", "rop.prove"]],
+    ["pe-api", ["sc.iat", "sc.iat_scan", "sc.iat_find", "sc.resolve"]],
     ["shellcode", ["encode", "egghunter"]],
     ["seh", ["seh", "seh_ppr"]],
     ["strings", ["str.find"]],
@@ -11744,7 +11832,9 @@ var osed_bundle = (() => {
       if (["rop.plan", "rop.emit", "rop.synthesize"].includes(entry.name)) return "planning";
       if (["rop.verify", "rop.prove"].includes(entry.name)) return "validation";
       if (entry.name.startsWith("rop.corpus.")) return "persistence";
-      if (entry.name === "rop.export") return "export";
+      if (["rop.export", "rop.build"].includes(entry.name)) return "export";
+      if (["rop.gadget_info", "rop.equiv"].includes(entry.name)) return "analysis";
+      if (entry.name === "rop.chain_edit") return "editing";
       if (["retn", "add_esp"].includes(entry.name)) return "control flow";
       return "construction";
     }
@@ -11802,7 +11892,7 @@ var osed_bundle = (() => {
       name: "help",
       description: "List commands or show detailed command help.",
       usage: "dx @$osed().help(command?, mode?)",
-      examples: ["dx @$osed().help()", 'dx @$osed().help("all")', 'dx @$osed().help("sc.iat", "full")'],
+      examples: ["dx @$osed().help()", 'dx @$osed().help("workflow")', 'dx @$osed().help("all")', 'dx @$osed().help("sc.iat", "full")'],
       schema: { command: { type: "string" }, mode: { type: "string" } },
       execute(options) {
         const commandName = options.command;
@@ -11816,6 +11906,10 @@ var osed_bundle = (() => {
           const groups = groupedDocuments(registry2);
           print2(renderAll(groups));
           return { command: "help", args: options, success: true, findings: [...groups.values()].flat(), warnings: [], errors: [] };
+        }
+        if (commandName.toLowerCase() === "workflow" || commandName.toLowerCase() === "guide") {
+          print2(renderWorkflow());
+          return { command: "help", args: options, success: true, findings: [{ workflow: true }], warnings: [], errors: [] };
         }
         if (mode && mode.toLowerCase() !== "full") return { command: "help", args: options, success: false, findings: [], warnings: [], errors: [`Unknown help mode '${mode}'. Use 'full'.`] };
         const all = documents(registry2);
